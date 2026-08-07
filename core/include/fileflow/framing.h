@@ -34,6 +34,8 @@
 #include <fileflow/result.h>
 
 #include <cstdint>
+#include <array>
+#include <cstddef>
 #include <string>
 
 namespace fileflow {
@@ -52,6 +54,18 @@ enum class AimVerdict : std::uint8_t {
 };
 
 [[nodiscard]] std::string_view AimVerdictName(AimVerdict v) noexcept;
+
+// Tile grid for the coverage map. Portrait, to match the shape of the screen being looked at.
+// Deliberately coarse: it is an aiming aid for a hand-held rig, and a finer grid would report
+// noise as structure while costing a histogram per tile.
+inline constexpr int kAimTileCols = 6;
+inline constexpr int kAimTileRows = 10;
+inline constexpr std::size_t kAimTiles = static_cast<std::size_t>(kAimTileCols) * kAimTileRows;
+
+// A tile at or below this separation cannot be demodulated and is shown as a warning. Matches the
+// receiver's own erasure floor (PhotometricConfig::min_separation), so the map says the same thing
+// the decoder will.
+inline constexpr double kTileUsableSeparation = 12.0;
 
 struct AimAdvice {
     AimVerdict verdict = AimVerdict::kNoScreenFound;
@@ -88,6 +102,24 @@ struct AimAdvice {
      * mid-fraction duly picked 40 cm for a subject at 20 cm (F40).
      */
     double level_separation = 0.0;
+
+    /**
+     * Level separation measured per TILE over the screen's bounding box, row-major.
+     *
+     * A single frame-wide separation number cannot see the failure that is actually blocking the
+     * link. On the first above-cliff capture the frame reported a healthy 155-166 globally while a
+     * band across the upper third was separating at under 12 -- unreadable -- because the two
+     * phones were not parallel and that part of the screen sat outside a very shallow depth of
+     * field. Summed over the frame, defocus in one region and a clean frame look the same (F47).
+     *
+     * A tile map does not need interpreting: the operator tilts the phone until no tile is dark. It
+     * is the same measurement that found the problem offline, moved to where it can be acted on
+     * while the phones are still in someone's hands.
+     *
+     * Zero means the tile had no two-level structure at all, which is the reading a defocused or
+     * occluded region gives.
+     */
+    std::array<double, kAimTiles> tile_separation{};
 
     // One imperative sentence for a user, naming the ACTION rather than the measurement.
     std::string guidance;

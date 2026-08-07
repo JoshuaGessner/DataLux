@@ -216,6 +216,34 @@ Result<AimAdvice> AnalyseAim(const ImageView8& img, const GridGeometry& grid, Ai
     a.bbox_inflation = d.inflation;
     a.px_per_cell = d.true_long / static_cast<double>(grid.rows);
 
+    // --- per-tile coverage map ---
+    //
+    // Over the BOUNDING BOX rather than the frame: the question is which part of the screen is
+    // unreadable, and background beyond the screen would dilute the edge tiles toward a verdict
+    // about nothing. Sampled on a stride, because this runs several times a second beside the
+    // analysis it advises about.
+    for (int ty = 0; ty < kAimTileRows; ++ty) {
+        for (int tx = 0; tx < kAimTileCols; ++tx) {
+            const int x0 = min_x + (a.bbox_w * tx) / kAimTileCols;
+            const int x1 = min_x + (a.bbox_w * (tx + 1)) / kAimTileCols;
+            const int y0 = min_y + (a.bbox_h * ty) / kAimTileRows;
+            const int y1 = min_y + (a.bbox_h * (ty + 1)) / kAimTileRows;
+            std::array<std::uint64_t, 256> th{};
+            for (int y = y0; y < y1 && y < h; y += cfg.histogram_stride) {
+                for (int x = x0; x < x1 && x < w; x += cfg.histogram_stride) {
+                    ++th[img.At(x, y)];
+                }
+            }
+            const Split ts = OtsuSplit(th);
+            const std::size_t slot =
+                static_cast<std::size_t>(ty) * kAimTileCols + static_cast<std::size_t>(tx);
+            // An invalid split means one class was empty: no two-level structure, which is exactly
+            // what a defocused or occluded tile looks like. Reported as 0, not skipped, so the map
+            // has no holes for a user to misread as "fine".
+            a.tile_separation[slot] = ts.valid ? ts.bright_mean - ts.dark_mean : 0.0;
+        }
+    }
+
     // --- interior levels ---
     //
     // Classified against the two CLASS MEANS, a quarter of the separation in from each, so the bands

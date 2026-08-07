@@ -42,6 +42,16 @@ data class Aim(
      * mid-fraction falls to zero — so the blurriest frame scores best (F40).
      */
     val levelSeparation: Double,
+    /**
+     * Level separation per tile across the screen, row-major, [tileCols] wide.
+     *
+     * Exists because the frame-wide [levelSeparation] cannot see the failure that is actually
+     * blocking the link: a band of the screen outside a shallow depth of field reads as unusable
+     * while the average still looks healthy (F47). The operator tilts the phone until no tile is
+     * dark.
+     */
+    val tiles: DoubleArray,
+    val tileCols: Int,
 ) {
     val clipped: Boolean get() = clippedLeft || clippedTop || clippedRight || clippedBottom
     val ready: Boolean get() = verdict == AimVerdict.Ready
@@ -55,7 +65,12 @@ data class Aim(
  */
 class AimAnalyser {
 
+    private companion object {
+        val TILE_COLS = NativeAim.tileCols()
+    }
+
     private val slots = DoubleArray(NativeAim.slotCount())
+    private val tiles = DoubleArray(NativeAim.tileCount())
 
     init {
         require(slots.size >= Slot.entries.size) {
@@ -66,7 +81,7 @@ class AimAnalyser {
 
     /** Returns null when the frame could not be analysed at all (bad buffer, bad geometry). */
     fun analyse(y: ByteBuffer, width: Int, height: Int, rowStride: Int, cols: Int, rows: Int): Aim? {
-        val guidance = NativeAim.analyse(y, width, height, rowStride, cols, rows, slots)
+        val guidance = NativeAim.analyse(y, width, height, rowStride, cols, rows, slots, tiles)
         val v = slots[Slot.Verdict.ordinal]
         if (v < 0.0) return null
         return Aim(
@@ -88,6 +103,8 @@ class AimAnalyser {
             meanLuminance = slots[Slot.MeanLuminance.ordinal],
             threshold = slots[Slot.Threshold.ordinal].toInt(),
             levelSeparation = slots[Slot.LevelSeparation.ordinal],
+            tiles = tiles.copyOf(),
+            tileCols = TILE_COLS,
         )
     }
 
@@ -106,8 +123,11 @@ internal object NativeAim {
     }
 
     @JvmStatic external fun slotCount(): Int
+    @JvmStatic external fun tileCount(): Int
+    @JvmStatic external fun tileCols(): Int
+    @JvmStatic external fun tileUsableSeparation(): Double
     @JvmStatic external fun analyse(
         y: ByteBuffer, width: Int, height: Int, rowStride: Int, cols: Int, rows: Int,
-        out: DoubleArray,
+        out: DoubleArray, tiles: DoubleArray,
     ): String
 }

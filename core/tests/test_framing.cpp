@@ -70,6 +70,53 @@ Image8 Screen(int w, int h, double cx, double cy, double long_px, double rot_deg
 
 }  // namespace
 
+TEST(AimAnalysis, TileMapLocalisesADefocusedBandThatTheFrameAverageHides) {
+    // The exact failure that blocked the first above-cliff capture, and the exact reason a single
+    // frame-wide number was not enough to see it (F47).
+    //
+    // A band of the screen is flattened to a uniform mid-grey, which is what a region outside a
+    // shallow depth of field actually delivers: the two levels blur into one and nothing there can
+    // be demodulated. The rest of the screen is untouched and perfectly readable.
+    Image8 img = Screen(1600, 1600, 800, 800, 1400, 0.0, 8);
+    auto probe = AnalyseAim(img.view(), kGrid);
+    ASSERT_TRUE(probe.ok());
+    const int y0 = probe.value().bbox_y;
+    const int bh = probe.value().bbox_h;
+    // Cover tile rows 4 and 5 exactly, so the assertion is about fully-affected tiles rather than
+    // about where a partially-covered tile happens to land.
+    const int band_lo = y0 + (bh * 4) / kAimTileRows;
+    const int band_hi = y0 + (bh * 6) / kAimTileRows;
+    for (int y = band_lo; y < band_hi; ++y) {
+        for (int x = 0; x < 1600; ++x) img.set(x, y, 120);
+    }
+
+    auto r = AnalyseAim(img.view(), kGrid);
+    ASSERT_TRUE(r.ok());
+    const AimAdvice& a = r.value();
+
+    // THE POINT: the frame-wide figure still looks healthy. Anyone reading only this would conclude
+    // the rig was fine and go looking for the fault in the decoder, which is what happened.
+    EXPECT_GT(a.level_separation, 100.0)
+        << "frame average should still look healthy -- that is why it hid the band";
+
+    for (int tx = 0; tx < kAimTileCols; ++tx) {
+        for (const int ty : {4, 5}) {
+            const std::size_t i = static_cast<std::size_t>(ty) * kAimTileCols +
+                                  static_cast<std::size_t>(tx);
+            EXPECT_LE(a.tile_separation[i], kTileUsableSeparation)
+                << "tile (" << tx << "," << ty << ") is inside the flattened band and must read as "
+                << "unusable, got " << a.tile_separation[i];
+        }
+        for (const int ty : {0, 1, 8, 9}) {
+            const std::size_t i = static_cast<std::size_t>(ty) * kAimTileCols +
+                                  static_cast<std::size_t>(tx);
+            EXPECT_GT(a.tile_separation[i], 100.0)
+                << "tile (" << tx << "," << ty << ") is untouched and must read as healthy, got "
+                << a.tile_separation[i];
+        }
+    }
+}
+
 TEST(AimAnalysis, RejectsUnusableConfiguration) {
     Image8 img = Screen(400, 800, 200, 400, 600, 0.0, 6);
     EXPECT_FALSE(AnalyseAim(img.view(), kGrid, {.min_px_per_cell = 0.0}).ok());

@@ -53,6 +53,21 @@ enum Slot : int {
 extern "C" {
 
 JNIEXPORT jint JNICALL
+Java_dev_fileflow_aim_NativeAim_tileCount(JNIEnv* /*env*/, jclass /*unused*/) {
+    return static_cast<jint>(fileflow::kAimTiles);
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_dev_fileflow_aim_NativeAim_tileCols(JNIEnv* /*env*/, jclass /*unused*/) {
+    return static_cast<jint>(fileflow::kAimTileCols);
+}
+
+extern "C" JNIEXPORT jdouble JNICALL
+Java_dev_fileflow_aim_NativeAim_tileUsableSeparation(JNIEnv* /*env*/, jclass /*unused*/) {
+    return static_cast<jdouble>(fileflow::kTileUsableSeparation);
+}
+
+extern "C" JNIEXPORT jint JNICALL
 Java_dev_fileflow_aim_NativeAim_slotCount(JNIEnv* /*env*/, jclass /*unused*/) {
     return static_cast<jint>(kSlotCount);
 }
@@ -62,7 +77,7 @@ Java_dev_fileflow_aim_NativeAim_slotCount(JNIEnv* /*env*/, jclass /*unused*/) {
 JNIEXPORT jstring JNICALL
 Java_dev_fileflow_aim_NativeAim_analyse(JNIEnv* env, jclass /*unused*/, jobject y_plane, jint width,
                                         jint height, jint row_stride, jint cols, jint rows,
-                                        jdoubleArray out) {
+                                        jdoubleArray out, jdoubleArray tiles) {
     if (out != nullptr && env->GetArrayLength(out) >= 1) {
         const jdouble sentinel = -1.0;
         env->SetDoubleArrayRegion(out, kVerdict, 1, &sentinel);
@@ -111,6 +126,21 @@ Java_dev_fileflow_aim_NativeAim_analyse(JNIEnv* env, jclass /*unused*/, jobject 
     v[kThreshold] = static_cast<jdouble>(a.threshold);
     v[kLevelSeparation] = a.level_separation;
     env->SetDoubleArrayRegion(out, 0, static_cast<jsize>(kSlotCount), v);
+
+    // The coverage map travels in its own array rather than as extra slots: the slot enum is
+    // duplicated in Kotlin and checked field by field, and appending 60 unnamed doubles to it would
+    // turn a checked ABI into an offset anyone could shift by one. A short or absent array is
+    // tolerated -- a caller that does not want the map should not have to pass one.
+    if (tiles != nullptr) {
+        const jsize want = static_cast<jsize>(fileflow::kAimTiles);
+        if (env->GetArrayLength(tiles) >= want) {
+            jdouble t[fileflow::kAimTiles];
+            for (std::size_t i = 0; i < fileflow::kAimTiles; ++i) {
+                t[i] = static_cast<jdouble>(a.tile_separation[i]);
+            }
+            env->SetDoubleArrayRegion(tiles, 0, want, t);
+        }
+    }
 
     return env->NewStringUTF(a.guidance.c_str());
 }

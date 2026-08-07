@@ -61,6 +61,12 @@ class AimView(context: Context, private var cols: Int, private var rows: Int) : 
     private var message: String? = "Starting camera…"
     private var banner: String? = null
 
+    private val coverage = Paint().apply { style = Paint.Style.FILL }
+
+    // Taken from native rather than duplicated, so the map's "unreadable" and the decoder's erasure
+    // floor cannot drift apart and tell the operator two different stories.
+    private val usableSep = NativeAim.tileUsableSeparation()
+
     private val screenPaint = Paint().apply {
         style = Paint.Style.STROKE
         strokeWidth = 6f
@@ -106,6 +112,51 @@ class AimView(context: Context, private var cols: Int, private var rows: Int) : 
     }
 
     /** A line above the guidance, for flow state such as "recording" or "hold still to start". */
+    /**
+     * Paint the coverage map over the image, one block per tile.
+     *
+     * Colour is the whole point. A number tells an operator that something is wrong; a red patch
+     * tells them WHERE, and where is the only part they can act on by moving the phone. This is the
+     * measurement that found the blocker offline (F47), put where it can be acted on while the
+     * phones are still in someone's hands.
+     *
+     * Built on the same `rotatePoint` + scale mapping the bounding box uses. An earlier version
+     * derived its own placement from the bbox fractions and would have marked the wrong region at
+     * 90 and 270 -- a coverage map pointing at the wrong part of the screen is worse than none,
+     * because it sends the operator to adjust something that was already fine.
+     */
+    private fun drawCoverage(canvas: Canvas, a: Aim, ox: Float, oy: Float, scale: Float) {
+        val cols = a.tileCols
+        if (cols <= 0 || a.tiles.isEmpty() || a.bboxW <= 0 || a.bboxH <= 0) return
+        val rows = a.tiles.size / cols
+        if (rows <= 0) return
+
+        for (i in a.tiles.indices) {
+            val tx = i % cols
+            val ty = i / cols
+            // Tile bounds in SENSOR pixels, from the bounding box the analyser reported.
+            val sx0 = a.bboxX + a.bboxW * tx / cols
+            val sx1 = a.bboxX + a.bboxW * (tx + 1) / cols
+            val sy0 = a.bboxY + a.bboxH * ty / rows
+            val sy1 = a.bboxY + a.bboxH * (ty + 1) / rows
+            val (dx0, dy0) = rotatePoint(sx0, sy0)
+            val (dx1, dy1) = rotatePoint(sx1, sy1)
+            val left = ox + minOf(dx0, dx1) * scale
+            val top = oy + minOf(dy0, dy1) * scale
+            val right = ox + maxOf(dx0, dx1) * scale
+            val bottom = oy + maxOf(dy0, dy1) * scale
+
+            val sep = a.tiles[i]
+            coverage.color = when {
+                sep <= usableSep -> 0x70FF1744.toInt()      // unreadable: the decoder will erase it
+                sep <= usableSep * 3 -> 0x55FFC400.toInt()  // marginal
+                else -> 0x2200E676                          // healthy, kept faint
+            }
+            // Inset, so the blocks read as a grid and the image stays visible between them.
+            canvas.drawRect(left + 1.5f, top + 1.5f, right - 1.5f, bottom - 1.5f, coverage)
+        }
+    }
+
     fun setBanner(b: String?) {
         banner = b
         postInvalidate()
@@ -152,6 +203,11 @@ class AimView(context: Context, private var cols: Int, private var rows: Int) : 
             AimVerdict.Unknown -> Color.GRAY
         }
         screenPaint.color = colour
+
+        // Under the outline, so the box edges stay readable over it.
+
+        drawCoverage(canvas, a, ox, oy, scale)
+
 
         if (a.bboxW > 0 && a.bboxH > 0) {
             // Rotate the box's corners into display space, then take their extent. Rotating the
