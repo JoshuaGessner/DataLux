@@ -167,6 +167,64 @@ TEST(Transfer, SurvivesHeavyFrameLoss) {
     EXPECT_EQ(out.value(), payload);
 }
 
+TEST(Transfer, JoinsMidTransmissionAndStillCompletes) {
+    // The operator's scenario: the camera is not aimed until the transmission is already 54% of
+    // the way through. Everything before that is gone, and it is gone CONTIGUOUSLY -- which is a
+    // different pattern from the random loss above, and the one a person actually produces by
+    // picking up a phone late.
+    //
+    // Fountain coding is what makes this a non-event: symbols are generated, not enumerated, so
+    // there is no such thing as "the missing ones". Any sufficiently large set of DISTINCT symbols
+    // reconstructs a block, and the transmitter cycles blocks so a late joiner makes progress on
+    // every block rather than waiting for one to come round. Nothing is renegotiated and the
+    // receiver never asks for a retransmission -- it could not, there is no back channel (NG7).
+    const auto payload = Payload(20000);
+    auto tx = FileTransmitter::Create(payload, "late.bin", 0x5A, 256, 32);
+    ASSERT_TRUE(tx.ok());
+
+    // Run the transmitter with NO receiver attached, discarding 54% of the frames a clean
+    // transfer would have needed.
+    auto probe = FileReceiver::Create(tx.value().manifest());
+    ASSERT_TRUE(probe.ok());
+    std::uint64_t clean_frames = 0;
+    {
+        auto t2 = FileTransmitter::Create(payload, "late.bin", 0x5A, 256, 32);
+        ASSERT_TRUE(t2.ok());
+        while (!probe.value().complete() && clean_frames < 500000) {
+            auto fp = t2.value().NextFrame();
+            probe.value().Ingest(fp.header, fp.data);
+            ++clean_frames;
+        }
+    }
+    ASSERT_TRUE(probe.value().complete());
+    const std::uint64_t skipped = (clean_frames * 54) / 100;
+    ASSERT_GT(skipped, 0u);
+    for (std::uint64_t i = 0; i < skipped; ++i) (void)tx.value().NextFrame();
+
+    // Only NOW does the receiver start looking.
+    auto rx = FileReceiver::Create(tx.value().manifest());
+    ASSERT_TRUE(rx.ok());
+    EXPECT_DOUBLE_EQ(rx.value().progress(), 0.0) << "nothing seen yet, so nothing claimed";
+
+    double last = -1.0;
+    std::uint64_t guard = 0;
+    while (!rx.value().complete() && guard++ < 500000) {
+        auto fp = tx.value().NextFrame();
+        rx.value().Ingest(fp.header, fp.data);
+        const double p = rx.value().progress();
+        ASSERT_GE(p, last) << "progress went backwards, which a user would read as a fault";
+        last = p;
+        // Never claim completion before the hash gate would agree.
+        if (p < 1.0) ASSERT_FALSE(rx.value().complete());
+    }
+
+    ASSERT_TRUE(rx.value().complete()) << "joining late must not make a transfer unrecoverable";
+    EXPECT_DOUBLE_EQ(rx.value().progress(), 1.0);
+    auto out = rx.value().Finish();
+    ASSERT_TRUE(out.ok()) << ErrorName(out.error());
+    EXPECT_EQ(out.value(), payload) << "late join delivered the wrong bytes";
+}
+
 TEST(Transfer, RejectsForeignSessionPackets) {
     // THREAT-MODEL T8: two transmitters in view must not corrupt each other's session.
     const auto payload = Payload(5000);
