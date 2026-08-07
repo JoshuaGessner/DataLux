@@ -34,37 +34,38 @@ Result<CellSampler> CellSampler::Create(GridGeometry g, SamplerConfig cfg) {
     return CellSampler(g, cfg);
 }
 
+double CellSampler::SampleCell(const ImageView8& img, const Homography& grid_to_image,
+                               std::uint32_t col, std::uint32_t row) const {
+    if (img.empty()) return std::nan("");
+    const auto n = static_cast<std::size_t>(cfg_.samples_per_axis);
+    double sum = 0.0;
+    int hits = 0;
+    for (std::size_t oy = 0; oy < n; ++oy) {
+        const double gy = static_cast<double>(row) + offsets_[oy];
+        for (std::size_t ox = 0; ox < n; ++ox) {
+            const double gx = static_cast<double>(col) + offsets_[ox];
+            const Point2 p = grid_to_image.Apply({gx, gy});
+            const double v = img.SampleBilinear(p.x, p.y);
+            if (std::isnan(v)) continue;  // outside the frame: not a sample
+            sum += v;
+            ++hits;
+        }
+    }
+    // Any usable sub-sample yields a cell value. Requiring all of them would discard whole
+    // cells at the frame edge where partial coverage is normal and the available samples are
+    // perfectly good.
+    return hits > 0 ? sum / static_cast<double>(hits) : std::nan("");
+}
+
 std::vector<double> CellSampler::Sample(const ImageView8& img,
                                         const Homography& grid_to_image) const {
     std::vector<double> out(static_cast<std::size_t>(g_.cells()), std::nan(""));
     if (img.empty()) return out;
 
-    const auto n = static_cast<std::size_t>(cfg_.samples_per_axis);
-
     for (std::uint32_t r = 0; r < g_.rows; ++r) {
         for (std::uint32_t c = 0; c < g_.cols; ++c) {
-            double sum = 0.0;
-            int hits = 0;
-
-            for (std::size_t oy = 0; oy < n; ++oy) {
-                const double gy = static_cast<double>(r) + offsets_[oy];
-                for (std::size_t ox = 0; ox < n; ++ox) {
-                    const double gx = static_cast<double>(c) + offsets_[ox];
-                    const Point2 p = grid_to_image.Apply({gx, gy});
-                    const double v = img.SampleBilinear(p.x, p.y);
-                    if (std::isnan(v)) continue;  // outside the frame: not a sample
-                    sum += v;
-                    ++hits;
-                }
-            }
-
-            // Any usable sub-sample yields a cell value. Requiring all of them would discard
-            // whole cells at the frame edge where partial coverage is normal and the
-            // available samples are perfectly good.
-            if (hits > 0) {
-                out[static_cast<std::size_t>(r) * g_.cols + c] =
-                    sum / static_cast<double>(hits);
-            }
+            const double v = SampleCell(img, grid_to_image, c, r);
+            if (!std::isnan(v)) out[static_cast<std::size_t>(r) * g_.cols + c] = v;
         }
     }
     return out;

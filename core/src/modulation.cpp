@@ -192,6 +192,15 @@ Result<std::vector<std::uint8_t>> M0Modulator::DemodulateHeader(
     for (std::size_t i = 0; i < hdr_cells.size(); ++i) {
         const std::uint32_t idx = hdr_cells[i];
         if (idx >= samples.size()) continue;
+        // An ERASED cell abstains. It must not vote.
+        //
+        // NaN is the erasure convention, and `NaN > threshold` is false, so without this test
+        // every unreadable cell cast a confident DARK vote. That is the worst possible failure
+        // mode for a majority vote: erasures are not neutral noise, they all land on the same
+        // side, so the tally is biased by exactly the cells that carry no information. On the
+        // first above-cliff capture 76% of cells were erased, which buried the 24% that were
+        // real and held H at 0.026 while the header band itself was measurably healthy (F46).
+        if (std::isnan(samples[idx])) continue;
         const bool bright = samples[idx] > ref.threshold();
         votes[i % period] += bright ? 1 : -1;
     }

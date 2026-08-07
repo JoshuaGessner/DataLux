@@ -38,7 +38,11 @@ struct PhotometricConfig {
 
     // Below this dark/bright gap the cell is unreadable and must be ERASED, not guessed.
     // Erasures are cheap for the fountain layer; confident wrong bits are not.
-    double min_separation = 12.0;
+    // Lowered from 12.0 after measurement on the first above-cliff capture. Sweeping it against
+    // header yield on 226 real frames, 4.0 beat every larger value (H 0.1753 vs 0.1649 at 8.0 and
+    // 0.1340 at 30.0): cells between 4 and 12 counts of separation still carried more signal than
+    // noise, and discarding them cost headers (F48).
+    double min_separation = 4.0;
 
     // Inverse-distance weighting exponent. 2.0 is the standard Shepard choice.
     double idw_power = 2.0;
@@ -52,7 +56,20 @@ struct PhotometricConfig {
     // hands back a confident, wrong reference. The payload cells there then decode to
     // confident wrong bits. Residual is how the field notices that its own model does not
     // fit, which is the only local evidence available that a region is untrustworthy.
-    double max_pilot_residual_ratio = 0.25;
+    // Effectively OFF, and that is an empirical result rather than a surrender.
+    //
+    // 0.25 was a hypothesis and it was wrong by a wide margin. On the first above-cliff capture it
+    // erased 70% of the lattice and held header yield at H = 0.0258; relaxing it walked yield
+    // monotonically up to H = 0.1753 with the test disabled, a 6.8x improvement, while erasure fell
+    // from 0.7577 to 0.3477. The test was not rejecting bad references, it was rejecting cells
+    // whose references were fine.
+    //
+    // The reason is the model, not the threshold: the residual is measured about a locally fitted
+    // PLANE, and the real field is not planar over the fitting neighbourhood -- it varies by 6x
+    // across the frame with structure a plane cannot follow. A high residual therefore reports
+    // "this field is not a plane", which is true everywhere and says nothing about whether a cell
+    // is readable. Restoring a residual test needs a better field model first (EXP-026).
+    double max_pilot_residual_ratio = 1.2;
 };
 
 // Dark and bright reference levels sampled over the frame, plus per-region noise.

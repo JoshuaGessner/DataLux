@@ -39,6 +39,7 @@ int main(int argc, char** argv) {
 
     PipelineConfig cfg;
     bool info_only = false;
+    bool want_map = false;
 
     for (int i = 2; i < argc; ++i) {
         const std::string a = argv[i];
@@ -49,6 +50,9 @@ int main(int argc, char** argv) {
         else if (a == "--samples") {
             cfg.sampler.samples_per_axis = static_cast<int>(std::strtol(next(), nullptr, 10));
         } else if (a == "--info") info_only = true;
+        else if (a == "--map") want_map = true;
+        else if (a == "--residual") cfg.photometric.max_pilot_residual_ratio = std::strtod(next(), nullptr);
+        else if (a == "--minsep") cfg.photometric.min_separation = std::strtod(next(), nullptr);
         else { std::fprintf(stderr, "unknown flag: %s\n", a.c_str()); return 2; }
     }
 
@@ -116,6 +120,7 @@ int main(int argc, char** argv) {
 
     std::uint64_t usable_cells = 0;
     std::uint64_t erased_cells = 0;
+    bool map_printed = false;
 
     // Attempt the HEADER on every frame that produced cell samples.
     //
@@ -128,6 +133,54 @@ int main(int argc, char** argv) {
     std::uint64_t header_ok = 0, header_fail = 0;
 
     while (auto f = src.Next()) {
+        // One frame's worth of spatial structure, printed once. See PipelineDiagnostics: the
+        // aggregates cannot separate drift from glare from moire, and these maps can.
+        if (want_map && !map_printed) {
+            if (const PhotometricField* pf = src.pipeline().last_field()) {
+                map_printed = true;
+                const GridGeometry g = layout.geometry();
+                const int kCols = 48;
+                const int kRows = 60;
+                std::printf("\n--- separation across the frame (first field) ---\n");
+                std::printf("    digit = local separation / 20, capped; '.' = under 12 (erases)\n");
+                for (int ry = 0; ry < kRows; ++ry) {
+                    const auto row = static_cast<std::uint32_t>(
+                        (static_cast<std::uint64_t>(ry) * (g.rows - 1)) / (kRows - 1));
+                    std::printf("    ");
+                    for (int rx = 0; rx < kCols; ++rx) {
+                        const auto col = static_cast<std::uint32_t>(
+                            (static_cast<std::uint64_t>(rx) * (g.cols - 1)) / (kCols - 1));
+                        const PhotometricRef r = pf->RefAt(col, row);
+                        const double sep = r.bright - r.dark;
+                        if (!(sep >= 12.0)) { std::printf("."); continue; }
+                        const int d = static_cast<int>(sep / 20.0);
+                        std::printf("%c", d > 9 ? '#' : static_cast<char>('0' + d));
+                    }
+                    std::printf("\n");
+                }
+                std::printf("\n--- pilot residual / separation (budget 0.25) ---\n");
+                std::printf("    '.' inside budget, digit = ratio x 10, '#' >= 1.0\n");
+                for (int ry = 0; ry < kRows; ++ry) {
+                    const auto row = static_cast<std::uint32_t>(
+                        (static_cast<std::uint64_t>(ry) * (g.rows - 1)) / (kRows - 1));
+                    std::printf("    ");
+                    for (int rx = 0; rx < kCols; ++rx) {
+                        const auto col = static_cast<std::uint32_t>(
+                            (static_cast<std::uint64_t>(rx) * (g.cols - 1)) / (kCols - 1));
+                        const PhotometricRef r = pf->RefAt(col, row);
+                        const double sep = r.bright - r.dark;
+                        const double res = pf->ResidualAt(col, row);
+                        if (!(sep > 0.0)) { std::printf(" "); continue; }
+                        const double ratio = res / sep;
+                        if (ratio < 0.25) { std::printf("."); continue; }
+                        const int d = static_cast<int>(ratio * 10.0);
+                        std::printf("%c", d > 9 ? '#' : static_cast<char>('0' + d));
+                    }
+                    std::printf("\n");
+                }
+                std::printf("\n");
+            }
+        }
         bool any_usable = false;
         for (const double v : f->cell_samples) {
             if (std::isnan(v)) {

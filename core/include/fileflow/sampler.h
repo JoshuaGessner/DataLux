@@ -50,6 +50,14 @@ class CellSampler {
     [[nodiscard]] std::vector<double> Sample(const ImageView8& img,
                                              const Homography& grid_to_image) const;
 
+    // One cell, same rule as [Sample]: NaN when no sub-sample lands inside the frame.
+    //
+    // Exposed so a caller can evaluate a handful of cells cheaply. Sub-cell alignment needs to
+    // score a candidate geometry against the ~80 pilots, and sampling all 31,200 cells to look
+    // at 80 of them would make the search cost more than the decode it is helping.
+    [[nodiscard]] double SampleCell(const ImageView8& img, const Homography& grid_to_image,
+                                    std::uint32_t col, std::uint32_t row) const;
+
     [[nodiscard]] const GridGeometry& geometry() const noexcept { return g_; }
     [[nodiscard]] const SamplerConfig& config() const noexcept { return cfg_; }
 
