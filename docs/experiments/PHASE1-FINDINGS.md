@@ -2,12 +2,14 @@
 
 > **Status:** Current
 > **Owner:** Architecture
-> **Last reviewed:** 2026-08-06
-> **Related:** ADR-0006, ADR-0009, ADR-0013, OPTICAL-FRAME-CANDIDATES.md,
+> **Last reviewed:** 2026-10-23
+> **Related:** ADR-0006, ADR-0009, ADR-0013, ADR-0015, OPTICAL-FRAME-CANDIDATES.md,
 > PERFORMANCE-MODEL.md, MODULATION-SPEC.md, EXPERIMENT-REGISTRY.md
 
-Findings F1–F44: F1–F23 from implementing the Phase 1 core, F24–F36 from first contact with
-real hardware, and F37–F43 from putting the thing in an operator's hands. Recorded here because several are
+Findings F1–F55: F1–F23 from implementing the Phase 1 core, F24–F36 from first contact with
+real hardware, F37–F44 from putting the thing in an operator's hands, F45–F48 from the first
+above-cliff capture, F49–F52 from the 2026-10-23 review that produced protocol v2 (ADR-0015), and
+F53–F55 from making the receiver work in a moving hand. Recorded here because several are
 **design defects the specifications did not anticipate**, one is a **retraction** (F14), and
 several are model-versus-implementation gaps. Almost all were surfaced by tests or by building
 a consumer for something that already existed — not by inspection.
@@ -16,7 +18,9 @@ a consumer for something that already existed — not by inspection.
 (localisation must never depend on payload), F18 (intra-frame FEC is load-bearing), F20 (the
 code-rate ladder can be scored for free, and the answer cannot be delivered), F23 (erasures are
 not what the code spends), F36 (first real data off a screen), F43 (four verified fixes that
-changed nothing the operator saw), F44 (a component that reported a transform it did not apply).
+changed nothing the operator saw), F44 (a component that reported a transform it did not apply),
+F49 (the fountain code was the loss, and swapping the decoder would not have found it), F52 (no
+real capture could ever have completed a transfer).
 
 ---
 
@@ -1922,6 +1926,289 @@ result disagree, stop debugging the value and replace the dependency.
 
 ---
 
+## F45 — The sampling grid sat off the cells `[FACT]`
+
+*Recorded 2026-10-23 from commit 90167ca (2026-08-07), where F45–F48 were written up in the commit
+message and in code comments but never reached this document — the same gap ce5ea1c closed for
+F37–F43. Measured on the first above-cliff capture, 226 real frames, Galaxy S26 Ultra → Pixel 8.*
+
+Corner markers pin the homography at the corners, but a projective map's error is not uniform,
+and at 8.85 px/cell a half-cell slip is 4.4 px. A sub-cell search scored on the **pilots** — whose
+levels are known by construction, so it needs no payload knowledge (F15) — moved local separation
+**40.9 → 54.9**. Together with F46–F48: cell erasure **0.7577 → 0.4420** and header yield `H`
+**0.0258 → 0.1289** on the same frames.
+
+## F46 — Erased cells were voting in the header's majority vote `[FACT]`
+
+NaN is the erasure convention and `NaN > threshold` is false, so every unreadable cell cast a
+confident DARK vote. Erasures are not neutral noise; they all land on the same side. A real bug,
+but not the binding constraint: fixing it alone moved nothing, which is how F47 was found. (F50
+takes the same idea further.)
+
+## F47 — The spatial map, not the aggregates, found it `[FACT]`
+
+Summed over a frame, a grid drifting against the cells, glare and defocus all read as "high
+residual, high erasure". They look nothing alike in space. `ffreplay --map` showed a healthy bottom
+two-thirds at 140–190 separation against a **dead band across the upper third** — out of focus,
+because the two phones were not parallel and the depth of field is shallow. Physical, not
+algorithmic. The live coverage map (commit 4e0208e) moves the same measurement to the operator.
+
+## F48 — The residual gate was miscalibrated by a wide margin `[FACT]`
+
+0.25 was always a hypothesis. It erased 70% of the lattice, and relaxing it walked header yield
+monotonically up 6.8×: the residual is measured about a locally fitted plane, the real field is not
+planar, so the gate reported "not a plane", which is true everywhere. Shipped at 1.2, the loosest
+value that still erases an occluded region (bisected: fails at 2.0, passes at 1.2). A tighter gate
+needs a better field model, not a smaller number (EXP-026). Interior margin swept 0.20–0.44 on the
+same frames moved erasure by 0.006: **cell crosstalk is not the limiter.**
+
+---
+
+## F49 — The fountain code, not the channel, was costing 20–35% of goodput `[FACT]` / `[HYP]`
+
+**The defect** `[FACT]` — a property of the code, independent of the channel model. Protocol v1
+sent a systematic prefix followed by robust-soliton LT repair symbols, decoded by peeling. On
+`ffsim` at 5–10% frame loss the fountain overhead was **0.20–0.42**; the performance model assumes
+`Rfountain` 0.90–0.97, and v1 delivered ~0.75–0.83.
+
+**The obvious fix was wrong.** The natural suspect was the peeling decoder, so the first experiment
+replaced it with Gaussian elimination on the identical symbol stream. It recovered almost nothing:
+
+| frame loss | peeling overhead | GE overhead (same LT rows) | GE, **dense** rows |
+|--:|--:|--:|--:|
+| 5% | 0.202 | 0.202 | **0.022** |
+| 10% | 0.266 | 0.260 | **0.025** |
+| 30% | 0.328 | 0.285 | **0.025** |
+
+*k = 64, 400–2000 trials per cell, robust soliton c = 0.05, δ = 0.05 as in v1.*
+
+The waste is in the code. After the systematic prefix the receiver is missing only the few source
+symbols that were lost, and a low-degree repair symbol almost never touches one of them — at 5%
+loss a degree-3 symbol touches a missing source symbol with probability ~0.14, so ~86% of repair
+symbols carry nothing new **whatever the decoder does**. Robust soliton is designed for a
+non-systematic code; bolted onto a systematic prefix it is the worst of both. A dense row (each
+source symbol included with probability ½) touches each missing symbol with probability ½, and GE
+over GF(2) completes within ~1.6 symbols of k at any loss rate. That is the textbook random linear
+fountain and carries no patent question (RISK-016).
+
+**Two further losses**, both structural and both fixed in ADR-0015:
+
+- **Block tail.** With no back channel the transmitter cycles every block until the receiver stops
+  looking, so a transfer ends when its *unluckiest* block completes. The spread per block shrinks
+  as 1/√k, so v2 uses as few, as large, blocks as the decoder bound allows (`AutoBlockSymbols`).
+- **Padding (F4).** v1 transmitted the zero padding past the end of the file every cycle. On a
+  64 KB file at 120×200 that was 34 of 64 frames — **half the transfer**. v2 never sends it; the
+  receiver primes it from the manifest.
+
+**Effect** `[HYP]` — simulated, same flags and seeds, HEAD (v1) against v2, 256 KB, `Fd` = 60
+assumed:
+
+| channel | v1 goodput | v2 goodput | v1 overhead | v2 overhead |
+|---|--:|--:|--:|--:|
+| clean | 120.0 | 126.9 | 0.00 | 0.00 |
+| 5% drop | 90.4–94.8 | 117.3–123.9 | 0.20–0.26 | 0.008–0.017 |
+| 10% drop | 80.0–88.8 | 113.8–115.5 | 0.22–0.38 | 0.000–0.017 |
+| 30% drop | 54.1–60.7 | 88.3–97.8 | 0.39–0.67 | 0.000–0.017 |
+| F18-impaired | 65.9–78.0 | 103.1–115.5 | 0.36–0.59 | 0.008–0.017 |
+
+KB/s, 3 seeds. 64 KB on the image path: **60.0 → 120.0 KB/s**, entirely the padding.
+
+**Generalisation.** When a component underperforms, the component you suspect is the one you
+already understand. Swapping the decoder was the cheap, local, obvious change, and running it
+first is what showed the loss lived one layer up, in a design decision nobody was looking at.
+
+---
+
+## F50 — The header decoder was not told which bytes it could not read `[FACT]` / `[HYP]`
+
+**Defect** `[FACT]`. `DemodulateHeader` majority-voted the replicated copies and handed bytes to
+`HeaderCodec::Decode`, which took no erasure positions. A bit whose every copy was erased became 0
+(F46 removed the bias; it did not flag the bit), so each unreadable byte cost the RS layer two
+units of budget as an error instead of one as an erasure — on the layer whose success `H` is the
+measured hardware bottleneck (F36: 0.13–0.38).
+
+**Fix.** Copies are combined by confidence — distance from threshold in half-separations, clipped
+to ±1 — and a bit whose tally is under half a clean copy marks its byte erased. `HeaderCodec`
+decodes with the erasures and, if that fails, again without: a flag on a byte that was in fact
+right spends budget for nothing, and the CRC guards both attempts, so the second try can only add
+successes. The receiver counts **headers rescued by erasures** per run, so the gain is measured on
+every real capture rather than assumed.
+
+**Effect** `[HYP]`. F18-impaired channel, `H` 0.951–0.956 → 0.961–0.969. A dead stripe across 22
+bytes of every copy — past the 16 blind errors nsym = 32 can locate — now decodes (test
+`Session.HeaderErasuresRescueFramesABlindDecodeLoses`).
+
+---
+
+## F51 — A global shift is the wrong correction for a non-uniform error, and the objective was blind `[HYP]`
+
+**Corner refinement.** F45's search moves the whole grid by one translation. That is right only
+when the error is the same everywhere, and neither error measured on real optics is: F34's
+rounded corners bias the quad's extremes inward by an asymmetric 20–77 px, and a slightly wrong
+perspective is exact at two corners and wrong at the others. The search then finds a compromise.
+`FramePipeline::Align` now follows the shift with a bounded coordinate descent over all four
+corners (8 degrees of freedom — a full homography), on the same pilot-contrast objective.
+
+**The objective was flat where it mattered.** Scored through the decode sampler (margin 0.3), the
+refinement stalled at **0.22 cells**: every sub-sample of a pilot stays inside its own cell until
+the error exceeds the margin, so contrast has no gradient below it. A wide window (0.05) had the
+gradient but **drifted a correct grid by 0.13 cells**, because reading a pilot's edge lets a
+same-level neighbour raise the score — a payload-dependent bias. And on pilots alone the worst case
+was **0.34–0.55 cells**: ~80 interior pilots barely constrain the corners, which are what this step
+moves.
+
+**Resolved by measurement**, not argument — `Alignment.AlignWindowSweep`, 4 scenes × 3 corner
+perturbations, worst case:
+
+| objective | worst error left | worst drift of a correct grid | cost |
+|---|--:|--:|--:|
+| pilots only, decode window | 0.22 | — | — |
+| pilots only, margin 0.05 | 0.34–0.55 | 0.13 | — |
+| **all structural cells, margin 0.15, 4×4, 512 anchors** | **0.110** | **0.095** | 4.9 ms |
+| all structural cells, margin 0.15, 4×4, 256 anchors | 0.135 | 0.122 | 2.5 ms |
+| all structural cells, decode window | 0.324 | 0.082 | 1.4 ms |
+
+Markers, boundary ring, timing tracks and guards are known by construction exactly as pilots are,
+so scoring on them keeps F15's rule — and they sit at the edges, where the corners are decided.
+
+**Effect** `[HYP]`. The simulator renders only projective geometry, so a single shift was always
+sufficient there and it could never have shown a reason for this. A radial lens term (`--lens-k1`)
+is the first image-path impairment a homography cannot represent:
+
+| lens k1 | shift + corners | shift only | no alignment |
+|--:|---|---|---|
+| 0 | 0.086 cells, 120 KB/s | 0.42 cells, 120 KB/s | 0.33 cells, 120 KB/s |
+| −0.01 | **0.25 cells, 120 KB/s** | 0.57 cells, **does not verify** | 0.64 cells, **does not verify** |
+| −0.02 | 0.49 cells, 91 KB/s | does not verify | does not verify |
+| −0.03 | `H` 0.72, does not verify | `H` 0 | `H` 0 |
+
+64 KB, 900×1500, yaw 6°, pitch −4°, blur 1, noise 6; "does not verify" = not within 300–400 states.
+Note row 0: **shift-only is worse than no alignment in the worst case** — the compromise effect,
+measured. And at k1 = −0.01 every header decodes on the failing arms; the payload dies on confident
+*errors*, not erasures (F23's failure mode).
+
+**What it does not fix.** Beyond |k1| ≈ 0.02 no single homography fits. The right tool there is
+the camera's own calibration: Camera2 publishes `LENS_DISTORTION` and
+`LENS_INTRINSIC_CALIBRATION` (API 28+), which the sampler could apply before the homography. Not
+built; tracked as OQ-038.
+
+---
+
+## F52 — Four copies of the protocol, and the receiver was handed the manifest `[FACT]`
+
+The frame → header → FEC → fountain chain was written out by hand in `ffsim`, in `ffreplay` (which
+stopped at the header), in the JNI transmitter, and in the end-to-end tests. And every receiver
+was built from `tx.manifest()` — the transmitter's own object — which is the one thing a real
+receiver can never have. **No real capture could ever have completed a transfer**, however good
+the optics, and nothing would have said why. `FileManifest::Decode` was called only by tests, and
+the flag reserved for an in-band manifest was never set.
+
+Separately, `ffsim --image-path` wired the tracker, sampler and photometry together itself instead
+of running `FramePipeline`, so F45's alignment — the single largest real-capture improvement — was
+invisible to the simulator. HANDOFF already said not to duplicate `FramePipeline`; it had been.
+
+**Fix.** The session layer (C13a): one `TransmitSession`, one `ReceiveSession`, used by `ffsim`,
+`ffreplay`, the JNI transmitter and the tests. The receiver is told the grid and nothing else; the
+code rate is in every header and the manifest arrives in-band (ADR-0015). Symbols read before the
+manifest are held and replayed, so a receiver that misses it loses nothing. `ffreplay` now runs a
+verified transfer and reports goodput, and reports the three display-state rates EXP-006 needs from
+header sequence numbers.
+
+**Generalisation.** A test harness that supplies something the real system has to *earn* is not
+testing the real system. The end-to-end tests passed for months against a receiver that could not
+exist.
+
+---
+
+## F53 — A moving phone loses frames to blur, not to the tracker `[HYP]`
+
+**Question.** Does the receiver survive being held by hand, and if not, which layer gives way?
+The simulator could not say: every image-path impairment was static per frame, and the only motion
+(`RenderedSource`'s jitter) was i.i.d., which no hand produces.
+
+**Built to answer it** — `sim::MotionConfig` / `RenderMoving`, `ffsim --shake S --pan X Y`:
+smooth sway (~1 Hz) plus physiological tremor (~9 Hz) plus roll and distance sway, scaled by one
+intensity; sweeping pans that reverse so the screen stays in view; motion blur by integrating the
+exposure; rolling-shutter skew by rendering row bands at their own readout times.
+
+**Hypothesis tested and rejected.** The tracker searched around where the screen *was*, so a
+constant-velocity prediction — search where it is *going*, widen the window with speed — looked
+like the obvious fix. It made no difference. Every row of the A/B was identical at 30 fps (shake up
+to 4, pans up to 1 image width/s), and identical at 10 and 6 processed frames/s, except one arm
+(pan 0.5 at 6 fps) where prediction lost the lock once per seed and the plain search never did.
+The 25% annulus already covers hand motion. **Prediction ships off** (`predict_motion = false`),
+kept switchable for real rolling-shutter captures.
+
+**What actually fails** is reading, not tracking. With the lock held throughout:
+
+| motion (30 fps, 15 ms exposure) | header success | verified goodput |
+|---|--:|--:|
+| shake 1–2 | 1.00 | full |
+| shake 3 | 0.87–0.91 | ~60% |
+| shake 4 | 0.63–0.64 | ~25% |
+| pan 0.3 image/s | 0.81–0.86 | ~70% |
+| pan 1.0 image/s | 0.12–0.13 | none within 300 frames |
+
+Motion during the exposure smears cells into their neighbours — at 6 px/cell, a 1 image-width/s
+pan is ~2 cells of blur in 15 ms. No receiver algorithm recovers that; a shorter exposure or a
+steadier hand does. Hence F54: the remedy for motion is to **tell the person**, at the moment it
+matters, and to make sure nothing they have already received is lost meanwhile.
+
+**Kept from the work:** the tracker's velocity estimate, now per *second* from capture timestamps
+with a 0.1 s time constant. A per-frame weight came out ~15% noisier at 30 fps than at 10 because
+corners are pixel-quantised and more frames meant less smoothing per second; a receiver that keeps
+up with only some frames must report the same speed regardless.
+
+---
+
+## F54 — The receiver could not tell the person anything, and could not deliver a file `[FACT]` / `[HYP]`
+
+**Defect** `[FACT]`. The Receive button recorded 120 frames — four seconds — for desktop analysis,
+then showed a capture report. It could not deliver a file, could not say whether anything had
+worked, and gave no signal that the phone had drifted until the recording was over. For a transfer
+lasting a minute, the person holding the phone had nothing to act on.
+
+**Fix — the live receiver (C13b).** `LiveReceiver` runs `FramePipeline` + `ReceiveSession` on each
+camera frame and returns a phase, one hint and one plain sentence; JNI and Kotlin only display it
+(ADR-0014). The Receive button now decodes on the phone, frames dropped whenever the decoder is
+busy (fountain coding makes that free), until the file verifies and is saved. Scripted
+experiments keep the recording path.
+
+The behaviour that matters most under motion: **progress never goes backwards**, and when the
+screen leaves view the message is *"Paused at 42% — point the camera back at the sending screen.
+Nothing received so far is lost."* — because it is true.
+
+**Caught by the tests, before any phone ran it:** the time-remaining estimate kept showing
+"about 3 s left" while the camera pointed at the floor, extrapolating from the seconds before the
+pause. It is now withheld whenever nothing is being read.
+
+**The "hold steadier" threshold, calibrated** `[HYP]` — `LiveReceiver.DISABLED_BlurCalibrationTable`:
+
+| motion | estimated blur mean / peak (cells) | header success |
+|---|--:|--:|
+| shake 1 | 0.29 / 0.49 | 1.00 |
+| shake 2 | 0.57 / 0.95 | 1.00 |
+| shake 3 | 0.85 / 1.40 | 0.89 |
+| shake 4 | 0.89 / 1.64 | 0.68 |
+| pan 0.6 | 0.93 / 1.34 | 1.00 |
+| pan 1.0 | 0.98 / 1.92 | 0.02 |
+
+The first threshold (0.35 cells) would have nagged a careful hold whose every frame decoded. Blur
+alone cannot separate pan 0.6 (fine) from pan 1.0 (dead), so the hint now needs blur over 0.75
+cells **and** under 80% of recent frames read, or blur over 1.5 cells outright. A warning that
+fires while everything works is one people learn to ignore.
+
+---
+
+## F55 — The aiming text block did not measure its own banner `[FACT]`
+
+`AimView.drawTextBlock` drew the banner line ("Recording 40/120 — …") and advanced past it, but
+computed the scrim height without it, so with a banner showing the last line of guidance was drawn
+46 px below the bottom of the screen — the line most likely to be the instruction. Found by
+reading the code while adding the live status card, not by a report; fixed by measuring it.
+
+---
+
 ## What has NOT been validated
 
 To be explicit, since a working simulator invites over-confidence.
@@ -1945,6 +2232,16 @@ detection, homography, tracking, subpixel sampling, photometric field (C06/C06a/
 intra-frame FEC with errors-and-erasures decoding (C11, F18); the capture/replay harness proven
 bit-identical to live decode (C17, F17); and the C14 estimator and code-rate policy (F20–F23).
 
+**Also now exists (2026-10-23):** protocol v2 and the session layer C13a (ADR-0015, F49–F52) — a
+receiver that needs only the grid, an in-band manifest, and `ffreplay` running verified transfers
+with goodput and display-state rates. **None of it has met a real capture yet.**
+
+> **Corrected 2026-10-23.** The first bullet below still said *"no transmitter exists, so no
+> display state has ever been presented or counted"*. A transmitter has existed since F36 and
+> presented the frames whose headers were read. What remained true is that `Fd` was never
+> *counted*: nothing tallied distinct sequence numbers per second. `ffreplay` now does, so the next
+> capture answers EXP-006. The original wording is kept below, struck, rather than overwritten.
+
 **What still is not validated:**
 
 - **The receiver's camera path is measured; nothing else about the hardware is.**
@@ -1960,8 +2257,9 @@ bit-identical to live decode (C17, F17); and the C14 estimator and code-rate pol
   `EDGE_MODE` / `NOISE_REDUCTION_MODE` all reported as requested. A real capture bundle reached
   `ffreplay` (F29).
 
-  **What is still unmeasured, and it is most of what matters:** `Fd` — no transmitter exists, so
-  no display state has ever been presented or counted (EXP-006). The **240 fps high-speed path**,
+  **What is still unmeasured, and it is most of what matters:** `Fd` — ~~no transmitter exists, so
+  no display state has ever been presented or counted~~ never counted, though now countable
+  (EXP-006). The **240 fps high-speed path**,
   which is the one that gates milestone 6 and the one where duplication risk actually sits
   (OQ-002). Whether `EDGE_MODE` OFF *behaves* as off, which needs a known
   high-spatial-frequency target. Rolling-shutter skew (F25). `Pc`, and every optical property of

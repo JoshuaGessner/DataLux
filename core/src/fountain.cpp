@@ -3,15 +3,23 @@
 #include <fileflow/bytes.h>
 
 #include <algorithm>
-#include <cmath>
+#include <bit>
 #include <cstring>
 
 namespace fileflow {
+namespace {
+
+// The inner loop of both encoder and decoder. Written as a plain byte loop on purpose: clang and
+// gcc vectorise it at -O2, and anything cleverer would be harder to audit for the same speed.
+void XorInto(std::uint8_t* dst, const std::uint8_t* src, std::size_t n) noexcept {
+    for (std::size_t i = 0; i < n; ++i) dst[i] ^= src[i];
+}
+
+}  // namespace
 
 Status FountainParams::Validate() const noexcept {
     if (source_symbols == 0 || source_symbols > kMaxSourceSymbols) return Error::kValueOutOfRange;
     if (symbol_size == 0 || symbol_size > kMaxSymbolSize) return Error::kValueOutOfRange;
-    if (!(c > 0.0) || !(delta > 0.0) || delta >= 1.0) return Error::kDegenerateParameters;
 
     // Checked before any allocation derived from these values (INPUT-VALIDATION SR-1).
     std::size_t total = 0;
@@ -20,59 +28,22 @@ Status FountainParams::Validate() const noexcept {
     return Status::Ok();
 }
 
-LtDegreeTable::LtDegreeTable(const FountainParams& p) : p_(p) {
-    const auto k = static_cast<double>(p_.source_symbols);
-    const std::uint32_t kk = p_.source_symbols;
+// ---------------------------------------------------------------- rows
 
-    // Ideal soliton: rho(1) = 1/k, rho(d) = 1/(d(d-1))
-    std::vector<double> rho(kk + 1, 0.0);
-    rho[1] = 1.0 / k;
-    for (std::uint32_t d = 2; d <= kk; ++d) {
-        rho[d] = 1.0 / (static_cast<double>(d) * static_cast<double>(d - 1));
-    }
+FountainRows::FountainRows(const FountainParams& p) noexcept
+    : p_(p),
+      words_((static_cast<std::size_t>(p.source_symbols) + 63) / 64),
+      last_mask_(p.source_symbols % 64 == 0 ? ~std::uint64_t{0}
+                                            : (std::uint64_t{1} << (p.source_symbols % 64)) - 1) {}
 
-    // Robust component tau, spike at k/R
-    const double r = p_.c * std::log(k / p_.delta) * std::sqrt(k);
-    std::vector<double> tau(kk + 1, 0.0);
-    if (r > 1.0) {
-        const auto pivot = static_cast<std::uint32_t>(std::floor(k / r));
-        for (std::uint32_t d = 1; d < pivot && d <= kk; ++d) {
-            tau[d] = r / (static_cast<double>(d) * k);
-        }
-        if (pivot >= 1 && pivot <= kk) {
-            tau[pivot] = r * std::log(r / p_.delta) / k;
-        }
-    }
-
-    double beta = 0.0;
-    for (std::uint32_t d = 1; d <= kk; ++d) beta += rho[d] + tau[d];
-
-    cdf_.assign(kk + 1, 0.0);
-    double acc = 0.0;
-    for (std::uint32_t d = 1; d <= kk; ++d) {
-        acc += (rho[d] + tau[d]) / beta;
-        cdf_[d] = acc;
-    }
-    if (!cdf_.empty()) cdf_.back() = 1.0;  // guard against FP drift
-}
-
-std::uint32_t LtDegreeTable::SampleDegree(SplitMix64* rng) const {
-    const double u = rng->NextDouble();
-    // Linear scan: degrees are heavily concentrated at 1-3, so this beats binary search
-    // in practice and keeps the encoder/decoder agreement trivially auditable.
-    for (std::uint32_t d = 1; d < cdf_.size(); ++d) {
-        if (u <= cdf_[d]) return d;
-    }
-    return p_.source_symbols;
-}
-
-void LtDegreeTable::Neighbours(std::uint32_t esi, std::vector<std::uint32_t>* out) const {
-    out->clear();
+void FountainRows::Row(std::uint32_t esi, std::uint64_t* out) const noexcept {
+    std::fill(out, out + words_, std::uint64_t{0});
     const std::uint32_t k = p_.source_symbols;
+    if (k == 0) return;
 
     // Systematic prefix: symbol i IS source symbol i.
     if (esi < k) {
-        out->push_back(esi);
+        out[esi / 64] = std::uint64_t{1} << (esi % 64);
         return;
     }
 
@@ -80,28 +51,18 @@ void LtDegreeTable::Neighbours(std::uint32_t esi, std::vector<std::uint32_t>* ou
     // symbol structure (THREAT-MODEL T8 session confusion).
     SplitMix64 rng((static_cast<std::uint64_t>(p_.session_seed) << 32) ^
                    (static_cast<std::uint64_t>(esi) * 0x9E3779B97F4A7C15ULL));
-
-    std::uint32_t d = SampleDegree(&rng);
-    d = std::min(d, k);
-
-    out->reserve(d);
-    // Sample d distinct indices. For small d relative to k this rejection loop is cheap;
-    // for large d we fall back to a partial shuffle to stay bounded.
-    if (static_cast<std::uint64_t>(d) * 2 < k) {
-        while (out->size() < d) {
-            const std::uint32_t idx = rng.Below(k);
-            if (std::find(out->begin(), out->end(), idx) == out->end()) out->push_back(idx);
-        }
-    } else {
-        std::vector<std::uint32_t> pool(k);
-        for (std::uint32_t i = 0; i < k; ++i) pool[i] = i;
-        for (std::uint32_t i = 0; i < d; ++i) {
-            const std::uint32_t j = i + rng.Below(k - i);
-            std::swap(pool[i], pool[j]);
-            out->push_back(pool[i]);
-        }
+    bool any = false;
+    for (std::size_t w = 0; w < words_; ++w) {
+        out[w] = rng.Next();
+        if (w + 1 == words_) out[w] &= last_mask_;
+        any = any || out[w] != 0;
     }
-    std::sort(out->begin(), out->end());
+    // An all-zero row carries nothing. Only reachable for tiny k (probability 2^-k), but a row
+    // that can never help is a symbol slot wasted, so give it one deterministic neighbour.
+    if (!any) {
+        const std::uint32_t i = esi % k;
+        out[i / 64] = std::uint64_t{1} << (i % 64);
+    }
 }
 
 // ---------------------------------------------------------------- encoder
@@ -120,13 +81,22 @@ Result<FountainEncoder> FountainEncoder::Create(const FountainParams& p,
 }
 
 std::vector<std::uint8_t> FountainEncoder::Symbol(std::uint32_t esi) const {
-    std::vector<std::uint32_t> nb;
-    table_.Neighbours(esi, &nb);
+    const std::size_t s = p_.symbol_size;
+    std::vector<std::uint8_t> out(s, 0);
+    if (esi < p_.source_symbols) {
+        std::memcpy(out.data(), src_.data() + static_cast<std::size_t>(esi) * s, s);
+        return out;
+    }
 
-    std::vector<std::uint8_t> out(p_.symbol_size, 0);
-    for (std::uint32_t idx : nb) {
-        const std::uint8_t* s = src_.data() + static_cast<std::size_t>(idx) * p_.symbol_size;
-        for (std::uint32_t b = 0; b < p_.symbol_size; ++b) out[b] ^= s[b];
+    std::vector<std::uint64_t> row(rows_.words());
+    rows_.Row(esi, row.data());
+    for (std::size_t w = 0; w < row.size(); ++w) {
+        std::uint64_t bits = row[w];
+        while (bits != 0) {
+            const auto idx = w * 64 + static_cast<std::size_t>(std::countr_zero(bits));
+            bits &= bits - 1;
+            XorInto(out.data(), src_.data() + idx * s, s);
+        }
     }
     return out;
 }
@@ -135,103 +105,90 @@ std::vector<std::uint8_t> FountainEncoder::Symbol(std::uint32_t esi) const {
 
 FountainDecoder::FountainDecoder(const FountainParams& p)
     : p_(p),
-      table_(p),
-      out_(static_cast<std::size_t>(p.source_symbols) * p.symbol_size, 0),
-      known_(p.source_symbols, false),
-      waiting_(p.source_symbols) {}
+      rows_(p),
+      words_(rows_.words()),
+      matrix_(static_cast<std::size_t>(p.source_symbols) * rows_.words(), 0),
+      data_(static_cast<std::size_t>(p.source_symbols) * p.symbol_size, 0),
+      has_(p.source_symbols, false),
+      row_(rows_.words(), 0),
+      sym_(p.symbol_size, 0) {}
 
 Result<FountainDecoder> FountainDecoder::Create(const FountainParams& p) {
     FF_TRY(p.Validate());
     return FountainDecoder(p);
 }
 
-void FountainDecoder::Reduce(Pending* p) {
-    // Remove every already-known neighbour by XORing it out.
-    auto it = p->unknown.begin();
-    while (it != p->unknown.end()) {
-        const std::uint32_t idx = *it;
-        if (known_[idx]) {
-            const std::uint8_t* s = out_.data() + static_cast<std::size_t>(idx) * p_.symbol_size;
-            for (std::uint32_t b = 0; b < p_.symbol_size; ++b) p->data[b] ^= s[b];
-            it = p->unknown.erase(it);
-        } else {
-            ++it;
+bool FountainDecoder::Add(std::uint32_t esi, std::span<const std::uint8_t> data) {
+    const std::size_t s = p_.symbol_size;
+    rows_.Row(esi, row_.data());
+    std::memcpy(sym_.data(), data.data(), s);
+
+    // Reduce against the pivots held. The pivot in slot p has no bits below p, so XORing it in
+    // clears bit p and can only disturb bits ABOVE it: one ascending pass over the words reduces
+    // the row completely, and the first set bit with no pivot becomes a new one.
+    for (std::size_t w = 0; w < words_; ++w) {
+        while (row_[w] != 0) {
+            const std::size_t p = w * 64 + static_cast<std::size_t>(std::countr_zero(row_[w]));
+            if (!has_[p]) {
+                std::copy(row_.begin(), row_.end(),
+                          matrix_.begin() + static_cast<std::ptrdiff_t>(p * words_));
+                std::memcpy(data_.data() + p * s, sym_.data(), s);
+                has_[p] = true;
+                ++rank_;
+                if (complete()) BackSubstitute();
+                return true;
+            }
+            const std::uint64_t* pr = matrix_.data() + p * words_;
+            for (std::size_t j = w; j < words_; ++j) row_[j] ^= pr[j];
+            XorInto(sym_.data(), data_.data() + p * s, s);
         }
     }
+    return false;  // in the span of what is held: carried nothing new
 }
 
-void FountainDecoder::Peel(std::uint32_t newly_known) {
-    // Iterative rather than recursive: a deep chain on a hostile input would otherwise
-    // blow the stack (THREAT-MODEL T4).
-    std::vector<std::uint32_t> queue{newly_known};
-
-    while (!queue.empty()) {
-        const std::uint32_t idx = queue.back();
-        queue.pop_back();
-
-        auto waiters = std::move(waiting_[idx]);
-        waiting_[idx].clear();
-
-        for (std::size_t pi : waiters) {
-            Pending& pend = pending_[pi];
-            if (pend.unknown.empty()) continue;
-            Reduce(&pend);
-            if (pend.unknown.size() == 1) {
-                const std::uint32_t target = pend.unknown[0];
-                if (!known_[target]) {
-                    std::uint8_t* dst =
-                        out_.data() + static_cast<std::size_t>(target) * p_.symbol_size;
-                    std::memcpy(dst, pend.data.data(), p_.symbol_size);
-                    known_[target] = true;
-                    ++recovered_;
-                    queue.push_back(target);
-                }
-                pend.unknown.clear();
+void FountainDecoder::BackSubstitute() {
+    // Upper-triangular solve, highest pivot first, so every symbol XORed in is already final.
+    const std::size_t s = p_.symbol_size;
+    for (std::size_t p = p_.source_symbols; p-- > 0;) {
+        std::uint64_t* pr = matrix_.data() + p * words_;
+        for (std::size_t w = p / 64; w < words_; ++w) {
+            std::uint64_t bits = pr[w];
+            if (w == p / 64) bits &= ~((std::uint64_t{2} << (p % 64)) - 1);  // strictly above p
+            while (bits != 0) {
+                const auto j = w * 64 + static_cast<std::size_t>(std::countr_zero(bits));
+                bits &= bits - 1;
+                XorInto(data_.data() + p * s, data_.data() + j * s, s);
             }
+            pr[w] = (w == p / 64) ? (std::uint64_t{1} << (p % 64)) : 0;
         }
     }
+    solved_ = true;
 }
 
 bool FountainDecoder::Ingest(std::uint32_t esi, std::span<const std::uint8_t> data) {
     if (data.size() != p_.symbol_size) return complete();
     if (complete()) return true;
     ++ingested_;
+    Add(esi, data);
+    return complete();
+}
 
-    Pending pend;
-    table_.Neighbours(esi, &pend.unknown);
-    pend.data.assign(data.begin(), data.end());
-
-    Reduce(&pend);
-
-    if (pend.unknown.empty()) return complete();  // redundant, carried no new information
-
-    if (pend.unknown.size() == 1) {
-        const std::uint32_t target = pend.unknown[0];
-        if (!known_[target]) {
-            std::uint8_t* dst = out_.data() + static_cast<std::size_t>(target) * p_.symbol_size;
-            std::memcpy(dst, pend.data.data(), p_.symbol_size);
-            known_[target] = true;
-            ++recovered_;
-            Peel(target);
-        }
-        return complete();
-    }
-
-    pending_.push_back(std::move(pend));
-    const std::size_t pi = pending_.size() - 1;
-    for (std::uint32_t idx : pending_[pi].unknown) waiting_[idx].push_back(pi);
+bool FountainDecoder::Prime(std::uint32_t source_index, std::span<const std::uint8_t> data) {
+    if (data.size() != p_.symbol_size || source_index >= p_.source_symbols) return complete();
+    if (complete()) return true;
+    if (Add(source_index, data)) ++primed_;
     return complete();
 }
 
 double FountainDecoder::overhead() const noexcept {
-    if (p_.source_symbols == 0) return 0.0;
-    const auto k = static_cast<double>(p_.source_symbols);
-    return (static_cast<double>(ingested_) - k) / k;
+    const auto needed = static_cast<double>(p_.source_symbols - primed_);
+    if (needed <= 0.0) return 0.0;
+    return (static_cast<double>(ingested_) - needed) / needed;
 }
 
 Result<std::vector<std::uint8_t>> FountainDecoder::Take() {
-    if (!complete()) return Error::kFountainIncomplete;
-    return out_;
+    if (!complete() || !solved_) return Error::kFountainIncomplete;
+    return data_;
 }
 
 }  // namespace fileflow

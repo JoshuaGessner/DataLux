@@ -20,7 +20,7 @@ Read these first, in order:
 
 1. `docs/INDEX.md` — the map of all 53 documents
 2. `docs/vision/PERFORMANCE-PHILOSOPHY.md` — the metric discipline, non-negotiable
-3. `docs/experiments/PHASE1-FINDINGS.md` — **25 findings; this is the project's memory**
+3. `docs/experiments/PHASE1-FINDINGS.md` — **55 findings; this is the project's memory**
 4. `CONTRIBUTING.md` — evidence tags and the rules below
 5. `docs/architecture/COMPONENT-REGISTRY.md` — component status, C01–C20
 
@@ -44,7 +44,7 @@ Read these first, in order:
 
 ```bash
 cmake --preset desktop-release && cmake --build build/desktop-release -j8
-./build/desktop-release/core/tests/fileflow_tests          # must show 238 passing
+./build/desktop-release/core/tests/fileflow_tests          # must show 284 passing
 
 cmake --preset desktop-asan   && cmake --build build/desktop-asan -j8
 ./build/desktop-asan/core/tests/fileflow_tests             # ASan+UBSan, must be clean
@@ -66,17 +66,22 @@ Tools:
 ## What exists
 
 **Portable C++20 in `core/`** — no Android headers, enforced by the `core-only` preset:
-GF(256) + Reed–Solomon **with errors-and-erasures decoding**, LT fountain code, frame/header
-codec, M0 binary luminance modulation with soft symbols, intra-frame FEC (interleaved RS),
-session manifest + SHA-256 verification, the full CV path: homography (DLT + Hartley
+GF(256) + Reed–Solomon **with errors-and-erasures decoding**, a systematic GF(2) random linear
+fountain code (protocol v2, ADR-0015), frame/header codec with erasure-assisted decoding (F50),
+M0 binary luminance modulation with soft symbols, intra-frame FEC (interleaved RS), the
+**session layer C13a** (`session.cpp`: one transmit path, one receive path, in-band manifest,
+SHA-256 verification), the full CV path: homography (DLT + Hartley
 normalisation), screen detection, frame-to-frame tracking, subpixel cell sampling, photometric
 field with pilot-residual confidence — and the C14 adaptive link controller (`link.cpp`:
 receiver-side channel estimation plus goodput-optimal code-rate selection with hysteresis,
 reporting only — see F20).
 
-`FramePipeline` (`core/src/pipeline.cpp`) is the **single shared image→symbols stage**. The
-simulator, the replay harness and eventually the live receiver all drive it. Do not duplicate
-it — if they drift, recorded datasets stop proving anything about live behaviour.
+`FramePipeline` (`core/src/pipeline.cpp`) is the **single shared image→symbols stage**, and
+`TransmitSession` / `ReceiveSession` (`core/src/session.cpp`) the single shared cells↔file stage.
+The simulator, the replay harness, the JNI transmitter and eventually the live receiver all drive
+them. Do not duplicate either — both were duplicated once (F52), and the copy is exactly where the
+simulator stopped measuring the receiver that ships. A receiver is told the **grid and nothing
+else**; anything else you hand it in a test is something a real capture cannot give it.
 
 **`sim/`** — 3D viewing geometry (yaw/pitch/roll/distance), impairments, `ffsim --image-path`
 runs the real geometry chain, `--record DIR` writes capture bundles.
@@ -90,6 +95,20 @@ glare and falloff.
 ## Findings that will save you time
 
 Full detail in `docs/experiments/PHASE1-FINDINGS.md`. The ones that change how you work:
+
+- **F52: until 2026-10-23 no real capture could have completed a transfer.** The manifest was
+  never transmitted and every receiver was handed the transmitter's. Fixed by the in-band manifest
+  (ADR-0015). The general lesson: a test that supplies what the real system must earn tests
+  nothing.
+- **F49: the fountain code, not the channel, cost 20–35% of goodput under loss** — and swapping in
+  Gaussian elimination would not have found it, because the waste was in the LT rows. Dense GF(2)
+  rows fixed it (ADR-0015).
+- **F53: a moving phone loses frames to motion BLUR, not to the tracker.** Constant-velocity
+  prediction was built, measured, and shipped off — it changed nothing. The remedy for motion is
+  telling the person (F54), and `ffsim --shake/--pan` is how to test any change against it.
+- **F51: alignment objectives need a gradient where it matters.** Scored through the decode
+  window, the pilot-contrast search is flat for errors under ~0.3 cells. Score on *every*
+  structural cell through a wider window — they are all known, so F15 still holds.
 
 - **F14 is RETRACTED.** A "~6 px/cell detection floor" was an artifact of the F15 bug, and the
   corrected boundary turned out to be a `min_area_fraction` config threshold, not optics.
@@ -141,6 +160,15 @@ Full detail in `docs/experiments/PHASE1-FINDINGS.md`. The ones that change how y
 
 ## The single most important constraint
 
+> **Current state, 2026-10-23.** Everything below this box was written on 2026-08-04/06 and parts
+> are now stale — kept, not rewritten. Since then: an Android **transmitter exists and has been
+> read** (F36, `H` up to 0.378); alignment work took cell erasure from 0.76 to 0.44 on real frames
+> (F45–F48); and protocol v2 (ADR-0015) made a real capture **able to complete a transfer at all**
+> (F52) and the fountain layer near-optimal (F49). The constraint is now: **get one verified
+> transfer off real optics**, and count `Fd` from the same bundle. Both need only a capture —
+> `ffreplay` reports goodput and the display-state rates directly. No phones were attached when
+> protocol v2 landed, so it has not yet met real hardware.
+
 **`Fd` has never been measured, and no goodput figure exists on hardware.** That is now the
 constraint — it is narrower than it was on 2026-08-03, when nothing had run on a phone at all.
 
@@ -190,8 +218,9 @@ Also implemented and **run**: the **live `CameraCaptureSession`** (`CameraRecord
 the writer. Drive it with `tools/android_capture.sh` and analyse cadence with
 `tools/frame_cadence.py`; the `write` arm is the A/B that separates camera rate from writer I/O.
 
-**What is NOT implemented:** any **transmitter** (C03/C04 on Android), which is why `Fd` is
-unmeasured and why nothing has been decoded from real optics. Nothing upgrades `Evidence` to
+**What is NOT implemented:** ~~any **transmitter** (C03/C04 on Android), which is why `Fd` is
+unmeasured and why nothing has been decoded from real optics.~~ *(Stale: the transmitter landed
+before F36 and now runs through `TransmitSession`.)* Nothing upgrades `Evidence` to
 `kVerified` yet either, so the probe's tier stays `kUnsupported` — correct, not a bug.
 
 **A recording-throughput ceiling to plan around (F28):** app-private storage sustains ~50 MB/s, so
@@ -204,6 +233,27 @@ meet a compiler was wrong. `SENSOR_ROLLING_SHUTTER_SKEW` is a `CaptureResult` ke
 `CameraCharacteristics` key, so C02 could never have read it.
 
 ## Suggested next work, in value order
+
+**Revised 2026-10-23.** The list further down is the August list, kept for its reasoning.
+
+1. **One verified transfer on real optics — needs the rig, nothing else.** Install the APK on
+   both phones, press Transmit on one and **Receive** on the other: Receive now decodes live
+   (C13b, F54) and finishes by itself with "verified" and a saved file, or tells you what is
+   wrong — point at the screen, hold steadier, or screen found but unreadable. For an analysable
+   dataset, use the scripted recording path and `ffreplay`, which prints verified goodput or
+   names the layer that stopped it. Nothing in C13b has run on a phone yet: watch the first live
+   run with the scripted path alongside, per the verify-on-the-user's-entry-point rule (F43). If the payload FEC is the wall (0.44 erasure ≫ the ~12% nsym = 32 absorbs),
+   try `--fec-nsym 64` on the transmitter — the receiver needs no change, it reads the rate from
+   the header.
+2. **EXP-006 from the same bundles.** `ffreplay` prints submission rate, distinct-state rate and
+   states never read. Repeat at divisor 4 (30 states/s on the 120 Hz panel) so the 60 fps camera is
+   ≥ 2× the state rate and a missing state means a display drop.
+3. **OQ-038 — read `LENS_DISTORTION` in C02** and see whether either phone reports it. Corner
+   refinement (F51) absorbs mild radial distortion; beyond |k1| ≈ 0.02 only undistortion works.
+4. **OQ-037** — narrowed by ADR-0015 but still the gate for mid-session rate change.
+5. **M1 / M2** — unchanged from below.
+
+The August list:
 
 1. ~~**Adaptive link controller (C14).**~~ **DONE 2026-08-03** — `core/src/link.cpp`,
    `ChannelEstimator` + `LinkController`, EXP-023, findings F20–F23. It picks the brute-force
@@ -240,5 +290,5 @@ previously recorded is wrong, correct it *and* say so plainly — that has happe
 (F14 retracted, and a "tracking is more reliable" conclusion in F15 that turned out to be a bug
 artifact). Distinguish measured results from model outputs every time.
 
-37 open questions are tracked in `docs/experiments/OPEN-QUESTIONS.md`. Add to it rather than
+38 open questions are tracked in `docs/experiments/OPEN-QUESTIONS.md`. Add to it rather than
 resolving uncertainty by assumption.

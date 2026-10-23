@@ -9,25 +9,26 @@ The goal is **maximum verified application-layer goodput** on hardware people al
 own — replacing rapidly-changing QR-code streams with a purpose-built screen-to-camera
 communication protocol.
 
-> **Project status: Phase 1 — portable core implemented, simulated only.**
-> *Updated 2026-08-03. The previous "Phase 0, there is no implementation yet" was left
-> unchanged through the entire Phase 1 build and had become the most misleading sentence in
-> the repository.*
+> **Project status: Phase 2 — Android transmitter and receiver running on hardware; protocol v2;
+> no verified transfer on real optics yet.**
+> *Updated 2026-10-23. The previous status ("simulated only … no Android code") had been false
+> since 2026-08-04 — the same stale-status failure the 2026-08-03 update was written to fix.*
 >
-> **What exists:** a complete portable C++20 decode chain (`core/`) that builds and runs with
-> no Android toolchain — GF(256)/Reed–Solomon with errors-and-erasures decoding, LT fountain
-> coding, intra-frame FEC, M0 binary luminance with soft symbols, the full CV path (screen
-> detection, homography, tracking, subpixel sampling, photometric field), session manifest with
-> SHA-256 verification, and an adaptive-code-rate controller. Plus a channel simulator
-> (`sim/`), a capture/replay harness proven bit-identical to live decode (`harness/`),
-> libFuzzer targets (`fuzz/`), 215 tests, and CI with 7 jobs.
+> **What exists:** a portable C++20 core (`core/`) — GF(256)/Reed–Solomon with errors-and-erasures
+> decoding, a systematic GF(2) random linear fountain (ADR-0015), intra-frame FEC, M0 binary
+> luminance with soft symbols, the full CV path (detection, homography, tracking, sub-cell and
+> corner alignment, photometric field), a session layer with an **in-band manifest** so a receiver
+> needs only the grid, SHA-256 verification, and an adaptive-code-rate controller. A channel
+> simulator (`sim/`), a capture/replay harness proven bit-identical to live decode that now runs
+> **verified transfers** (`harness/`), libFuzzer targets, 284 tests, CI with 7 jobs. An Android app
+> (`app/`, `platform/android/`) with a GL transmitter, a Camera2 recorder and an aiming UI.
 >
-> **What does not exist: any Android code, or any measurement on real hardware.**
-> A file transfer verifies end-to-end under simulated perspective, jitter, blur, glare and
-> falloff — through the real decode chain, but against a channel model that is **uncalibrated**
-> (RISK-024). **No performance number anywhere in this repository is a measured result.** Every
-> figure is a simulator output, a model output, or a citation, and is labelled as such.
-> Progress is now gated on real captures, not on more simulation.
+> **What has been measured on hardware** (Galaxy S26 Ultra → Pixel 8): camera delivery 59 fps
+> (F28); the density cliff between 5.93 and 7.30 camera px/cell (EXP-001); frame headers read off a
+> real screen, `H` = 0.03–0.38 (F36, F45); cell erasure 0.44 after alignment fixes (F45–F48).
+>
+> **What has not:** a completed transfer, and therefore **any goodput**; and `Fd`. Every goodput
+> figure in this repository is a simulator or model output, labelled `[HYP]` (RISK-024).
 
 ## The one metric that matters
 
@@ -110,6 +111,8 @@ core/            portable C++20 decode chain. NO Android headers — enforced by
   tests/             GoogleTest — runs on desktop, no device needed
 sim/             channel simulator + optical renderer (ffsim)
 harness/         capture-bundle writer and replay source (ffreplay)
+platform/android/ JNI adapters — marshalling only, all judgement in core/ (ADR-0014)
+app/             Kotlin shell: transmitter, Camera2 recorder, aiming UI
 fuzz/            libFuzzer targets — Linux CI only (Apple clang ships no libFuzzer, F5)
 docs/            all design documentation (see docs/INDEX.md)
   vision/        objective, goals/non-goals, terminology, performance philosophy
@@ -117,7 +120,7 @@ docs/            all design documentation (see docs/INDEX.md)
   architecture/  system overview, data flow, component registry
   adr/           architecture decision records
   specifications/ optical frame, modulation, protocol, performance model
-  experiments/   experiment registry, open questions, PHASE1-FINDINGS (F1–F23)
+  experiments/   experiment registry, open questions, PHASE1-FINDINGS (F1–F55)
   testing/       simulator plan, capture harness, benchmark methodology
   planning/      roadmap, feature registry, risk register, device matrix
   security/      threat model, input validation rules
@@ -127,13 +130,11 @@ data/
   experiments/   raw experimental results (never deleted, never rewritten)
 ```
 
-There is **no** `platform/android/` or `app/` directory yet — no Android code exists.
-
 ## Building and running
 
 ```bash
 cmake --preset desktop-release && cmake --build build/desktop-release -j8
-./build/desktop-release/core/tests/fileflow_tests     # 215 tests
+./build/desktop-release/core/tests/fileflow_tests     # 284 tests
 
 cmake --preset core-only && cmake --build build/core-only -j8   # enforces ADR-0010
 python3 tools/check_links.py                                    # every doc link must resolve
@@ -145,9 +146,11 @@ Presets: `desktop-debug`, `desktop-release`, `desktop-asan`, `desktop-fuzz`, `co
 # End-to-end transfer through the real decode chain, rendering real pixels
 ./build/desktop-release/sim/ffsim --payload 65536 --image-path --image-size 1200 2000
 
-# Record a capture bundle, then replay it through the production decoder
+# Record a capture bundle, then replay it through the production decoder. ffreplay is told only
+# the grid (from the bundle); it reads the code rate and manifest from the frames, verifies the
+# file, and reports goodput plus the display-state rates EXP-006 needs (ADR-0015)
 ./build/desktop-release/sim/ffsim --payload 16384 --image-path --record /tmp/bundle
-./build/desktop-release/harness/ffreplay /tmp/bundle
+./build/desktop-release/harness/ffreplay /tmp/bundle --out /tmp/received.bin
 
 ./build/desktop-release/sim/ffsim --help
 ```

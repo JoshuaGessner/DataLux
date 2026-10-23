@@ -174,6 +174,16 @@ Every parameter below is a **starting hypothesis requiring validation**. None is
 | `H` | 0.95–0.99 | Assumes heavy header protection works | EXP-013 |
 | `Rfountain` | 0.90–0.97 | RaptorQ-class overhead is low; LT-class is worse | EXP-012 |
 
+**`H` and `Rfountain` against what has since been measured (2026-10-23)** — recorded here, not
+retuned into the script, per the rule below:
+
+- **`H`: real optics read 0.026–0.378** (F36, F45), one rig, against an assumed 0.95–0.99. The
+  single largest gap between this model and reality so far. F45–F48 and F50 target it; no capture
+  since has measured the effect.
+- **`Rfountain`: the v1 implementation was below the assumed range** — ~0.75–0.83 at 5–30% frame
+  loss (F49), simulated. Protocol v2 measures **0.98–1.00** in the same simulation, now above it.
+  The range above was right about what a good fountain code gives and wrong about the code we had.
+
 **`Pc` deserves emphasis.** It is a guess, it is one of the highest-leverage variables, and
 it multiplies through every scenario. If real `Pc` is 0.35 rather than 0.70, every number
 above halves and milestone 4 becomes unreachable even with M2. Measuring `Pc` early is more

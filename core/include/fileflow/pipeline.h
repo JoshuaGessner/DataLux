@@ -49,6 +49,48 @@ struct SubcellConfig {
     // Coarse-to-fine. Two passes over +/-0.45 at 7 steps resolves to about 0.02 cells, which at
     // 8.85 px/cell is a fifth of a pixel -- far finer than the blur.
     int passes = 2;
+
+    // After the global shift, move each of the four grid corners INDEPENDENTLY (F51).
+    //
+    // A single translation is the right correction only when the error is the same everywhere,
+    // and the two errors measured on real optics are not: F34's rounded corners bias the quad's
+    // extremes inward by an asymmetric 20-77 px, and a slightly wrong perspective is exactly
+    // right at two corners and wrong at the others. Either leaves the middle of the grid on the
+    // cells and an edge off them, so the global search finds a compromise that is wrong
+    // everywhere. Eight degrees of freedom -- a full homography -- can fix both.
+    //
+    // Same objective as the shift (pilot contrast), so it inherits F15's rule: no payload
+    // knowledge. Coordinate descent over the 8 corner offsets, coarse to fine, each bounded to
+    // `corner_range` cells so it cannot walk onto a neighbouring cell, and capped at
+    // `corner_evaluations` contrast evaluations per frame so its cost is bounded too.
+    bool refine_corners = true;
+    double corner_range = 0.6;
+    int corner_evaluations = 240;
+
+    // The alignment objective samples each pilot through a WIDER window than decoding does.
+    //
+    // The decode sampler deliberately reads only the middle of a cell (margin 0.3), which makes
+    // it blind to any misalignment smaller than that margin: every sub-sample is still inside the
+    // right cell, so pilot contrast is flat and the search has no gradient to follow. Measured:
+    // corner refinement scored that way stalled at 0.22 cells of error. Reading nearly the whole
+    // cell makes any offset pull neighbours into the average at once, which is the slope the
+    // search needs -- and once aligned, the narrow decode window has margin to spare.
+    //
+    // Chosen from Alignment.AlignWindowSweep (4 scenes x 3 corner perturbations, worst case):
+    //   margin 0.15, n=4, 512 anchors: 0.110 cells left, 0.095 drift on a correct grid, 4.9 ms
+    //   margin 0.15, n=4, 256 anchors: 0.135, 0.122, 2.5 ms
+    //   margin 0.30, n=3 (the decode window): 0.324 -- the plateau described above
+    // [HYP]: simulated scenes. Both remaining errors are inside the decode window's 0.3-cell margin.
+    double align_margin = 0.15;
+    int align_samples = 4;
+
+    // Cells the alignment objective reads. ALL structural cells are known by construction --
+    // markers, boundary ring, timing tracks and guards as well as pilots -- and they matter more
+    // than their number suggests: the ~80 pilots are interior, while corner refinement moves the
+    // CORNERS, which only the edge structure constrains. Scored on pilots alone it left 0.34-0.55
+    // cells of error in the worst scene. Every pilot is kept; the rest are thinned evenly to this
+    // cap, which bounds the per-frame cost.
+    std::size_t max_anchors = 512;
 };
 
 struct PipelineConfig {
@@ -102,6 +144,15 @@ struct PipelineDiagnostics {
     std::uint64_t subcell_frames = 0;
     double sum_subcell_shift = 0.0;   // magnitude, in cells
     double sum_subcell_gain = 0.0;    // aligned contrast / unaligned contrast
+    // Corner refinement (F51): frames where moving a corner helped, and the further contrast
+    // factor it bought on top of the global shift. Near 1.0 everywhere says the error really was
+    // a translation; well above 1.0 says it was not, and the shift alone was leaving cells behind.
+    std::uint64_t corner_refined_frames = 0;
+    double sum_corner_gain = 0.0;
+
+    [[nodiscard]] double mean_corner_gain() const noexcept {
+        return subcell_frames ? sum_corner_gain / static_cast<double>(subcell_frames) : 0.0;
+    }
 
     [[nodiscard]] double mean_subcell_shift() const noexcept {
         return subcell_frames ? sum_subcell_shift / static_cast<double>(subcell_frames) : 0.0;
@@ -165,6 +216,12 @@ class FramePipeline {
     // Drop the geometry lock, e.g. across a session boundary.
     void Reset() noexcept { tracker_.Reset(); }
 
+    // Sub-cell alignment of a grid-to-image estimate against this image's pilots: the global
+    // shift, then corner refinement, as configured. Process() runs this on the tracker's output;
+    // it is public so the alignment can be tested against a known-wrong homography directly,
+    // without depending on what errors the tracker happens to make.
+    [[nodiscard]] Homography Align(const ImageView8& img, const Homography& h);
+
     // The last frame's photometric field, when one was estimated.
     //
     // Retained because every aggregate so far has been unable to tell three very different
@@ -180,13 +237,27 @@ class FramePipeline {
     // cells. The objective the sub-cell search maximises.
     [[nodiscard]] double PilotContrast(const ImageView8& img, const Homography& h, double dx,
                                        double dy) const;
+    [[nodiscard]] double PilotContrast(const ImageView8& img, const Homography& h) const;
+
+    // Coordinate descent over the four corners. Returns `h` unchanged if nothing improves.
+    [[nodiscard]] Homography RefineCorners(const ImageView8& img, const Homography& h,
+                                           double* gain) const;
+
+    // A cell whose level is known by construction, for the alignment objective.
+    struct Anchor {
+        std::uint32_t col = 0;
+        std::uint32_t row = 0;
+        bool bright = false;
+    };
 
     FramePipeline(const FrameLayout& layout, PipelineConfig cfg, CellSampler sampler,
-                  ScreenTracker tracker);
+                  CellSampler align_sampler, ScreenTracker tracker, std::vector<Anchor> anchors);
 
     const FrameLayout* layout_;
     PipelineConfig cfg_;
     CellSampler sampler_;
+    CellSampler align_sampler_;  // wide window: the alignment objective only
+    std::vector<Anchor> anchors_;
     ScreenTracker tracker_;
 
     Homography last_h_;

@@ -83,21 +83,28 @@ class MainActivity : AppCompatActivity() {
         root.addView(
             bigButton("Receive", "#1565C0") {
                 // Aiming is ON by default here. A person holding a camera needs help pointing it far
-                // more than they need a diagnostics dump, and the capture starts itself once the
+                // more than they need a diagnostics dump, and receiving starts itself once the
                 // geometry is workable.
+                //
+                // LIVE: decode on the phone until the file verifies, with progress on screen (C13b).
+                // This button used to record 120 frames -- four seconds -- for desktop analysis, which
+                // could not deliver a file and could not say whether anything had worked. Scripted
+                // experiments still get the recording path: they launch CaptureActivity without
+                // `live`.
                 startActivity(
                     Intent(this, CaptureActivity::class.java)
                         .putExtra("gridCols", cols)
                         .putExtra("gridRows", rows)
                         .putExtra("aim", true)
-                        .putExtra("frames", 120)
+                        .putExtra("live", true)
                         .putExtra("fps", 30)
                         .putExtra("maxWidth", 2688)
                         .putExtra("exposureNs", 16_000_000L)
                 )
             }
         )
-        root.addView(caption("Lines up the camera, then records. Guidance first, capture second."))
+        root.addView(caption("Lines up the camera, then receives until the file is verified. " +
+                             "If the phone drifts, it pauses — nothing received is lost."))
 
         root.addView(spacer(20))
         root.addView(

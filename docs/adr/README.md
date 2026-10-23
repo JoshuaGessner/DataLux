@@ -41,6 +41,7 @@ wrong. Each one names the experiment that would confirm or overturn it.
 | [0012](ADR-0012-goodput-primary-metric.md) | Goodput as the primary metric | Accepted | High | [CHROMACODE] evidence |
 | [0013](ADR-0013-toolchain-and-build-system.md) | Toolchain, build system and repo layout | **Accepted** | High | Validated 2026-08-03: `core/` cross-compiles for arm64 under NDK r29 unchanged, one `.so`, no warnings |
 | [0014](ADR-0014-thin-android-adapters.md) | Thin Android adapters; all judgement in portable C++ | **Accepted** | Medium-High | C02 probe logic tested off-device; F25 found a platform error on the way |
+| [0015](ADR-0015-protocol-v2-dense-fountain-inband-manifest.md) | Protocol v2: dense fountain, in-band manifest, self-describing code rate | **Accepted** | High (code) / Medium (gain) | F49 measured the code property directly; goodput gains are `[HYP]` until a real capture completes |
 
 ## Note on confidence
 

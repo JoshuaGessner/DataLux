@@ -13,6 +13,9 @@ add_executable(fileflow_tests
     test_modulation.cpp
     test_llr_quality.cpp
     test_transfer.cpp
+    test_session.cpp
+    test_pipeline.cpp
+    test_live.cpp
     test_geometry.cpp
     test_sampler.cpp
     test_photometric.cpp

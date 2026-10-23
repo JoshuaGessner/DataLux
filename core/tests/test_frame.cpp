@@ -20,6 +20,7 @@ FrameHeader Sample() {
     h.esi = 999;
     h.payload_bytes = 256;
     h.flags = FrameHeader::kFlagLastBlock;
+    h.fec_nsym = 32;
     return h;
 }
 }  // namespace
@@ -39,6 +40,21 @@ TEST(FrameHeader, PlainRoundTrip) {
     EXPECT_EQ(d.value().esi, h.esi);
     EXPECT_EQ(d.value().payload_bytes, h.payload_bytes);
     EXPECT_EQ(d.value().flags, h.flags);
+    EXPECT_EQ(d.value().fec_nsym, h.fec_nsym);
+}
+
+TEST(FrameHeader, PreviousVersionIsRefusedNotMisparsed) {
+    // v1 used LT repair rows; decoding its symbols against v2's dense rows would fail only at the
+    // final hash, after the whole transfer had been spent (ADR-0015).
+    auto h = Sample();
+    h.version = kProtocolVersion - 1;
+    EXPECT_EQ(FrameHeader::DecodePlain(h.EncodePlain()).error(), Error::kUnsupportedVersion);
+}
+
+TEST(FrameHeader, ImpossibleCodeRateIsRejected) {
+    auto h = Sample();
+    h.fec_nsym = 255;  // no message bytes left in a 255-byte codeword
+    EXPECT_EQ(FrameHeader::DecodePlain(h.EncodePlain()).error(), Error::kValueOutOfRange);
 }
 
 TEST(FrameHeader, EveryTruncationIsRejected) {
@@ -153,6 +169,56 @@ TEST(HeaderCodec, BeyondBudgetFailsRatherThanLying) {
     } else {
         SUCCEED();
     }
+}
+
+TEST(HeaderCodec, ErasuresDoubleTheCorrectableDamage) {
+    // F50. 30 damaged bytes is far past the 16 errors nsym = 32 can locate blind, and well inside
+    // the 32 erasures it can fill when told where they are.
+    const HeaderCodec codec(32);
+    const auto h = Sample();
+    auto coded = codec.Encode(h);
+    ASSERT_TRUE(coded.ok());
+
+    std::vector<std::size_t> erased;
+    auto buf = coded.value();
+    for (std::size_t i = 0; i < 30; ++i) {
+        buf[i * 2] = 0x00;  // what an all-abstaining vote used to produce
+        erased.push_back(i * 2);
+    }
+    auto blind = buf;
+    EXPECT_FALSE(codec.Decode(blind).ok()) << "30 blind errors must be past the budget";
+
+    auto d = codec.Decode(buf, erased);
+    ASSERT_TRUE(d.ok()) << ErrorName(d.error());
+    EXPECT_EQ(d.value().sequence, h.sequence);
+    EXPECT_EQ(d.value().session_id, h.session_id);
+}
+
+TEST(HeaderCodec, WrongErasureFlagsNeverCostASuccess) {
+    // Flags on bytes that were in fact correct spend budget for nothing. With errors elsewhere
+    // the flagged attempt can fail where a blind one succeeds, so the codec must fall back.
+    const HeaderCodec codec(32);
+    const auto h = Sample();
+    auto coded = codec.Encode(h);
+    ASSERT_TRUE(coded.ok());
+
+    auto buf = coded.value();
+    std::vector<std::size_t> erased;
+    for (std::size_t i = 0; i < 20; ++i) erased.push_back(i);   // all correct, all flagged
+    for (std::size_t i = 0; i < 12; ++i) buf[30 + i] ^= 0x3C;   // 12 real errors elsewhere
+
+    auto d = codec.Decode(buf, erased);
+    ASSERT_TRUE(d.ok()) << ErrorName(d.error());
+    EXPECT_EQ(d.value().sequence, h.sequence);
+}
+
+TEST(HeaderCodec, OutOfRangeErasureIsRejected) {
+    const HeaderCodec codec(32);
+    auto coded = codec.Encode(Sample());
+    ASSERT_TRUE(coded.ok());
+    auto buf = coded.value();
+    const std::vector<std::size_t> bad{buf.size()};
+    EXPECT_EQ(codec.Decode(buf, bad).error(), Error::kValueOutOfRange);
 }
 
 TEST(HeaderCodec, WrongLengthIsRejected) {

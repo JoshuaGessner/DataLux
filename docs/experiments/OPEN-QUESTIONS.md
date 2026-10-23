@@ -2,7 +2,7 @@
 
 > **Status:** Draft
 > **Owner:** Project lead
-> **Last reviewed:** 2026-08-03
+> **Last reviewed:** 2026-10-23
 > **Related:** EXPERIMENT-REGISTRY.md, RISK-REGISTER.md, PHASE1-FINDINGS.md
 
 Every unresolved question that could change a design decision. Questions are closed only
@@ -46,7 +46,7 @@ plan) · **Medium** (would change a component) · **Low** (would refine a parame
 | ID | Question | Severity | Resolved by | Status |
 |---|---|---|---|---|
 | **OQ-009** | Which intra-frame code family and rate? | High | EXP-011 | Open |
-| **OQ-010** | Which fountain scheme — and is RaptorQ legally available for smartphone deployment given the Qualcomm IPR tiering? | High | EXP-012 + RT-07 legal review | Open |
+| **OQ-010** | Which fountain scheme — and is RaptorQ legally available for smartphone deployment given the Qualcomm IPR tiering? **ANSWERED 2026-10-23 (ADR-0015, F49):** a systematic random linear fountain over GF(2) with Gaussian elimination — ~1.6 symbols over k at any loss rate (0.025 overhead at k = 64), no patent question. The RaptorQ legal review (RT-07) is no longer on the critical path; it would matter only for blocks far beyond the 1024-symbol bound | Low (was High) | ~~EXP-012 + RT-07 legal review~~ F49 | **Answered** |
 | **OQ-014** | What fraction of one big core can the FEC decoder use before it competes with capture and reduces `Pc`? | Medium | EXP-011, EXP-016 | Open |
 | **OQ-025** | Is 8-bit LLR quantisation sufficient, or does it cost measurable coding gain? | Low | EXP-011 | Open |
 
@@ -59,7 +59,8 @@ plan) · **Medium** (would change a component) · **Low** (would refine a parame
 | **OQ-026** | What is the correct behaviour when the app is backgrounded mid-transfer — pause or abort? | Low | Design decision | Open |
 | **OQ-027** | Should the receiver hash incrementally during reception (early corruption detection) or only at the end? | Low | Design decision | Open |
 | **OQ-036** | What thermal policy should C14 apply (ADP-05)? Higher `nsym` costs more decode work, but no ARM64 decode-cost measurement exists, so any policy today would be invented. C14 deliberately ships **without** a `ThermalState` input rather than fake one | Medium | EXP-011 (decode cost), EXP-020 (throttling curve) | Open |
-| **OQ-037** | **Should the fountain symbol size be decoupled from frame capacity?** Today `nsym` → FEC message size → fountain symbol size → manifest, which is fixed for the session, so **no capacity-changing knob can move mid-transfer** (F20). A fixed small symbol size carrying an integer number of whole symbols per frame would unblock mid-session rate adaptation without touching the fountain mathematics, and would also address F4's ~27% block-padding waste. Cost: more header bookkeeping per frame, and a protocol version bump | **High** | Design work; becomes an ADR if taken | Open |
+| **OQ-037** | **Should the fountain symbol size be decoupled from frame capacity?** Today `nsym` → FEC message size → fountain symbol size → manifest, which is fixed for the session, so **no capacity-changing knob can move mid-transfer** (F20). A fixed small symbol size carrying an integer number of whole symbols per frame would unblock mid-session rate adaptation without touching the fountain mathematics, and would also address F4's ~27% block-padding waste. Cost: more header bookkeeping per frame, and a protocol version bump. **NARROWED 2026-10-23 (ADR-0015):** the padding waste is gone by a different route (padding is never sent; the receiver primes it), and the code rate is now carried in every header, so no receiver ever needs to be told it. What remains is the core of the question: symbol size is still the FEC message size, fixed by the manifest, so `nsym` still cannot change mid-transfer | High | Design work; becomes an ADR if taken | **Narrowed** |
+| **OQ-038** | **Should the receiver undistort with the camera's own lens calibration?** F51: corner refinement absorbs radial distortion up to \|k1\| ≈ 0.02 (simulated), and beyond that no single homography fits. Camera2 publishes `LENS_DISTORTION` and `LENS_INTRINSIC_CALIBRATION` (API 28+); applying them in C08 before the homography would remove the term at its source. Unknown whether either reference device reports them, or whether the ISP has already corrected the YUV stream they describe | Medium | C02 probe read-out of the two keys, then a real capture with and without | Open |
 
 ## Measurement and process
 

@@ -3,10 +3,13 @@
 // The identity-channel case is the simulator's primary self-validation (ADR-0010): with no
 // impairments, decoding MUST be perfect. A failure here is a decoder bug, never a channel
 // effect -- which is exactly why this test exists before any impairment is tuned.
-#include <fileflow/frame.h>
-#include <fileflow/modulation.h>
+//
+// Driven through the session layer (C13a), the same code ffsim, ffreplay and the phone run, and
+// the receiver is given NOTHING but the grid: the code rate comes from each header and the
+// manifest from the frames (ADR-0015). This file used to hand the receiver the transmitter's
+// manifest object, which is the one thing a real receiver can never have.
+#include <fileflow/session.h>
 #include <fileflow/sim/channel.h>
-#include <fileflow/transfer.h>
 
 #include <gtest/gtest.h>
 
@@ -15,17 +18,6 @@
 using namespace fileflow;
 
 namespace {
-
-struct Rig {
-    GridGeometry geom{120, 200};
-    FrameLayout layout;
-    M0Modulator mod;
-    HeaderCodec codec;
-
-    Rig()
-        : layout(FrameLayout::Create(GridGeometry{120, 200}, LayoutConfig{}).value()),
-          mod(layout) {}
-};
 
 std::vector<std::uint8_t> Payload(std::size_t n, std::uint64_t seed = 2026) {
     std::vector<std::uint8_t> v(n);
@@ -46,53 +38,38 @@ struct RunStats {
 
 // One complete transfer through the real chain under a configured channel.
 RunStats RunTransfer(const std::vector<std::uint8_t>& payload, sim::ChannelConfig cfg,
-                     std::uint64_t max_frames = 400000) {
-    Rig rig;
+                     std::size_t fec_nsym = 32, std::uint64_t max_frames = 400000) {
+    const GridGeometry geom{120, 200};
+    const FrameLayout layout = FrameLayout::Create(geom, LayoutConfig{}).value();
     RunStats st;
 
-    auto tx_r = FileTransmitter::Create(payload, "e2e.bin", 0xE2EE2E, 256, 32);
-    EXPECT_TRUE(tx_r.ok());
-    FileTransmitter tx = std::move(tx_r).value();
+    TransmitConfig tc;
+    tc.fec_nsym = fec_nsym;
+    auto tx_r = TransmitSession::Create(layout, payload, "e2e.bin", 0xE2EE2E, tc);
+    EXPECT_TRUE(tx_r.ok()) << ErrorName(tx_r.error());
+    if (!tx_r.ok()) return st;
+    TransmitSession tx = std::move(tx_r).value();
 
-    auto rx_r = FileReceiver::Create(tx.manifest());
+    auto rx_r = ReceiveSession::Create(layout);
     EXPECT_TRUE(rx_r.ok());
-    FileReceiver rx = std::move(rx_r).value();
+    ReceiveSession rx = std::move(rx_r).value();
 
     sim::Channel channel(cfg);
-
+    CellMatrix frame(geom.cols, geom.rows);
     while (!rx.complete() && st.presented < max_frames) {
-        auto fp = tx.NextFrame();
-        auto hdr_coded = rig.codec.Encode(fp.header);
-        EXPECT_TRUE(hdr_coded.ok());
-
-        CellMatrix frame(rig.geom.cols, rig.geom.rows);
-        EXPECT_TRUE(rig.mod.Render(hdr_coded.value(), fp.data, &frame).ok());
+        EXPECT_TRUE(tx.Next(&frame).ok());
         ++st.presented;
-
         if (cfg.frame_drop_rate > 0.0 && channel.rng().NextDouble() < cfg.frame_drop_rate) {
             continue;  // presented but never captured -- a Pc term
         }
-
         const std::vector<double> samples = channel.Apply(frame);
-        const PhotometricRef ref = rig.mod.EstimateReference(samples);
-
-        auto hbytes = rig.mod.DemodulateHeader(samples, ref, rig.codec.coded_size());
-        if (!hbytes.ok()) { ++st.header_fail; continue; }
-
-        std::vector<std::uint8_t> hbuf = hbytes.value();
-        auto hdr = rig.codec.Decode(hbuf);
-        if (!hdr.ok()) { ++st.header_fail; continue; }
-        ++st.header_ok;
-
-        SoftSymbolBuffer soft;
-        rig.mod.DemodulatePayload(samples, ref, &soft);
-        HardDecision hd = HardDecide(soft, hdr.value().payload_bytes);
-        st.erasures += hd.erasures;
-
-        rx.Ingest(hdr.value(), hd.bytes);
+        rx.Ingest(samples, static_cast<std::int64_t>(st.presented) * 16'666'667);
     }
 
-    st.fountain_overhead = rx.overhead();
+    st.header_ok = rx.stats().header_ok;
+    st.header_fail = rx.stats().header_fail;
+    st.erasures = rx.stats().erased_cells;
+    if (rx.receiver() != nullptr) st.fountain_overhead = rx.receiver()->overhead();
     auto out = rx.Finish();
     st.verified = out.ok();
     if (!out.ok()) {
@@ -103,7 +80,19 @@ RunStats RunTransfer(const std::vector<std::uint8_t>& payload, sim::ChannelConfi
     return st;
 }
 
+struct Rig {
+    GridGeometry geom{120, 200};
+    FrameLayout layout;
+    M0Modulator mod;
+    HeaderCodec codec;
+
+    Rig()
+        : layout(FrameLayout::Create(GridGeometry{120, 200}, LayoutConfig{}).value()),
+          mod(layout) {}
+};
+
 }  // namespace
+
 
 TEST(EndToEnd, IdentityChannelDecodesPerfectly) {
     sim::ChannelConfig cfg;

@@ -11,12 +11,10 @@
 #include <fileflow/intra_fec.h>
 #include <fileflow/link.h>
 #include <fileflow/modulation.h>
-#include <fileflow/photometric.h>
-#include <fileflow/sampler.h>
+#include <fileflow/pipeline.h>
+#include <fileflow/session.h>
 #include <fileflow/sim/channel.h>
 #include <fileflow/sim/render.h>
-#include <fileflow/tracker.h>
-#include <fileflow/transfer.h>
 
 #include <algorithm>
 #include <chrono>
@@ -37,7 +35,8 @@ struct Options {
     std::uint32_t rows = 200;
     std::size_t payload_bytes = 64 * 1024;
     std::uint32_t symbol_size = 0;  // 0 => size it to fill the frame
-    std::uint32_t block_symbols = 64;
+    std::uint32_t block_symbols = 0;      // 0 => AutoBlockSymbols (few, balanced blocks)
+    std::uint32_t manifest_interval = 0;  // 0 => FileTransmitter::AutoManifestInterval
     std::uint64_t max_frames = 200000;
     double fd = 60.0;  // assumed distinct display states per second
     sim::ChannelConfig channel;
@@ -49,7 +48,11 @@ struct Options {
     // The two modes answer different questions; neither replaces the other.
     bool image_path = false;
     bool no_tracking = false;  // force full acquisition every frame (ADR-0006 A/B baseline)
+    bool no_subcell = false;   // disable sub-cell alignment (the F45/F51 A/B baseline)
+    bool no_corners = false;   // global shift only, no corner refinement (the F51 A/B)
+    bool no_predict = false;   // tracker searches around the last position only (the F53 A/B)
     sim::OpticalRenderConfig render;
+    sim::MotionConfig motion;  // a handheld receiver; inactive unless --shake / --pan
 
     // Write the rendered frames out as a capture bundle. Lets the replay harness be exercised
     // end to end before any real capture exists, and gives the Android recorder a reference
@@ -85,7 +88,10 @@ void Usage() {
         "  --payload N                  payload bytes (default 65536)\n"
         "  --symbol-size N              fountain symbol size (default: fill the frame)\n"
         "  --fd RATE                    assumed display states/sec for goodput (default 60)\n"
-        "  --block-symbols N            source symbols per block (default 64)\n"
+        "  --block-symbols N            source symbols per block (default: as few balanced\n"
+        "                               blocks as the decoder bound allows, ADR-0015)\n"
+        "  --manifest-interval N        one manifest frame every N display states\n"
+        "                               (default: scaled to the transfer, 16..128)\n"
         "  --seed N                     RNG seed (default 20260802)\n"
         "  --noise SIGMA                Gaussian read noise (default 2.0)\n"
         "  --shot SCALE                 signal-dependent shot noise (default 0)\n"
@@ -103,12 +109,23 @@ void Usage() {
         "IMAGE PATH (renders real pixels; decoder must earn its homography)\n"
         "  --image-path                 enable render -> detect/track -> sample -> normalise\n"
         "  --no-tracking                full acquisition every frame (ADR-0006 A/B baseline)\n"
-        "  --image-size W H             capture resolution (default 900x1500)\n"
+        "  --no-subcell                 disable sub-cell grid alignment (A/B baseline)\n"
+        "  --no-corners                 global sub-cell shift only, no corner refinement\n"
+        "  --no-predict                 tracker ignores motion: searches around the last\n"
+        "                               position with a fixed window (A/B baseline)\n"
+        "  --image-size W H            capture resolution (default 900x1500)\n"
         "  --distance D                 1.0 fills ~80%% of frame height (default 1.0)\n"
         "  --yaw D --pitch D --roll D   viewing angles in degrees\n"
         "  --falloff F                  corner luminance vs centre, 1.0 = flat\n"
         "  --img-glare L                directional black-level lift (finding F7)\n"
         "  --blur R                     defocus box-blur radius in pixels\n"
+        "  --lens-k1 K                  radial lens distortion (negative = barrel); the one\n"
+        "                               image-path impairment a homography cannot represent\n"
+        "  --shake S                    handheld receiver: smooth sway + tremor, with motion\n"
+        "                               blur and rolling shutter. 1 = careful hold, 2-3 = poor\n"
+        "  --pan X Y                    steady pan, fractions of the image per second\n"
+        "  --exposure-ms T              exposure time for motion blur (default 15)\n"
+        "  --readout-ms T               rolling-shutter readout skew (default 10)\n"
         "  --img-noise A                additive pixel noise amplitude\n"
         "  --record DIR                 write frames as a replayable capture bundle\n"
         "\n"
@@ -147,6 +164,9 @@ int main(int argc, char** argv) {
         else if (a == "--payload") o.payload_bytes = static_cast<std::size_t>(Arg(next()));
         else if (a == "--symbol-size") o.symbol_size = static_cast<std::uint32_t>(Arg(next()));
         else if (a == "--block-symbols") o.block_symbols = static_cast<std::uint32_t>(Arg(next()));
+        else if (a == "--manifest-interval") {
+            o.manifest_interval = static_cast<std::uint32_t>(Arg(next()));
+        }
         else if (a == "--seed") o.channel.seed = static_cast<std::uint64_t>(Arg(next()));
         else if (a == "--noise") o.channel.read_noise_sigma = Arg(next());
         else if (a == "--shot") o.channel.shot_noise_scale = Arg(next());
@@ -164,6 +184,9 @@ int main(int argc, char** argv) {
         else if (a == "--fd") o.fd = Arg(next());
         else if (a == "--image-path") o.image_path = true;
         else if (a == "--no-tracking") o.no_tracking = true;
+        else if (a == "--no-subcell") o.no_subcell = true;
+        else if (a == "--no-corners") o.no_corners = true;
+        else if (a == "--no-predict") o.no_predict = true;
         else if (a == "--image-size") {
             o.render.view.image_width = static_cast<int>(Arg(next()));
             o.render.view.image_height = static_cast<int>(Arg(next()));
@@ -175,6 +198,14 @@ int main(int argc, char** argv) {
         else if (a == "--falloff") o.render.corner_falloff = Arg(next());
         else if (a == "--img-glare") o.render.glare_lift = Arg(next());
         else if (a == "--blur") o.render.blur_radius = static_cast<int>(Arg(next()));
+        else if (a == "--lens-k1") o.render.lens_k1 = Arg(next());
+        else if (a == "--shake") o.motion.shake = Arg(next());
+        else if (a == "--pan") {
+            o.motion.pan_x = Arg(next());
+            o.motion.pan_y = Arg(next());
+        }
+        else if (a == "--exposure-ms") o.motion.exposure_s = Arg(next()) / 1000.0;
+        else if (a == "--readout-ms") o.motion.readout_s = Arg(next()) / 1000.0;
         else if (a == "--img-noise") o.render.noise_amplitude = Arg(next());
         else if (a == "--record") o.record_dir = next();
         else if (a == "--fec-nsym") o.fec_nsym = static_cast<std::size_t>(Arg(next()));
@@ -231,6 +262,12 @@ int main(int argc, char** argv) {
         }
     }
 
+    if (o.motion.active() && !o.image_path) {
+        std::fputs("--shake / --pan move the CAMERA, so they need --image-path; refusing rather "
+                   "than ignoring them.\n", stderr);
+        return 2;
+    }
+
     // Deterministic payload from a fixed seed: reproducible without storing the file.
     std::vector<std::uint8_t> payload(o.payload_bytes);
     SplitMix64 prng(0xF11EF10ULL ^ o.channel.seed);
@@ -259,61 +296,35 @@ int main(int argc, char** argv) {
         return 2;
     }
 
-    // Size symbols to fill the frame. Leaving payload cells unused wastes channel capacity
-    // outright and would make every reported rate meaningless.
-    std::optional<IntraFec> fec;
-    if (o.fec_nsym > 0) {
-        IntraFecParams fp;
-        fp.nsym = o.fec_nsym;
-        auto f = IntraFec::Create(mod.payload_capacity_bytes(), fp);
-        if (!f.ok()) {
-            std::fprintf(stderr, "intra-frame FEC: %s\n", ErrorName(f.error()).data());
-            return 2;
-        }
-        fec.emplace(std::move(f).value());
+    // The ONE transmit path and the ONE receive path (C13a), the same ones ffreplay and the phone
+    // run. The receiver is told the grid and nothing else: code rate from each header, manifest
+    // from the frames (ADR-0015).
+    if (o.fec_nsym > 0 && o.symbol_size != 0) {
+        std::fprintf(stderr, "note: --symbol-size %u ignored; intra-frame FEC fixes the symbol "
+                             "size at its message capacity\n", o.symbol_size);
+        o.symbol_size = 0;
     }
-
-    // The fountain symbol must fit the FEC layer's MESSAGE capacity, not the raw frame
-    // capacity -- parity occupies the difference. Getting this wrong would silently truncate
-    // every symbol.
-    if (fec.has_value()) {
-        // With FEC on, the symbol size is DETERMINED by the code's message capacity -- parity
-        // occupies the rest of the frame. An explicit --symbol-size that disagrees would fail
-        // later inside the encoder with a bare length_mismatch, so override it and say why.
-        const auto required = static_cast<std::uint32_t>(fec->message_bytes());
-        if (o.symbol_size != 0 && o.symbol_size != required) {
-            std::fprintf(stderr,
-                         "note: --symbol-size %u ignored; intra-frame FEC fixes it at %u "
-                         "(frame capacity %zu minus parity)\n",
-                         o.symbol_size, required, mod.payload_capacity_bytes());
-        }
-        o.symbol_size = required;
-        if (o.symbol_size > FountainParams::kMaxSymbolSize) {
-            std::fprintf(stderr, "grid too large: FEC message %u exceeds max symbol size %u\n",
-                         o.symbol_size, FountainParams::kMaxSymbolSize);
-            return 2;
-        }
-    } else if (o.symbol_size == 0) {
-        o.symbol_size = static_cast<std::uint32_t>(mod.payload_capacity_bytes());
-        if (o.symbol_size > FountainParams::kMaxSymbolSize) {
-            o.symbol_size = FountainParams::kMaxSymbolSize;
-        }
-    }
-
-    auto tx_r = FileTransmitter::Create(payload, "sim.bin", 0x51533101, o.symbol_size,
-                                        o.block_symbols);
+    TransmitConfig tcfg;
+    tcfg.fec_nsym = o.fec_nsym;
+    tcfg.symbol_size = o.symbol_size;
+    tcfg.block_symbols = o.block_symbols;
+    tcfg.manifest_interval = o.manifest_interval;
+    auto tx_r = TransmitSession::Create(layout, payload, "sim.bin", 0x51533101, tcfg);
     if (!tx_r.ok()) {
         std::fprintf(stderr, "transmitter: %s\n", ErrorName(tx_r.error()).data());
         return 1;
     }
-    FileTransmitter tx = std::move(tx_r).value();
+    TransmitSession tx = std::move(tx_r).value();
+    const std::optional<IntraFec>& fec = tx.fec();
 
-    auto rx_r = FileReceiver::Create(tx.manifest());
+    ReceiveConfig rcfg;
+    rcfg.erase_below = static_cast<Llr>(o.erase_below);
+    auto rx_r = ReceiveSession::Create(layout, rcfg);
     if (!rx_r.ok()) {
         std::fprintf(stderr, "receiver: %s\n", ErrorName(rx_r.error()).data());
         return 1;
     }
-    FileReceiver rx = std::move(rx_r).value();
+    ReceiveSession rx = std::move(rx_r).value();
 
     // Adaptive link controller (C14). Built from the SAME IntraFec the decoder runs, because
     // every score it computes is arithmetic over that code's geometry.
@@ -356,27 +367,26 @@ int main(int argc, char** argv) {
 
     sim::Channel channel(o.channel);
 
-    // Image-path machinery. Constructed only when needed so the default cell-sample mode
-    // stays exactly as fast and as isolated as it was.
-    std::optional<ScreenTracker> tracker;
-    std::optional<CellSampler> sampler;
+    // Image path: the production FramePipeline, sub-cell alignment included. ffsim used to wire
+    // the tracker, sampler and photometry together by hand, which meant every fix to the pipeline
+    // after that (F45's alignment above all) was invisible here and the simulator was measuring a
+    // receiver nobody ships.
+    std::optional<FramePipeline> pipeline;
     if (o.image_path) {
         if (o.render.view.image_width <= 0) o.render.view.image_width = 900;
         if (o.render.view.image_height <= 0) o.render.view.image_height = 1500;
 
-        auto tr = ScreenTracker::Create(layout, TrackerConfig{});
-        if (!tr.ok()) {
-            std::fprintf(stderr, "tracker: %s\n", ErrorName(tr.error()).data());
+        PipelineConfig pcfg;
+        pcfg.disable_tracking = o.no_tracking;
+        pcfg.subcell.enabled = !o.no_subcell;
+        pcfg.subcell.refine_corners = !o.no_corners;
+        pcfg.tracker.predict_motion = !o.no_predict;
+        auto p = FramePipeline::Create(layout, pcfg);
+        if (!p.ok()) {
+            std::fprintf(stderr, "pipeline: %s\n", ErrorName(p.error()).data());
             return 1;
         }
-        auto sm = CellSampler::Create(g, SamplerConfig{.interior_margin = 0.3,
-                                                       .samples_per_axis = 3});
-        if (!sm.ok()) {
-            std::fprintf(stderr, "sampler: %s\n", ErrorName(sm.error()).data());
-            return 1;
-        }
-        tracker.emplace(std::move(tr).value());
-        sampler.emplace(std::move(sm).value());
+        pipeline.emplace(std::move(p).value());
     }
 
     std::optional<harness::CaptureWriter> recorder;
@@ -412,37 +422,19 @@ int main(int argc, char** argv) {
 
     const auto t0 = std::chrono::steady_clock::now();
 
-    std::uint64_t presented = 0, captured = 0, header_ok = 0, header_fail = 0;
-    std::uint64_t erasure_cells = 0, payload_cells_total = 0;
-    std::uint64_t detect_fail = 0, photo_fail = 0, geo_px = 0;
-    std::uint64_t fec_corrected = 0, fec_uncorrectable = 0;
-    std::size_t fec_worst_load = 0;
+    std::uint64_t presented = 0, captured = 0;
     double worst_geo_cells = 0.0;
     double render_seconds = 0.0;
+    const auto state_ns = static_cast<std::int64_t>(1e9 / o.fd);
+    CellMatrix frame(g.cols, g.rows);
 
     while (!rx.complete() && presented < o.max_frames) {
-        auto fp = tx.NextFrame();
-        auto hdr_coded = hdr_codec.Encode(fp.header);
-        if (!hdr_coded.ok()) { std::fputs("header encode failed\n", stderr); return 1; }
-
-        std::vector<std::uint8_t> payload_coded;
-        if (fec.has_value()) {
-            auto e = fec->Encode(fp.data);
-            if (!e.ok()) {
-                std::fprintf(stderr, "fec encode: %s\n", ErrorName(e.error()).data());
-                return 1;
-            }
-            payload_coded = std::move(e).value();
-        } else {
-            payload_coded.assign(fp.data.begin(), fp.data.end());
-        }
-
-        CellMatrix frame(g.cols, g.rows);
-        if (auto s = mod.Render(hdr_coded.value(), payload_coded, &frame); !s.ok()) {
-            std::fprintf(stderr, "render: %s\n", ErrorName(s.error()).data());
+        if (auto h = tx.Next(&frame); !h.ok()) {
+            std::fprintf(stderr, "transmit: %s\n", ErrorName(h.error()).data());
             return 1;
         }
         ++presented;
+        const auto ts = static_cast<std::int64_t>(presented) * state_ns;
 
         // Frame drop: presented but never captured. A Pc term.
         if (o.channel.frame_drop_rate > 0.0 &&
@@ -467,7 +459,13 @@ int main(int argc, char** argv) {
             // -- folding it in would understate the decoder by several times and produce
             // exactly the sort of conflated metric ADR-0012 exists to prevent.
             const auto r0 = std::chrono::steady_clock::now();
-            const Image8 img = sim::RenderView(frame, g, rc, &truth);
+            sim::MotionConfig mc = o.motion;
+            mc.phase_seed = o.channel.seed;
+            const Image8 img =
+                mc.active()
+                    ? sim::RenderMoving(frame, g, rc, mc,
+                                        static_cast<double>(presented - 1) / o.fd, &truth)
+                    : sim::RenderView(frame, g, rc, &truth);
             render_seconds += std::chrono::duration<double>(
                                   std::chrono::steady_clock::now() - r0)
                                   .count();
@@ -479,96 +477,51 @@ int main(int argc, char** argv) {
                 }
             }
 
-            if (o.no_tracking) tracker->Reset();
-            const TrackResult tr = tracker->Track(img.view());
-            geo_px += tracker->last_pixels_examined();
-            if (!tr.ok) {
-                ++detect_fail;
-                if (estimator.has_value()) estimator->ObservePreFecLoss();
-                continue;
-            }
-
-            // Geometric error against ground truth, in CELLS -- only the simulator can
-            // measure this, and it is the term that gates everything downstream.
-            for (std::uint32_t r = 0; r < g.rows; r += 8) {
-                for (std::uint32_t c = 0; c < g.cols; c += 8) {
-                    const Point2 gp{static_cast<double>(c) + 0.5, static_cast<double>(r) + 0.5};
-                    const Point2 a = truth.Apply(gp);
-                    const Point2 b = tr.grid_to_image.Apply(gp);
-                    if (!std::isfinite(a.x) || !std::isfinite(b.x)) continue;
-                    const Point2 a1 = truth.Apply({gp.x + 1.0, gp.y});
-                    const double px_per_cell = std::hypot(a1.x - a.x, a1.y - a.y);
-                    if (px_per_cell < 1e-6) continue;
-                    const double err = std::hypot(a.x - b.x, a.y - b.y) / px_per_cell;
-                    if (err > worst_geo_cells) worst_geo_cells = err;
+            const std::uint64_t geo_fail_before = pipeline->diagnostics().geometry_failures;
+            CapturedFrame cf = pipeline->Process(img.view(), presented, ts);
+            if (pipeline->diagnostics().geometry_failures == geo_fail_before) {
+                // Geometric error against ground truth, in CELLS -- only the simulator can
+                // measure this, and it is the term that gates everything downstream. Measured on
+                // the homography the samples were actually read with, sub-cell shift included.
+                const Homography& est = pipeline->last_homography();
+                for (std::uint32_t r = 0; r < g.rows; r += 8) {
+                    for (std::uint32_t c = 0; c < g.cols; c += 8) {
+                        const Point2 gp{static_cast<double>(c) + 0.5,
+                                        static_cast<double>(r) + 0.5};
+                        const Point2 a = sim::DistortPoint(truth.Apply(gp), rc);
+                        const Point2 b = est.Apply(gp);
+                        if (!std::isfinite(a.x) || !std::isfinite(b.x)) continue;
+                        const Point2 a1 = sim::DistortPoint(truth.Apply({gp.x + 1.0, gp.y}), rc);
+                        const double px_per_cell = std::hypot(a1.x - a.x, a1.y - a.y);
+                        if (px_per_cell < 1e-6) continue;
+                        const double err = std::hypot(a.x - b.x, a.y - b.y) / px_per_cell;
+                        if (err > worst_geo_cells) worst_geo_cells = err;
+                    }
                 }
             }
-
-            const auto raw = sampler->Sample(img.view(), tr.grid_to_image);
-            auto field = PhotometricField::Estimate(layout, raw, PhotometricConfig{});
-            if (!field.ok()) {
-                ++photo_fail;
+            if (!pipeline->last_ok()) {
                 if (estimator.has_value()) estimator->ObservePreFecLoss();
                 continue;
             }
-            samples = field.value().Normalise(raw);
+            samples = std::move(cf.cell_samples);
         } else {
             samples = channel.Apply(frame);
         }
 
-        const PhotometricRef ref = mod.EstimateReference(samples);
+        rx.Ingest(samples, ts);
 
-        auto hbytes = mod.DemodulateHeader(samples, ref, hdr_codec.coded_size());
-        if (!hbytes.ok()) {
-            ++header_fail;
-            if (estimator.has_value()) estimator->ObservePreFecLoss();
-            continue;
-        }
-
-        std::vector<std::uint8_t> hbuf = hbytes.value();
-        auto hdr = hdr_codec.Decode(hbuf);
-        if (!hdr.ok()) {
-            ++header_fail;
-            if (estimator.has_value()) estimator->ObservePreFecLoss();
-            continue;
-        }
-        ++header_ok;
-
-        SoftSymbolBuffer soft;
-        mod.DemodulatePayload(samples, ref, &soft);
-        payload_cells_total += soft.size();
-
-        const std::size_t coded_len =
-            fec.has_value() ? fec->coded_bytes() : hdr.value().payload_bytes;
-        HardDecision hd = HardDecide(soft, coded_len, static_cast<Llr>(o.erase_below));
-        erasure_cells += hd.erasures;
-
-        if (fec.has_value()) {
-            // Erasure POSITIONS, not just the count: RS corrects nsym erasures but only
-            // nsym/2 errors, so supplying them doubles the correction budget for free.
-            IntraFec::Stats fst;
-            auto dec = fec->Decode(hd.bytes, hd.erased_bytes, &fst);
-            fec_worst_load = std::max(fec_worst_load, fst.worst_erasures_in_codeword);
-
+        if (estimator.has_value()) {
             // Observe the load whether or not the frame decoded. The failures are the
             // informative half: a frame that exceeded its budget is the only evidence that a
             // stronger code was needed, and dropping it here would bias the estimate toward
             // exactly the rung already in use.
-            if (estimator.has_value()) {
-                estimator->ObserveFrame(fst.worst_budget_used, fst.budget_censored);
+            if (rx.last_reached_fec()) {
+                estimator->ObserveFrame(rx.last_fec_stats().worst_budget_used,
+                                        rx.last_fec_stats().budget_censored);
                 controller->Select(*estimator, presented);
+            } else {
+                estimator->ObservePreFecLoss();
             }
-
-            if (!dec.ok()) {
-                // An uncorrectable frame is a normal event on this channel. Drop it and let
-                // the fountain layer recover -- never ingest partially-corrected data.
-                ++fec_uncorrectable;
-                continue;
-            }
-            ++fec_corrected;
-            rx.Ingest(hdr.value(), dec.value());
-        } else {
-            rx.Ingest(hdr.value(), hd.bytes);
         }
     }
 
@@ -585,7 +538,10 @@ int main(int argc, char** argv) {
     const double secs = std::chrono::duration<double>(t1 - t0).count();
 
     auto out = rx.Finish();
-    const bool verified = out.ok();
+    // Verified means the bytes match the SENDER's file, not merely the manifest's hash: a
+    // receiver that latched a wrong manifest could verify against it and still be wrong.
+    const bool verified = out.ok() && out.value() == payload;
+    const ReceiveStats& st = rx.stats();
 
     // Metric names follow docs/vision/TERMINOLOGY.md exactly. An unlabelled rate is a
     // documentation defect (ADR-0012).
@@ -595,16 +551,23 @@ int main(int argc, char** argv) {
     std::printf("payload cells / frame    %zu\n", layout.payload_cells().size());
     std::printf("frame overhead O         %.4f\n", layout.overhead_fraction());
     std::printf("payload bytes            %zu\n", o.payload_bytes);
+    std::printf("fountain blocks          %u x %u symbols of %u bytes\n",
+                tx.manifest().block_count, tx.manifest().block_symbols,
+                tx.manifest().symbol_size);
+    std::printf("manifest interval        %u display states\n",
+                tx.transmitter().manifest_interval());
     std::printf("display states presented %llu\n", static_cast<unsigned long long>(presented));
     std::printf("frames captured          %llu\n", static_cast<unsigned long long>(captured));
-    std::printf("header success H         %.4f\n",
-                captured ? static_cast<double>(header_ok) / static_cast<double>(captured) : 0.0);
-    std::printf("header failures          %llu\n", static_cast<unsigned long long>(header_fail));
-    std::printf("cell erasure rate        %.4f\n",
-                payload_cells_total
-                    ? static_cast<double>(erasure_cells) / static_cast<double>(payload_cells_total)
-                    : 0.0);
+    std::printf("header success H         %.4f\n", st.header_success());
+    std::printf("header failures          %llu\n", static_cast<unsigned long long>(st.header_fail));
+    std::printf("headers rescued by erasures %llu\n",
+                static_cast<unsigned long long>(st.header_rescued_by_erasures));
+    std::printf("cell erasure rate        %.4f\n", st.cell_erasure_rate());
+    std::printf("manifest frames read     %llu  (%llu symbols read before the first)\n",
+                static_cast<unsigned long long>(st.manifests),
+                static_cast<unsigned long long>(st.buffered));
     if (o.image_path) {
+        const PipelineDiagnostics& d = pipeline->diagnostics();
         std::printf("\n--- geometry (image path) ---\n");
         std::printf("capture resolution       %dx%d\n", o.render.view.image_width,
                     o.render.view.image_height);
@@ -613,17 +576,30 @@ int main(int argc, char** argv) {
                     o.render.view.roll_deg);
         std::printf("tracking                 %s\n",
                     o.no_tracking ? "DISABLED (full acquisition per frame)" : "enabled");
+        std::printf("sub-cell alignment       %s\n", o.no_subcell ? "DISABLED" : "enabled");
+        if (o.motion.active()) {
+            std::printf("motion                   shake %.2f, pan %.3f/%.3f per s, exposure %.1f ms, "
+                        "readout %.1f ms\n",
+                        o.motion.shake, o.motion.pan_x, o.motion.pan_y,
+                        o.motion.exposure_s * 1e3, o.motion.readout_s * 1e3);
+        }
+        std::printf("refined frames           %llu\n",
+                    static_cast<unsigned long long>(pipeline->tracker().refined_frames()));
         std::printf("full acquisitions        %llu\n",
-                    static_cast<unsigned long long>(tracker->full_acquisitions()));
+                    static_cast<unsigned long long>(pipeline->tracker().full_acquisitions()));
         std::printf("tracking losses          %llu\n",
-                    static_cast<unsigned long long>(tracker->losses()));
+                    static_cast<unsigned long long>(pipeline->tracker().losses()));
         std::printf("detection failures       %llu\n",
-                    static_cast<unsigned long long>(detect_fail));
+                    static_cast<unsigned long long>(d.geometry_failures));
         std::printf("photometric failures     %llu\n",
-                    static_cast<unsigned long long>(photo_fail));
+                    static_cast<unsigned long long>(d.photometric_failures));
         // Worst, not mean: a mean hides the one bad frame that ruins an edge.
         std::printf("worst geometric error    %.4f cells\n", worst_geo_cells);
-        const double px_per_frame = captured ? static_cast<double>(geo_px) /
+        if (d.subcell_frames > 0) {
+            std::printf("sub-cell shift / gain    %.3f cells mean, %.3fx pilot contrast\n",
+                        d.mean_subcell_shift(), d.mean_subcell_gain());
+        }
+        const double px_per_frame = captured ? static_cast<double>(d.total_pixels_examined) /
                                                    static_cast<double>(captured)
                                              : 0.0;
         const double full_frame_px = static_cast<double>(o.render.view.image_width) *
@@ -640,15 +616,14 @@ int main(int argc, char** argv) {
                     fec->params().nsym, fec->params().nsym, fec->params().nsym / 2);
         std::printf("codewords per frame      %zu (interleaved)\n", fec->codewords());
         std::printf("FEC code rate Rfec       %.4f\n", fec->params().code_rate());
-        std::printf("frames FEC-recovered     %llu\n",
-                    static_cast<unsigned long long>(fec_corrected));
+        std::printf("frames FEC-recovered     %llu\n", static_cast<unsigned long long>(st.fec_ok));
         std::printf("frames uncorrectable     %llu\n",
-                    static_cast<unsigned long long>(fec_uncorrectable));
+                    static_cast<unsigned long long>(st.fec_fail));
         // HEADROOM, not just success. A run that peaked at 31 of 32 decoded fine and was one
         // bad cell from failing -- the adaptive controller needs to see that difference.
         std::printf("worst codeword load      %zu / %zu erasures (%.0f%% of budget)\n",
-                    fec_worst_load, fec->params().nsym,
-                    100.0 * static_cast<double>(fec_worst_load) /
+                    st.worst_codeword_erasures, fec->params().nsym,
+                    100.0 * static_cast<double>(st.worst_codeword_erasures) /
                         static_cast<double>(fec->params().nsym));
         std::printf("\n");
     }
@@ -727,11 +702,12 @@ int main(int argc, char** argv) {
         std::printf("\n");
     }
 
-    std::printf("fountain overhead        %.4f\n", rx.overhead());
-    std::printf("blocks complete          %u / %u\n", rx.blocks_complete(),
+    const FileReceiver* frx = rx.receiver();
+    std::printf("fountain overhead        %.4f\n", frx ? frx->overhead() : 0.0);
+    std::printf("blocks complete          %u / %u\n", frx ? frx->blocks_complete() : 0u,
                 tx.manifest().block_count);
     std::printf("VERIFIED                 %s\n", verified ? "yes (SHA-256 match)" : "NO");
-    if (!verified) std::printf("failure                  %s\n", ErrorName(out.error()).data());
+    if (!out.ok()) std::printf("failure                  %s\n", ErrorName(out.error()).data());
 
     // ---- Rates. ADR-0012: name the metric, always. These are DIFFERENT quantities and
     // conflating them is the single failure mode this project exists to avoid.

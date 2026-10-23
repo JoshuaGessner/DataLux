@@ -17,6 +17,7 @@ std::vector<std::uint8_t> FrameHeader::EncodePlain() const {
     w.U32(esi);
     w.U32(payload_bytes);
     w.U8(flags);
+    w.U8(fec_nsym);
     w.U32(payload_crc);
     const std::uint32_t crc = Crc32(w.data());
     w.U32(crc);
@@ -48,6 +49,9 @@ Result<FrameHeader> FrameHeader::DecodePlain(std::span<const std::uint8_t> in) {
     // Forward compatibility: a HIGHER major version is refused cleanly rather than
     // misparsed (PROTOCOL-SPEC). Never guess at an unknown layout.
     if (ver.value() > kProtocolVersion) return Error::kUnsupportedVersion;
+    // v1 had a different layout and fountain code (ADR-0015). Its CRC would not verify against
+    // this layout anyway, but say what it is rather than leaving it to a checksum to imply.
+    if (ver.value() < kProtocolVersion) return Error::kUnsupportedVersion;
     h.version = ver.value();
 
     auto sid = r.U32();
@@ -88,6 +92,12 @@ Result<FrameHeader> FrameHeader::DecodePlain(std::span<const std::uint8_t> in) {
     if (!fl.ok()) return fl.error();
     h.flags = fl.value();
 
+    auto nsym = r.U8();
+    if (!nsym.ok()) return nsym.error();
+    // An intra-frame code with nsym >= 255 has no message bytes at all.
+    if (nsym.value() >= 255) return Error::kValueOutOfRange;
+    h.fec_nsym = nsym.value();
+
     auto pcrc = r.U32();
     if (!pcrc.ok()) return pcrc.error();
     h.payload_crc = pcrc.value();
@@ -100,15 +110,30 @@ Result<std::vector<std::uint8_t>> HeaderCodec::Encode(const FrameHeader& h) cons
     return rs_.Encode(plain);
 }
 
-Result<FrameHeader> HeaderCodec::Decode(std::span<std::uint8_t> coded) const {
+Result<FrameHeader> HeaderCodec::Decode(std::span<std::uint8_t> coded,
+                                        std::span<const std::size_t> erasures) const {
     if (coded.size() != coded_size()) return Error::kLengthMismatch;
+    for (const std::size_t pos : erasures) {
+        if (pos >= coded.size()) return Error::kValueOutOfRange;
+    }
 
     // RS correction may fail; that is a normal outcome on a bad channel, not an error
     // condition to log loudly. The frame simply becomes an erasure.
-    auto corrected = rs_.Decode(coded);
-    if (!corrected.ok()) return corrected.error();
+    auto attempt = [&](std::span<std::uint8_t> cw,
+                       std::span<const std::size_t> er) -> Result<FrameHeader> {
+        auto corrected = rs_.Decode(cw, er);
+        if (!corrected.ok()) return corrected.error();
+        return FrameHeader::DecodePlain(cw.subspan(0, FrameHeader::kPlainSize));
+    };
 
-    return FrameHeader::DecodePlain(coded.subspan(0, FrameHeader::kPlainSize));
+    if (erasures.empty() || erasures.size() > nsym_) return attempt(coded, {});
+
+    const std::vector<std::uint8_t> original(coded.begin(), coded.end());
+    auto with = attempt(coded, erasures);
+    if (with.ok()) return with;
+    std::copy(original.begin(), original.end(), coded.begin());
+    auto without = attempt(coded, {});
+    return without.ok() ? without : with;
 }
 
 }  // namespace fileflow

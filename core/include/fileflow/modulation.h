@@ -68,12 +68,21 @@ class M0Modulator {
         return layout_->header_cells().size() / 8;
     }
 
-    // Hard-decision demodulation of the header from sampled cell values.
+    // Demodulation of the header from sampled cell values.
     // `coded_bytes` is HeaderCodec::coded_size() -- known to both sides, so the replicated
-    // copies in the header band can be majority-voted before RS correction.
+    // copies in the header band can be combined before RS correction.
+    //
+    // Copies are combined by CONFIDENCE, not by count: each readable copy votes its distance from
+    // the threshold in half-separations, clipped to +/-1, so a cell sitting on the threshold
+    // barely moves the tally and a clean one moves it fully. Erased (NaN) copies abstain (F46).
+    //
+    // If `erased_bytes` is given, it receives the byte positions holding a bit whose combined
+    // vote is too weak to call -- including bits for which every copy was erased, which a vote
+    // count would silently have called DARK. Those positions go to `HeaderCodec::Decode` as
+    // erasures, at half the RS budget of the errors they would otherwise be (F50).
     [[nodiscard]] Result<std::vector<std::uint8_t>> DemodulateHeader(
-        std::span<const double> samples, const PhotometricRef& ref,
-        std::size_t coded_bytes) const;
+        std::span<const double> samples, const PhotometricRef& ref, std::size_t coded_bytes,
+        std::vector<std::size_t>* erased_bytes = nullptr) const;
 
     // SOFT demodulation of the payload. `samples` is one value per grid cell, in flat
     // row-major order, already photometrically normalised.

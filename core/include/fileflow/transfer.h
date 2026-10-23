@@ -44,21 +44,56 @@ struct FileManifest {
 
 // ---------------------------------------------------------------- transmitter
 
+// Source symbols of `block` that lie ENTIRELY past the end of the file: [first, block_symbols).
+// Both ends derive this from the manifest alone, so these symbols are never transmitted -- the
+// receiver primes them as known zeros instead (ADR-0015). Returns block_symbols when none are.
+[[nodiscard]] std::uint32_t FirstPaddingSymbol(const FileManifest& m, std::uint32_t block) noexcept;
+
+// Balanced block size for a file of `total_symbols` symbols: as FEW blocks as the decoder bound
+// allows, all the same size.
+//
+// Fewer, larger blocks are faster on a lossy channel. With no back channel the transmitter cannot
+// know which blocks a receiver has finished, so it keeps cycling all of them and the transfer
+// ends when the UNLUCKIEST block completes. The spread in what each block needs shrinks as
+// 1/sqrt(k), so the tail it costs shrinks with block size (F49). Balanced rather than greedy so the
+// last block is not a stub carrying mostly padding.
+[[nodiscard]] std::uint32_t AutoBlockSymbols(std::uint64_t total_symbols) noexcept;
+
 class FileTransmitter {
   public:
-    // `payload` is the original file bytes. Block size is chosen so the fountain decoder's
-    // working set stays bounded regardless of file size -- a 100 MB transfer must not need
-    // 100 MB of decoder memory.
+    // `payload` is the original file bytes. Block size is bounded so the fountain decoder's
+    // working set and per-symbol cost stay bounded regardless of file size.
+    //
+    // `block_symbols` = 0 chooses `AutoBlockSymbols`. `manifest_interval` = 0 chooses
+    // `AutoManifestInterval`.
     static Result<FileTransmitter> Create(std::span<const std::uint8_t> payload,
                                           std::string file_name, std::uint32_t session_id,
                                           std::uint32_t symbol_size = 512,
-                                          std::uint32_t block_symbols = 64);
+                                          std::uint32_t block_symbols = 0,
+                                          std::uint32_t manifest_interval = 0);
+
+    // One manifest frame every this many display states, the first at sequence 0.
+    //
+    // The receiver cannot finish without the manifest but CAN use every symbol it reads before
+    // the manifest arrives (`ReceiveSession` buffers them), so the interval only bounds how long
+    // a receiver that missed every manifest waits at the end -- it costs no symbols. Each manifest
+    // frame does cost one display state, so the interval grows with the transfer: half the
+    // symbols needed, clamped to [16, 128], which is 0.8-6% of display states.
+    [[nodiscard]] static std::uint32_t AutoManifestInterval(std::uint64_t symbols_needed) noexcept;
 
     [[nodiscard]] const FileManifest& manifest() const noexcept { return manifest_; }
+    [[nodiscard]] std::uint32_t manifest_interval() const noexcept { return manifest_interval_; }
 
-    // Produces the next frame payload in the transmission schedule, round-robining over
-    // blocks so a receiver joining late makes progress on every block rather than waiting
-    // for the schedule to come around.
+    // Produces the next frame payload in the transmission schedule: a manifest frame every
+    // `manifest_interval()` states, otherwise a fountain symbol, round-robining over blocks so a
+    // receiver joining late makes progress on every block rather than waiting for the schedule
+    // to come around.
+    //
+    // `data` is always exactly `symbol_size` bytes, so every frame fills the optical payload. For
+    // a manifest frame the manifest occupies the first `header.payload_bytes` bytes and the rest
+    // is pseudorandom filler -- never zeros, which render as a near-black frame and confound every
+    // optical measurement taken across it (F15, F39). `header.payload_crc` always covers the first
+    // `header.payload_bytes` bytes.
     struct FramePayload {
         FrameHeader header;
         std::vector<std::uint8_t> data;
@@ -68,12 +103,17 @@ class FileTransmitter {
     [[nodiscard]] std::uint64_t frames_generated() const noexcept { return counter_; }
 
   private:
-    FileTransmitter(FileManifest m, std::vector<FountainEncoder> enc)
-        : manifest_(std::move(m)), encoders_(std::move(enc)) {}
+    FileTransmitter(FileManifest m, std::vector<FountainEncoder> enc,
+                    std::vector<std::uint32_t> first_padding, std::uint32_t manifest_interval);
 
     FileManifest manifest_;
+    std::vector<std::uint8_t> manifest_bytes_;
     std::vector<FountainEncoder> encoders_;
+    std::vector<std::uint32_t> first_padding_;  // per block, see FirstPaddingSymbol
+    std::vector<std::uint32_t> next_esi_;       // per block
+    std::uint32_t manifest_interval_;
     std::uint64_t counter_ = 0;
+    std::uint64_t data_frames_ = 0;
 };
 
 // ---------------------------------------------------------------- receiver
@@ -82,8 +122,11 @@ class FileReceiver {
   public:
     static Result<FileReceiver> Create(const FileManifest& m);
 
+    [[nodiscard]] const FileManifest& manifest() const noexcept { return manifest_; }
+
     // Feed one successfully decoded frame. Duplicates and out-of-order arrivals are
-    // tolerated by construction. Returns true once every block is recovered.
+    // tolerated by construction. Manifest frames are refused here -- they are not symbols.
+    // Returns true once every block is recovered.
     bool Ingest(const FrameHeader& h, std::span<const std::uint8_t> data);
 
     [[nodiscard]] bool complete() const noexcept;
@@ -91,8 +134,11 @@ class FileReceiver {
     [[nodiscard]] double progress() const noexcept;
 
     // Total symbols ingested across all blocks, and the resulting reception overhead --
-    // the Rfountain term the goodput model needs and EXP-012 measures.
+    // the Rfountain term the goodput model needs and EXP-012 measures. Symbols arriving for a
+    // block that has already completed still count: the channel delivered them and they bought
+    // nothing, which is the block-tail cost AutoBlockSymbols exists to shrink.
     [[nodiscard]] std::uint64_t symbols_ingested() const noexcept { return ingested_; }
+    [[nodiscard]] std::uint64_t symbols_needed() const noexcept { return needed_; }
     [[nodiscard]] double overhead() const noexcept;
 
     // Reassembles and VERIFIES. A hash mismatch is a hard failure that returns
@@ -105,6 +151,7 @@ class FileReceiver {
     FileManifest manifest_;
     std::vector<FountainDecoder> decoders_;
     std::uint64_t ingested_ = 0;
+    std::uint64_t needed_ = 0;  // source symbols not primed: what the channel must deliver
 };
 
 }  // namespace fileflow

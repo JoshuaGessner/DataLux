@@ -177,17 +177,23 @@ PhotometricRef M0Modulator::EstimateReference(std::span<const double> samples) c
 }
 
 Result<std::vector<std::uint8_t>> M0Modulator::DemodulateHeader(
-    std::span<const double> samples, const PhotometricRef& ref,
-    std::size_t coded_bytes) const {
+    std::span<const double> samples, const PhotometricRef& ref, std::size_t coded_bytes,
+    std::vector<std::size_t>* erased_bytes) const {
     const auto& hdr_cells = layout_->header_cells();
     if (hdr_cells.empty() || coded_bytes == 0) return Error::kInternal;
 
-    // The header codeword is replicated across the band; majority-vote the copies before
-    // RS correction. Cheap, and it materially improves H on a noisy channel.
+    // The header codeword is replicated across the band; combine the copies before RS
+    // correction. Cheap, and it materially improves H on a noisy channel.
     const std::size_t period = coded_bytes * 8;
     if (period > hdr_cells.size()) return Error::kValueOutOfRange;
 
-    std::vector<int> votes(period, 0);
+    // One readable copy at full confidence is worth 1.0; a tally below this is not a decision.
+    // Half a clean copy: a lone marginal cell, or two clean copies that disagree, erase rather
+    // than guess -- an erasure costs the RS layer one unit, a wrong guess two.
+    constexpr double kMinConfidence = 0.5;
+    const double half_sep = std::max(0.5 * ref.separation(), 1e-6);
+
+    std::vector<double> votes(period, 0.0);
 
     for (std::size_t i = 0; i < hdr_cells.size(); ++i) {
         const std::uint32_t idx = hdr_cells[i];
@@ -201,12 +207,23 @@ Result<std::vector<std::uint8_t>> M0Modulator::DemodulateHeader(
         // first above-cliff capture 76% of cells were erased, which buried the 24% that were
         // real and held H at 0.026 while the header band itself was measurably healthy (F46).
         if (std::isnan(samples[idx])) continue;
-        const bool bright = samples[idx] > ref.threshold();
-        votes[i % period] += bright ? 1 : -1;
+        votes[i % period] += std::clamp((samples[idx] - ref.threshold()) / half_sep, -1.0, 1.0);
     }
 
     std::vector<std::uint8_t> bits(period, 0);
-    for (std::size_t i = 0; i < period; ++i) bits[i] = votes[i] > 0 ? 1U : 0U;
+    for (std::size_t i = 0; i < period; ++i) bits[i] = votes[i] > 0.0 ? 1U : 0U;
+
+    if (erased_bytes != nullptr) {
+        erased_bytes->clear();
+        for (std::size_t byte = 0; byte < coded_bytes; ++byte) {
+            for (std::size_t b = 0; b < 8; ++b) {
+                if (std::abs(votes[byte * 8 + b]) < kMinConfidence) {
+                    erased_bytes->push_back(byte);
+                    break;
+                }
+            }
+        }
+    }
 
     std::vector<std::uint8_t> bytes;
     UnpackBits(bits, &bytes);

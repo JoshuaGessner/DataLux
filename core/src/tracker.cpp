@@ -55,14 +55,56 @@ Result<ScreenTracker> ScreenTracker::Create(const FrameLayout& layout, TrackerCo
     if (!(cfg.degrade_score >= 0.0) || cfg.degrade_score > 1.0) return Error::kValueOutOfRange;
     if (cfg.max_degraded_frames < 0) return Error::kValueOutOfRange;
     if (!(cfg.max_corner_jump > 0.0)) return Error::kValueOutOfRange;
+    if (!(cfg.velocity_tau_s > 0.0)) return Error::kValueOutOfRange;
+    if (!(cfg.speed_margin_gain >= 0.0)) return Error::kValueOutOfRange;
+    // Same bound as search_margin, for the same reason: the inner quad must not collapse. A cap
+    // below the base margin is not an error -- it just means the window never widens.
+    if (!(cfg.max_search_margin > 0.0) || cfg.max_search_margin >= 1.0) {
+        return Error::kValueOutOfRange;
+    }
 
     FF_ASSIGN_OR_RETURN(auto detector, ScreenDetector::Create(layout, cfg.detection));
     return ScreenTracker(layout, cfg, std::move(detector));
 }
 
+std::array<Point2, 4> ScreenTracker::Predicted(double dt_s) const noexcept {
+    if (!cfg_.predict_motion) return last_quad_;
+    std::array<Point2, 4> p{};
+    for (std::size_t i = 0; i < 4; ++i) {
+        p[i] = {last_quad_[i].x + velocity_[i].x * dt_s, last_quad_[i].y + velocity_[i].y * dt_s};
+    }
+    return p;
+}
+
+void ScreenTracker::UpdateMotion(const std::array<Point2, 4>& quad, double dt_s,
+                                 bool fresh) noexcept {
+    if (fresh || !(dt_s > 0.0)) {
+        // A new lock carries no motion history. Inventing one from the last lock -- possibly
+        // seconds ago and somewhere else entirely -- would aim the next search at nothing.
+        velocity_ = {};
+        return;
+    }
+    const double a = 1.0 - std::exp(-dt_s / cfg_.velocity_tau_s);
+    for (std::size_t i = 0; i < 4; ++i) {
+        velocity_[i].x = a * (quad[i].x - last_quad_[i].x) / dt_s + (1.0 - a) * velocity_[i].x;
+        velocity_[i].y = a * (quad[i].y - last_quad_[i].y) / dt_s + (1.0 - a) * velocity_[i].y;
+    }
+}
+
+double ScreenTracker::speed() const noexcept {
+    if (state_ != TrackState::kTracking && state_ != TrackState::kDegraded) return 0.0;
+    const double scale = QuadScale(last_quad_);
+    if (!(scale > 1e-6)) return 0.0;
+    double worst = 0.0;
+    for (const Point2& v : velocity_) worst = std::max(worst, std::hypot(v.x, v.y));
+    return worst / scale;
+}
+
 void ScreenTracker::Reset() noexcept {
     state_ = TrackState::kSearching;
     degraded_run_ = 0;
+    velocity_ = {};
+    last_ts_ = 0;
     // Cleared with the lock it belongs to. A rotation carried across a session boundary would be
     // applied to a screen that may now be held the other way up, silently mismatching every corner
     // -- which is the F37 failure reintroduced by the back door.
@@ -81,8 +123,18 @@ bool ScreenTracker::RefineLocally(const ImageView8& img, TrackResult* out) {
     // The annulus is built by scaling the quad about its own centroid rather than by insetting
     // a bounding box: a bbox annulus does not track a ROTATED quad's boundary, and an angled
     // receiver is the common case, not the exception.
-    const std::array<Point2, 4> outer = ScaleQuad(last_quad_, 1.0 + cfg_.search_margin);
-    const std::array<Point2, 4> inner = ScaleQuad(last_quad_, 1.0 - cfg_.search_margin);
+    //
+    // Centred on where the motion model EXPECTS the screen, and widened with its speed (F53): a
+    // screen moving at 10% of its size per frame needs that much more window or it falls out of
+    // the annulus and costs a full-image reacquisition every frame it keeps moving.
+    const std::array<Point2, 4> expected = Predicted(dt_s_);
+    // speed() is per second; the window has to cover the motion expected over THIS gap.
+    const double margin = std::min(
+        std::max(cfg_.max_search_margin, cfg_.search_margin),
+        cfg_.search_margin +
+            (cfg_.predict_motion ? cfg_.speed_margin_gain * speed() * dt_s_ : 0.0));
+    const std::array<Point2, 4> outer = ScaleQuad(expected, 1.0 + margin);
+    const std::array<Point2, 4> inner = ScaleQuad(expected, 1.0 - margin);
 
     const Bounds ob = QuadBounds(outer);
     const int y_lo = std::max(0, static_cast<int>(std::floor(ob.y0)));
@@ -158,12 +210,13 @@ bool ScreenTracker::RefineLocally(const ImageView8& img, TrackResult* out) {
     }
 
     // Plausibility: the screen cannot teleport between frames. This is what stops the tracker
-    // snapping onto a different bright object that happens to sit inside the window.
+    // snapping onto a different bright object that happens to sit inside the window. Measured
+    // against the PREDICTION, so a fast but steady pan is not mistaken for a teleport.
     const double scale = QuadScale(last_quad_);
     if (scale > 1e-6) {
         for (std::size_t i = 0; i < 4; ++i) {
-            const double jump = std::hypot(quad[i].x - last_quad_[i].x,
-                                           quad[i].y - last_quad_[i].y);
+            const double jump = std::hypot(quad[i].x - expected[i].x,
+                                           quad[i].y - expected[i].y);
             if (jump > cfg_.max_corner_jump * scale) {
                 ++rj_jump_;
                 return false;
@@ -204,9 +257,16 @@ bool ScreenTracker::RefineLocally(const ImageView8& img, TrackResult* out) {
     return true;
 }
 
-TrackResult ScreenTracker::Track(const ImageView8& img) {
+TrackResult ScreenTracker::Track(const ImageView8& img, std::int64_t timestamp_ns) {
     TrackResult out;
     last_px_ = 0;  // per-frame cost accumulator; both paths below ADD to it
+
+    // Elapsed time since the last lock. Real timestamps when they are usable, a nominal frame
+    // otherwise; clamped so one stale timestamp cannot fling the prediction across the image.
+    constexpr double kNominalFrameS = 1.0 / 30.0;
+    const bool timed = timestamp_ns > 0 && last_ts_ > 0 && timestamp_ns > last_ts_;
+    dt_s_ = timed ? std::min(static_cast<double>(timestamp_ns - last_ts_) * 1e-9, 0.5)
+                  : kNominalFrameS;
 
     if (img.empty()) {
         state_ = (state_ == TrackState::kSearching) ? TrackState::kSearching : TrackState::kLost;
@@ -218,7 +278,9 @@ TrackResult ScreenTracker::Track(const ImageView8& img) {
 
     // --- Fast path: refine within a window around the previous quad ---
     if (have_lock && RefineLocally(img, &out)) {
+        UpdateMotion(out.quad, dt_s_, /*fresh=*/false);
         last_quad_ = out.quad;
+        last_ts_ = timestamp_ns;
         ++successful_;
         ++refined_;
 
@@ -260,7 +322,9 @@ TrackResult ScreenTracker::Track(const ImageView8& img) {
         return out;
     }
 
+    UpdateMotion(d.value().quad, dt_s_, /*fresh=*/true);
     last_quad_ = d.value().quad;
+    last_ts_ = timestamp_ns;
     threshold_ = d.value().threshold;  // carried into subsequent tracked frames
     // Carried for the same reason as the threshold: refinement must reproduce the orientation the
     // acquisition resolved, not re-derive it. A tracked frame deliberately does not rescore all four

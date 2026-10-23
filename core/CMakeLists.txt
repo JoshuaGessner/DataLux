@@ -15,6 +15,8 @@ add_library(fileflow_core STATIC
     src/frame.cpp
     src/modulation.cpp
     src/transfer.cpp
+    src/session.cpp
+    src/live.cpp
     src/geometry.cpp
     src/sampler.cpp
     src/photometric.cpp

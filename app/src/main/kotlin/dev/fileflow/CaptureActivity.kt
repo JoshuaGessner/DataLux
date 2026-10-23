@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.pm.PackageManager
 import android.graphics.Color
 import android.os.Bundle
+import android.os.SystemClock
 import android.util.Log
 import android.view.ViewGroup.LayoutParams.MATCH_PARENT
 import android.view.WindowManager
@@ -17,6 +18,10 @@ import dev.fileflow.aim.AimVerdict
 import dev.fileflow.aim.AimView
 import dev.fileflow.aim.LumaPreviewView
 import dev.fileflow.capture.CameraRecorder
+import dev.fileflow.rx.LiveDecoder
+import dev.fileflow.rx.LiveHint
+import dev.fileflow.rx.LivePhase
+import dev.fileflow.rx.LiveStatus
 import java.io.File
 
 /**
@@ -46,6 +51,8 @@ class CaptureActivity : AppCompatActivity() {
     private var lockedFocus: Float = -1f
     private var aimRecorder: CameraRecorder? = null
     private var aimThread: Thread? = null
+    /** Receive a file live (the Receive button) rather than record a dataset (scripts). */
+    private val live: Boolean get() = intent.getBooleanExtra("live", false)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -108,7 +115,7 @@ class CaptureActivity : AppCompatActivity() {
         val rows = intent.getIntExtra("gridRows", 260)
         val v = AimView(this, cols, rows)
         aimView = v
-        v.setBanner("Lining up — recording starts when this is steady")
+        v.setBanner("Lining up — ${if (live) "receiving" else "recording"} starts when this is steady")
 
         // A real viewfinder, with the analysis drawn over it.
         //
@@ -187,7 +194,7 @@ class CaptureActivity : AppCompatActivity() {
                                 v.setBanner(
                                     if (aim.verdict == AimVerdict.Ready) {
                                         "Steady — starting in $left…"
-                                    } else "Lining up — recording starts when this is steady"
+                                    } else "Lining up — ${if (live) "receiving" else "recording"} starts when this is steady"
                                 )
                             }
                             // Freeze the focus the aiming phase converged on, so the recording
@@ -205,7 +212,7 @@ class CaptureActivity : AppCompatActivity() {
             )
             if (handedOver) {
                 runOnUiThread {
-                    aimView?.setBanner("Recording…")
+                    aimView?.setBanner(if (live) null else "Recording…")
                     start()
                 }
             }
@@ -228,6 +235,10 @@ class CaptureActivity : AppCompatActivity() {
     }
 
     private fun start() {
+        if (intent.getBooleanExtra("live", false)) {
+            startLive()
+            return
+        }
         val frames = intent.getIntExtra("frames", 300)
         val fps = intent.getIntExtra("fps", 60)
         val maxWidth = intent.getIntExtra("maxWidth", 1920)
@@ -342,6 +353,127 @@ class CaptureActivity : AppCompatActivity() {
         }.start()
     }
 
+    /**
+     * Receive a file LIVE: decode on the phone as frames arrive, until it verifies (C13b).
+     *
+     * The recording path above is for experiments — a fixed number of frames written to disk and
+     * decoded later on a desktop. Someone receiving a file needs the opposite: no disk writes (the
+     * writer is the binding constraint, F28), no fixed length (a transfer takes as long as it
+     * takes), and a running answer to "is it working". The status card shows progress that never
+     * goes backwards and one instruction at a time; when the phone drifts off the screen it says the
+     * transfer is PAUSED, because it is — fountain coding keeps everything already received.
+     *
+     * Same camera settings and the focus the aiming phase locked, so nothing about the optics
+     * changes at the handover.
+     */
+    private fun startLive() {
+        val fps = intent.getIntExtra("fps", 30)
+        val maxWidth = intent.getIntExtra("maxWidth", 1920)
+        val exposureNs = intent.getLongExtra("exposureNs", 0L)
+        val iso = intent.getIntExtra("iso", CameraRecorder.DEFAULT_ISO)
+        val requestedFocus = intent.getFloatExtra("focusDiopters", -1f)
+        val focusDiopters = if (requestedFocus >= 0f) requestedFocus else lockedFocus
+        val gc = intent.getIntExtra("gridCols", 120)
+        val gr = intent.getIntExtra("gridRows", 260)
+
+        val decoder = LiveDecoder(gc, gr, exposureNs)
+        liveDecoder = decoder
+        aimView?.setBanner(null)
+        aimView?.setLive("Point the camera at the sending screen.", 0f, LIVE_OK)
+        if (aimView == null) showReport("Receiving — point the camera at the sending screen…")
+        val started = SystemClock.elapsedRealtime()
+
+        decoder.onStatus = { s ->
+            runOnUiThread {
+                aimView?.setLive(s.message, s.progress.toFloat(), colourFor(s))
+                if (s.phase.terminal) finishLive(s, SystemClock.elapsedRealtime() - started)
+            }
+        }
+
+        val liveAnalyser = AimAnalyser()
+        var lastAimMs = 0L
+        Thread {
+            val rec = CameraRecorder(this)
+            liveRecorder = rec
+            rec.record(
+                bundleDir = "${filesDir.absolutePath}/live-discard",
+                frameCount = 0,  // until the file verifies or the person leaves
+                targetFps = fps,
+                maxWidth = maxWidth,
+                notes = "live receive — not a dataset",
+                writeFrames = false,
+                focusDiopters = focusDiopters,
+                exposureNs = exposureNs,
+                iso = iso,
+                rig = CameraRecorder.RigMetadata(gridCols = gc, gridRows = gr),
+                onFrame = { buf, w, h, stride ->
+                    previewView?.submit(buf, w, h, stride, rec.sensorOrientation)
+                    decoder.offer(buf, w, h, stride, SystemClock.elapsedRealtimeNanos())
+                    // The coverage map stays useful while receiving — it shows WHERE the screen is
+                    // unreadable — but it competes with the decoder for the CPU, so once a second.
+                    val now = System.currentTimeMillis()
+                    if (now - lastAimMs >= LIVE_AIM_INTERVAL_MS) {
+                        lastAimMs = now
+                        val aim = liveAnalyser.analyse(buf, w, h, stride, gc, gr)
+                        runOnUiThread {
+                            aimView?.let { av ->
+                                if (aim != null) av.update(aim, w, h)
+                                previewView?.let { av.contentRect = it.contentRect() }
+                            }
+                        }
+                    }
+                },
+            )
+        }.start()
+    }
+
+    private var liveRecorder: CameraRecorder? = null
+    private var liveDecoder: LiveDecoder? = null
+    private var liveFinished = false
+
+    private fun colourFor(s: LiveStatus): Int = when {
+        s.phase == LivePhase.Failed -> LIVE_BAD
+        s.hint != LiveHint.None -> LIVE_WARN
+        else -> LIVE_OK
+    }
+
+    private fun finishLive(s: LiveStatus, elapsedMs: Long) {
+        if (liveFinished) return
+        liveFinished = true
+        liveRecorder?.cancel()
+        val decoder = liveDecoder ?: return
+        // Off the UI thread: the file can be megabytes.
+        Thread {
+            val saved = if (s.phase == LivePhase.Verified) {
+                runCatching { decoder.saveVerified(this) }.getOrNull()
+            } else null
+            val report = buildString {
+                if (s.phase == LivePhase.Verified && saved != null) {
+                    appendLine("RECEIVED — verified")
+                    appendLine()
+                    appendLine("  file        ${saved.name}")
+                    appendLine("  size        ${s.fileSize} bytes")
+                    appendLine("  integrity   SHA-256 matched the sender's")
+                    appendLine("  time        ${"%.1f".format(elapsedMs / 1000.0)} s")
+                    appendLine("  goodput     ${"%.1f".format(s.fileSize / 1024.0 / (elapsedMs / 1000.0))} KB/s" +
+                               "  (wall clock, from Receive)")
+                    appendLine()
+                    appendLine("  saved to    ${saved.absolutePath}")
+                } else if (s.phase == LivePhase.Verified) {
+                    appendLine("RECEIVED and verified, but it could not be saved to storage.")
+                } else {
+                    appendLine("TRANSFER FAILED")
+                    appendLine()
+                    appendLine(s.message)
+                }
+                appendLine()
+                appendLine("  frames read ${s.frames}")
+            }
+            report.lineSequence().forEach { Log.i(LOG_TAG, it) }
+            runOnUiThread { showReport(report) }
+        }.start()
+    }
+
     private var rigEcho: String = "(unset — ffreplay will refuse this bundle)"
 
     private fun format(o: CameraRecorder.Outcome, dir: File): String = buildString {
@@ -453,6 +585,8 @@ class CaptureActivity : AppCompatActivity() {
         super.onDestroy()
         aimRecorder?.cancel()
         aimThread?.join(2000)
+        liveRecorder?.cancel()
+        liveDecoder?.close()
     }
 
     companion object {
@@ -464,6 +598,11 @@ class CaptureActivity : AppCompatActivity() {
         private const val AIM_INTERVAL_MS = 150L
         /** Guidance cadence WHILE recording. Slower than aiming: see the note in [start]. */
         private const val RECORDING_AIM_INTERVAL_MS = 500L
+        /** Coverage-map cadence while decoding live: the decoder needs the CPU more. */
+        private const val LIVE_AIM_INTERVAL_MS = 1000L
+        private val LIVE_OK = Color.parseColor("#69F0AE")
+        private val LIVE_WARN = Color.parseColor("#FFB74D")
+        private val LIVE_BAD = Color.parseColor("#FF5252")
         /** Consecutive Ready verdicts before recording starts. See the note in [startAiming]. */
         private const val READY_STREAK = 6
     }

@@ -54,6 +54,16 @@ struct OpticalRenderConfig {
     // squeezes the level ranges from the opposite side until they overlap.
     double glare_lift = 0.0;
 
+    // Radial lens distortion, Brown k1, about the image centre with radius normalised to the half
+    // diagonal: a point at undistorted radius r lands at r * (1 + k1 r^2). Negative is barrel.
+    //
+    // The first impairment here a homography CANNOT represent. Every other geometric effect in
+    // this renderer is projective, so four correct corners made the whole grid correct and a
+    // single global sub-cell shift was always enough -- which is why the simulator could never
+    // show a reason to refine anything but a translation (F51). Phone main cameras are corrected
+    // by the ISP but not perfectly, and 1% of residual at the frame edge is several pixels.
+    double lens_k1 = 0.0;
+
     int blur_radius = 0;          // box blur, px. Approximates defocus.
     double noise_amplitude = 0.0; // deterministic additive noise, peak in 8-bit levels
     std::uint64_t seed = 12345;
@@ -74,7 +84,60 @@ struct OpticalRenderConfig {
 
 // Render using the viewing geometry, and report the transform that was used so tests and
 // experiments can measure estimated-vs-true geometric error.
+//
+// With `lens_k1` set the transform is NOT the whole truth: a grid point's true image position is
+// `DistortPoint(used_transform.Apply(p), cfg)`. Measure against that, or the distortion the
+// receiver is fighting is invisible to the error figure.
 [[nodiscard]] Image8 RenderView(const CellMatrix& cells, const GridGeometry& g,
                                 const OpticalRenderConfig& cfg, Homography* used_transform);
+
+// The lens model's forward map: undistorted image pixel -> where the camera actually records it.
+// Identity when `cfg.lens_k1` is zero.
+[[nodiscard]] Point2 DistortPoint(Point2 p, const OpticalRenderConfig& cfg) noexcept;
+
+// A HANDHELD receiver: the camera moves during and between exposures.
+//
+// Every other impairment here is static per frame, so the simulator could not say anything about
+// the commonest real condition -- a person holding a phone -- and the tracker's inter-frame
+// behaviour had only ever met i.i.d. jitter, which no hand produces. Hands drift smoothly with a
+// small fast tremor on top, and that shape matters: a smooth drift is predictable from the last
+// two frames, a random jump is not.
+//
+// Three effects, each of which breaks something different:
+//  - inter-frame motion  -> the tracker's search window and plausibility bound;
+//  - motion during the exposure -> blur along the motion, which smears cells into neighbours;
+//  - rolling shutter    -> rows read at different times, so a moving screen is sheared.
+struct MotionConfig {
+    // Handheld shake intensity. 0 = rigid. 1 = a careful person holding the phone: sway of ~1.5% /
+    // 1.0% of the image at ~1 Hz, tremor of 0.25% at ~9 Hz, ~0.8 deg roll and ~2% distance sway.
+    // Scales linearly; 2-3 is a tired arm or a walk-up. [HYP]: shaped from the physiological
+    // tremor literature, not measured on this rig.
+    double shake = 0.0;
+    // Sweeping pan, as fractions of the image per second, on top of the shake: constant speed,
+    // reversing at +/-`pan_range` so the screen stays in view. An unbounded pan would carry the
+    // screen out of frame within seconds and measure "nothing to see" instead of tracking.
+    double pan_x = 0.0;
+    double pan_y = 0.0;
+    double pan_range = 0.12;
+    double exposure_s = 0.015;  // the rig's measured setting (F36)
+    double readout_s = 0.010;   // top-to-bottom rolling-shutter skew
+    int subframes = 4;          // exposure integration steps (motion blur)
+    int bands = 24;             // rolling-shutter row bands
+    std::uint64_t phase_seed = 1;
+
+    [[nodiscard]] bool active() const noexcept {
+        return shake > 0.0 || pan_x != 0.0 || pan_y != 0.0;
+    }
+};
+
+// The viewing geometry at time `t` seconds.
+[[nodiscard]] ViewConfig ViewAt(const ViewConfig& base, const MotionConfig& m, double t) noexcept;
+
+// Render one CAPTURE starting at `t_start`: integrated over the exposure, each row band at its own
+// readout time. `truth` receives the transform at the middle of the exposure and readout -- the
+// best single homography, and still not the whole truth once rows disagree.
+[[nodiscard]] Image8 RenderMoving(const CellMatrix& cells, const GridGeometry& g,
+                                  const OpticalRenderConfig& cfg, const MotionConfig& m,
+                                  double t_start, Homography* truth);
 
 }  // namespace fileflow::sim

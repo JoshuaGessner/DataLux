@@ -87,6 +87,7 @@ findings that would otherwise have to be rediscovered.
 | [adr/ADR-0012-goodput-primary-metric.md](adr/ADR-0012-goodput-primary-metric.md) | Goodput as the metric |
 | [adr/ADR-0013-toolchain-and-build-system.md](adr/ADR-0013-toolchain-and-build-system.md) | Toolchain, build system, repo layout |
 | [adr/ADR-0014-thin-android-adapters.md](adr/ADR-0014-thin-android-adapters.md) | Thin Android adapters; all judgement in portable C++ |
+| [adr/ADR-0015-protocol-v2-dense-fountain-inband-manifest.md](adr/ADR-0015-protocol-v2-dense-fountain-inband-manifest.md) | Protocol v2: dense fountain, in-band manifest, self-describing code rate |
 
 ## Specifications
 

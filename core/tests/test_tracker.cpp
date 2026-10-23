@@ -517,3 +517,50 @@ TEST(ScreenTracker, ResetClearsTheResolvedRotation) {
     EXPECT_GT(tracker.refined_frames(), 0u)
         << "a stale rotation would make every corner look displaced";
 }
+
+TEST(ScreenTracker, SpeedIsPerSecondWhateverTheFrameRate) {
+    // The live receiver turns speed() into "hold steadier". It must mean the same thing whether the
+    // decoder kept up with every frame or only every third: per second, not per processed frame.
+    const auto layout = MakeLayout();
+    const auto cells = RenderFrame(layout, 3);
+    constexpr int kW = 700;
+    constexpr int kH = 1000;
+    constexpr double kPxPerSecond = 120.0;  // a steady pan
+
+    auto measure = [&](double fps) {
+        auto tr = ScreenTracker::Create(layout, {});
+        EXPECT_TRUE(tr.ok());
+        double last = 0.0;
+        for (int i = 0; i < 10; ++i) {
+            const double t = i / fps;
+            const Image8 img = Scene(cells, QuadAt(250 + kPxPerSecond * t, 500, 150, 250), kW, kH);
+            const auto r = tr.value().Track(img.view(), static_cast<std::int64_t>(t * 1e9) + 1);
+            EXPECT_TRUE(r.ok) << "fps " << fps << " frame " << i;
+            last = tr.value().speed();
+        }
+        return last;
+    };
+
+    const double fast = measure(30.0);
+    const double slow = measure(10.0);
+    const double diag = std::hypot(300.0, 500.0);
+    EXPECT_NEAR(fast, kPxPerSecond / diag, 0.05 * kPxPerSecond / diag);
+    EXPECT_NEAR(slow, fast, 0.05 * fast) << "speed depended on how many frames were processed";
+}
+
+TEST(ScreenTracker, ANewLockHasNoSpeed) {
+    // A fresh acquisition must not inherit motion from a lock that may be seconds old and elsewhere.
+    const auto layout = MakeLayout();
+    const auto cells = RenderFrame(layout, 4);
+    auto tr = ScreenTracker::Create(layout, {});
+    ASSERT_TRUE(tr.ok());
+    for (int i = 0; i < 5; ++i) {
+        const Image8 img = Scene(cells, QuadAt(250 + 10.0 * i, 500, 150, 250), 700, 1000);
+        (void)tr.value().Track(img.view(), (i + 1) * 33'333'333LL);
+    }
+    EXPECT_GT(tr.value().speed(), 0.0);
+    tr.value().Reset();
+    const Image8 img = Scene(cells, QuadAt(400, 500, 150, 250), 700, 1000);
+    ASSERT_TRUE(tr.value().Track(img.view(), 10 * 33'333'333LL).ok);
+    EXPECT_DOUBLE_EQ(tr.value().speed(), 0.0);
+}

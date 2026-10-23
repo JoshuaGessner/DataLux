@@ -2,8 +2,8 @@
 
 > **Status:** Draft
 > **Owner:** Protocol subsystem
-> **Last reviewed:** 2026-08-02
-> **Related:** ADR-0009, OPTICAL-FRAME-CANDIDATES.md, INPUT-VALIDATION.md
+> **Last reviewed:** 2026-10-23
+> **Related:** ADR-0009, ADR-0015, OPTICAL-FRAME-CANDIDATES.md, INPUT-VALIDATION.md
 
 ## Layer stack
 
@@ -86,7 +86,16 @@ Code selection pending EXP-011. Provisional: LDPC payload, RS/BCH header.
 Blocking: the file is partitioned into blocks sized so the decoder working set stays
 bounded regardless of file size. A 100 MB transfer must not need 100 MB of decoder memory.
 
-Scheme undecided — EXP-012 and legal review (RT-07).
+~~Scheme undecided — EXP-012 and legal review (RT-07).~~ **Decided in protocol v2 (ADR-0015):**
+
+| Property | v2 |
+|---|---|
+| Code | Systematic random linear fountain over GF(2). ESI < k is source symbol ESI; ESI ≥ k is a dense row, each source symbol in with probability ½, from `SplitMix64((session_seed << 32) ^ ESI·0x9E3779B97F4A7C15)` 64 bits per word, final word masked to k bits, an all-zero row replaced by unit row `ESI mod k` |
+| Decoder | Incremental Gaussian elimination over GF(2); ~1.6 symbols over k at any loss rate |
+| Block size | k ≤ 1024 (a cost bound as well as a memory bound); as few, balanced blocks as fit (`AutoBlockSymbols`) |
+| Session seed per block | `session_id XOR block_index` |
+| Schedule | Round-robin over blocks; per block, ESIs ascending |
+| Padding | Source symbols wholly past end-of-file are **never sent**; the receiver primes them as zeros from the manifest |
 
 ---
 
@@ -95,6 +104,24 @@ Scheme undecided — EXP-012 and legal review (RT-07).
 Carries everything needed to interpret the transfer, repeated periodically so that a
 receiver joining late — or recovering from a long tracking loss — can still synchronise
 without restarting.
+
+### As implemented in protocol v2 (ADR-0015)
+
+The full session header below is the long-term design. What is **on the wire today** is smaller,
+and it is what a receiver actually depends on:
+
+- **Frame header** (34 bytes before RS, every frame): magic, version (= 2), session ID, sequence,
+  profile, phase, block ID, ESI, payload bytes, flags, **`fec_nsym`**, payload CRC-32, header
+  CRC-32. `fec_nsym` is the intra-frame code rate, so the receiver reads it before anything else in
+  the frame. Flag `0x01` = last block, flag **`0x02` = manifest frame**. The payload CRC covers
+  the first `payload_bytes` bytes of the frame message.
+- **Manifest frame** (every `manifest_interval` states, first at sequence 0; default
+  `clamp(symbols_needed / 2, 16, 128)`): payload is `FileManifest::Encode()` — version, session
+  ID, file size, SHA-256, block count, symbols per block, symbol size, sanitised name, extension
+  length + skipped extensions, CRC-32 — followed by pseudorandom filler, never zeros.
+- **Receiver rules.** The first valid manifest owns the session; frames with any other session ID
+  are refused. Symbols read before the manifest are held (bounded) and replayed when it arrives.
+  A manifest frame is never passed to the fountain layer.
 
 ### Session header (repeated every N frames)
 

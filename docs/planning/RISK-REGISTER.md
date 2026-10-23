@@ -194,6 +194,12 @@ conclusion — a flag.
 codes as fallback at a few percent overhead cost (quantified by EXP-012).
 **Trigger.** Legal review returns unfavourable, or is not completed before the fountain
 layer needs a decision.
+**Status 2026-10-23: RETIRED as a schedule risk** (ADR-0015, F49). The fountain layer needed its
+decision and got one that needs no licence: a systematic random linear fountain over GF(2), within
+~1.6 symbols of optimal at k ≥ 64. Note the mitigation above was *wrong in its number*: v1's LT
+fallback cost not "a few percent" but 20–35% of goodput under loss — because of how it combined
+with a systematic prefix, not because LT is inherently that bad. RaptorQ would now matter only for
+blocks far beyond the 1024-symbol bound.
 
 ### RISK-023 — In-house coding implementations underperform or take too long
 **Likelihood.** Medium · **Impact.** Medium

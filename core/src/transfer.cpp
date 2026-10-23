@@ -139,15 +139,52 @@ std::string SanitiseFileName(std::string_view raw) {
     return out;
 }
 
+// ---------------------------------------------------------------- block geometry
+
+std::uint32_t FirstPaddingSymbol(const FileManifest& m, std::uint32_t block) noexcept {
+    const std::uint64_t per_block =
+        static_cast<std::uint64_t>(m.block_symbols) * static_cast<std::uint64_t>(m.symbol_size);
+    const std::uint64_t off = static_cast<std::uint64_t>(block) * per_block;
+    if (m.symbol_size == 0 || off >= m.file_size) return 0;
+    const std::uint64_t len = std::min(per_block, m.file_size - off);
+    const std::uint64_t data_symbols = (len + m.symbol_size - 1) / m.symbol_size;
+    return static_cast<std::uint32_t>(std::min<std::uint64_t>(data_symbols, m.block_symbols));
+}
+
+std::uint32_t AutoBlockSymbols(std::uint64_t total_symbols) noexcept {
+    if (total_symbols == 0) return 1;
+    const std::uint64_t kmax = FountainParams::kMaxSourceSymbols;
+    const std::uint64_t blocks = (total_symbols + kmax - 1) / kmax;
+    return static_cast<std::uint32_t>((total_symbols + blocks - 1) / blocks);
+}
+
 // ---------------------------------------------------------------- transmitter
+
+std::uint32_t FileTransmitter::AutoManifestInterval(std::uint64_t symbols_needed) noexcept {
+    return static_cast<std::uint32_t>(std::clamp<std::uint64_t>(symbols_needed / 2, 16, 128));
+}
+
+FileTransmitter::FileTransmitter(FileManifest m, std::vector<FountainEncoder> enc,
+                                 std::vector<std::uint32_t> first_padding,
+                                 std::uint32_t manifest_interval)
+    : manifest_(std::move(m)),
+      manifest_bytes_(manifest_.Encode()),
+      encoders_(std::move(enc)),
+      first_padding_(std::move(first_padding)),
+      next_esi_(encoders_.size(), 0),
+      manifest_interval_(manifest_interval) {}
 
 Result<FileTransmitter> FileTransmitter::Create(std::span<const std::uint8_t> payload,
                                                 std::string file_name,
                                                 std::uint32_t session_id,
                                                 std::uint32_t symbol_size,
-                                                std::uint32_t block_symbols) {
+                                                std::uint32_t block_symbols,
+                                                std::uint32_t manifest_interval) {
     if (payload.empty()) return Error::kValueOutOfRange;
-    if (symbol_size == 0 || block_symbols == 0) return Error::kValueOutOfRange;
+    if (symbol_size == 0) return Error::kValueOutOfRange;
+    if (block_symbols == 0) {
+        block_symbols = AutoBlockSymbols((payload.size() + symbol_size - 1) / symbol_size);
+    }
 
     std::size_t per_block = 0;
     if (!CheckedMul(block_symbols, symbol_size, &per_block)) return Error::kSizeOverflow;
@@ -165,8 +202,15 @@ Result<FileTransmitter> FileTransmitter::Create(std::span<const std::uint8_t> pa
     m.session_id = session_id;
     FF_TRY(m.Validate());
 
+    // The manifest travels in ONE frame, so it must fit one symbol. At a real grid a symbol is
+    // kilobytes and a manifest at most ~320 bytes; only a deliberately tiny symbol can trip this.
+    if (m.Encode().size() > symbol_size) return Error::kValueOutOfRange;
+
     std::vector<FountainEncoder> encoders;
+    std::vector<std::uint32_t> first_padding;
     encoders.reserve(block_count);
+    first_padding.reserve(block_count);
+    std::uint64_t needed = 0;
     for (std::uint32_t b = 0; b < block_count; ++b) {
         const std::size_t off = static_cast<std::size_t>(b) * per_block;
         const std::size_t len = std::min(per_block, payload.size() - off);
@@ -179,30 +223,60 @@ Result<FileTransmitter> FileTransmitter::Create(std::span<const std::uint8_t> pa
         auto enc = FountainEncoder::Create(p, payload.subspan(off, len));
         if (!enc.ok()) return enc.error();
         encoders.push_back(std::move(enc).value());
+        first_padding.push_back(FirstPaddingSymbol(m, b));
+        needed += first_padding.back();
     }
 
-    return FileTransmitter(std::move(m), std::move(encoders));
+    if (manifest_interval == 0) manifest_interval = AutoManifestInterval(needed);
+    return FileTransmitter(std::move(m), std::move(encoders), std::move(first_padding),
+                           manifest_interval);
 }
 
 FileTransmitter::FramePayload FileTransmitter::NextFrame() {
-    // Round-robin across blocks: a receiver that starts late still makes progress on every
-    // block instead of waiting a full cycle.
-    const auto bc = static_cast<std::uint64_t>(manifest_.block_count);
-    const std::uint32_t block = static_cast<std::uint32_t>(counter_ % bc);
-    const auto esi = static_cast<std::uint32_t>(counter_ / bc);
-
     FramePayload fp;
-    fp.data = encoders_[block].Symbol(esi);
     fp.header.session_id = manifest_.session_id;
     fp.header.sequence = static_cast<std::uint32_t>(counter_);
     fp.header.profile = ModulationProfile::kM0BinaryLuminance;
     fp.header.phase = static_cast<std::uint8_t>(counter_ % 16);
+
+    if (counter_ % manifest_interval_ == 0) {
+        // Manifest frame. Filler after the manifest is keyed to the sequence number so successive
+        // manifest frames do not render identically -- a static pattern would hide a frozen
+        // display from any receiver-side duplicate detector.
+        fp.data.resize(manifest_.symbol_size);
+        std::copy(manifest_bytes_.begin(), manifest_bytes_.end(), fp.data.begin());
+        SplitMix64 filler((static_cast<std::uint64_t>(manifest_.session_id) << 32) ^
+                          (counter_ * 0xD1B54A32D192ED03ULL));
+        for (std::size_t i = manifest_bytes_.size(); i < fp.data.size(); ++i) {
+            fp.data[i] = static_cast<std::uint8_t>(filler.Next() & 0xFF);
+        }
+        fp.header.flags |= FrameHeader::kFlagManifest;
+        fp.header.payload_bytes = static_cast<std::uint32_t>(manifest_bytes_.size());
+        fp.header.payload_crc = Crc32(manifest_bytes_);
+        ++counter_;
+        return fp;
+    }
+
+    // Round-robin across blocks: a receiver that starts late still makes progress on every
+    // block instead of waiting a full cycle.
+    const auto bc = static_cast<std::uint64_t>(manifest_.block_count);
+    const auto block = static_cast<std::uint32_t>(data_frames_ % bc);
+
+    // Systematic symbols that are pure padding are never sent: the receiver already knows them.
+    std::uint32_t esi = next_esi_[block];
+    if (esi >= first_padding_[block] && esi < manifest_.block_symbols) {
+        esi = manifest_.block_symbols;
+    }
+    next_esi_[block] = esi + 1;
+
+    fp.data = encoders_[block].Symbol(esi);
     fp.header.block_id = block;
     fp.header.esi = esi;
     fp.header.payload_bytes = static_cast<std::uint32_t>(fp.data.size());
     fp.header.payload_crc = Crc32(fp.data);
     if (block + 1 == manifest_.block_count) fp.header.flags |= FrameHeader::kFlagLastBlock;
 
+    ++data_frames_;
     ++counter_;
     return fp;
 }
@@ -214,6 +288,7 @@ Result<FileReceiver> FileReceiver::Create(const FileManifest& m) {
 
     FileReceiver rx(m);
     rx.decoders_.reserve(m.block_count);
+    const std::vector<std::uint8_t> zero(m.symbol_size, 0);
     for (std::uint32_t b = 0; b < m.block_count; ++b) {
         FountainParams p;
         p.source_symbols = m.block_symbols;
@@ -223,11 +298,23 @@ Result<FileReceiver> FileReceiver::Create(const FileManifest& m) {
         auto dec = FountainDecoder::Create(p);
         if (!dec.ok()) return dec.error();
         rx.decoders_.push_back(std::move(dec).value());
+
+        // The padding past the end of the file is zero by definition, so it is known before a
+        // single frame arrives. Priming it is what lets the transmitter never send it.
+        const std::uint32_t first_pad = FirstPaddingSymbol(m, b);
+        for (std::uint32_t i = first_pad; i < m.block_symbols; ++i) {
+            rx.decoders_.back().Prime(i, zero);
+        }
+        rx.needed_ += first_pad;
     }
     return rx;
 }
 
 bool FileReceiver::Ingest(const FrameHeader& h, std::span<const std::uint8_t> data) {
+    // A manifest frame's payload is not a symbol, and block 0 / ESI 0 in its header mean nothing.
+    // Ingesting it would poison block 0 with manifest bytes that pass the frame CRC.
+    if (h.is_manifest()) return complete();
+
     // Session isolation: packets from another transmitter are discarded, not mixed in
     // (THREAT-MODEL T8).
     if (h.session_id != manifest_.session_id) return complete();
@@ -256,16 +343,17 @@ std::uint32_t FileReceiver::blocks_complete() const noexcept {
 }
 
 double FileReceiver::progress() const noexcept {
-    if (decoders_.empty()) return 0.0;
+    // Primed padding is excluded on both sides: progress measures what the CHANNEL has delivered,
+    // so a fresh receiver reads exactly zero however much padding it already knows.
+    if (needed_ == 0) return complete() ? 1.0 : 0.0;
     std::uint64_t recovered = 0;
-    for (const auto& d : decoders_) recovered += d.recovered();
-    const auto total = static_cast<double>(decoders_.size()) * manifest_.block_symbols;
-    return total > 0.0 ? static_cast<double>(recovered) / total : 0.0;
+    for (const auto& d : decoders_) recovered += d.recovered() - d.primed();
+    return static_cast<double>(recovered) / static_cast<double>(needed_);
 }
 
 double FileReceiver::overhead() const noexcept {
-    const auto k = static_cast<double>(decoders_.size()) * manifest_.block_symbols;
-    if (k <= 0.0) return 0.0;
+    if (needed_ == 0) return 0.0;
+    const auto k = static_cast<double>(needed_);
     return (static_cast<double>(ingested_) - k) / k;
 }
 

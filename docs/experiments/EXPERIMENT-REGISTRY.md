@@ -150,6 +150,13 @@ high-speed camera or a second device; compare intended versus presented sequence
 **Conclusion.** — · **Confidence.** —
 **Why it matters.** `Fd` appears linearly in the goodput model and every scenario assumes
 it. It is currently unvalidated. Also decides whether Vulkan is needed (ADR-0004).
+**Tooling ready 2026-10-23.** No high-speed camera or Perfetto run is needed for the first answer:
+every frame header carries the transmitter's sequence number, and `ffreplay` now reports, from
+any capture bundle, the **submission rate** (sequence span / time), the **distinct-state rate**
+read by the receiver (a lower bound on `Fd`), repeat captures, and states never read — and says
+whether the camera was fast enough (≥ 2× the state rate) for a missing state to mean the display
+dropped it. Procedure: transmit at divisor 1, 2 and 4 on the S26 Ultra's 120 Hz panel, capture at
+60 fps on the Pixel 8, replay each bundle.
 
 ## EXP-007 — Camera frame-rate and access-path characterisation
 
@@ -280,8 +287,16 @@ block sizes and loss rates?
 **Metrics.** Overhead fraction, decode time, peak memory, decode failure rate.
 **Success threshold.** A measured `Rfountain` per scheme, and a decision on whether the
 LT/online fallback costs enough goodput to justify pursuing RaptorQ licensing.
-**Conclusion.** — · **Confidence.** — · **Runs in.** Simulator only.
-**Note.** Legal review (RT-07) runs in parallel and is a separate gate.
+**Conclusion.** **Run 2026-10-23 (F49), decided by ADR-0015.** The hypothesis was wrong about LT in
+the configuration we had: systematic prefix + robust-soliton LT measured 0.20–0.33 overhead at
+5–30% i.i.d. loss, k = 64, and Gaussian elimination on the same rows recovered almost none of it.
+A systematic dense GF(2) code measured **0.022–0.025** (k = 64) and **0.006** (k = 256) across the
+same range — RaptorQ-class, without RaptorQ. Licensing is not worth pursuing at these block sizes.
+**Not yet measured:** bursty loss, and decode time on ARM64. Regression guard:
+`Fountain.OverheadUnderLossIsNearOptimal`.
+· **Confidence.** High for the code property (it does not depend on the channel model).
+· **Runs in.** Simulator only.
+**Note.** Legal review (RT-07) runs in parallel and is a separate gate — no longer a blocking one.
 
 ## EXP-013 — Frame layout and four-level luminance evaluation
 

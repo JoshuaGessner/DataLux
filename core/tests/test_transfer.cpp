@@ -13,6 +13,16 @@ std::vector<std::uint8_t> Payload(std::size_t n, std::uint64_t seed = 99) {
     for (auto& b : v) b = static_cast<std::uint8_t>(rng.Next() & 0xFF);
     return v;
 }
+
+// The next frame that carries a fountain SYMBOL. Tests that tamper with a symbol must not land
+// on a manifest frame instead: the receiver refuses those outright, so the tamper would pass for
+// the wrong reason and the test would prove nothing.
+FileTransmitter::FramePayload NextDataFrame(FileTransmitter& tx) {
+    for (;;) {
+        auto fp = tx.NextFrame();
+        if (!fp.header.is_manifest()) return fp;
+    }
+}
 }  // namespace
 
 // ---------------------------------------------------------------- filename safety
@@ -233,7 +243,7 @@ TEST(Transfer, RejectsForeignSessionPackets) {
     auto rx = FileReceiver::Create(tx.value().manifest());
     ASSERT_TRUE(rx.ok());
 
-    auto fp = tx.value().NextFrame();
+    auto fp = NextDataFrame(tx.value());
     auto foreign = fp;
     foreign.header.session_id = 0x2222;
     for (auto& b : foreign.data) b ^= 0xFF;
@@ -249,7 +259,7 @@ TEST(Transfer, RejectsOutOfRangeBlockId) {
     auto rx = FileReceiver::Create(tx.value().manifest());
     ASSERT_TRUE(rx.ok());
 
-    auto fp = tx.value().NextFrame();
+    auto fp = NextDataFrame(tx.value());
     fp.header.block_id = 999999;
     rx.value().Ingest(fp.header, fp.data);
     EXPECT_EQ(rx.value().symbols_ingested(), 0u);
@@ -296,7 +306,7 @@ TEST(Transfer, HashGateCatchesCorruptionThatEvadesEveryChecksum) {
     bool tampered = false;
     std::uint64_t guard = 0;
     while (!rx.value().complete() && guard++ < 500000) {
-        auto fp = tx.value().NextFrame();
+        auto fp = NextDataFrame(tx.value());
         if (!tampered && fp.header.esi < tx.value().manifest().block_symbols) {
             fp.data[0] ^= 0x01;
             fp.header.payload_crc = Crc32(fp.data);  // forge a matching CRC
@@ -346,4 +356,90 @@ TEST(Transfer, ProgressAdvancesMonotonically) {
 
 TEST(Transfer, EmptyPayloadIsRejected) {
     EXPECT_EQ(FileTransmitter::Create({}, "e.bin", 1).error(), Error::kValueOutOfRange);
+}
+
+// ---------------------------------------------------------------- protocol v2 (ADR-0015)
+
+TEST(Transfer, ManifestFramesRecurAndDecodeToTheSessionManifest) {
+    const auto payload = Payload(30000);
+    auto tx = FileTransmitter::Create(payload, "m.bin", 0xAB, 512, 0, 10);
+    ASSERT_TRUE(tx.ok());
+    for (std::uint32_t i = 0; i < 35; ++i) {
+        auto fp = tx.value().NextFrame();
+        ASSERT_EQ(fp.header.sequence, i);
+        ASSERT_EQ(fp.data.size(), 512u) << "every frame must fill the optical payload";
+        const bool want_manifest = (i % 10) == 0;
+        ASSERT_EQ(fp.header.is_manifest(), want_manifest) << "seq " << i;
+        if (!want_manifest) continue;
+
+        // The manifest is recoverable from the frame alone -- this is what a receiver with no
+        // out-of-band knowledge has to work with.
+        const std::span<const std::uint8_t> m(fp.data.data(), fp.header.payload_bytes);
+        EXPECT_EQ(Crc32(m), fp.header.payload_crc);
+        auto d = FileManifest::Decode(m);
+        ASSERT_TRUE(d.ok()) << ErrorName(d.error());
+        EXPECT_EQ(d.value().sha256, tx.value().manifest().sha256);
+        EXPECT_EQ(d.value().file_size, payload.size());
+
+        // And the filler is not a black frame (F15, F39).
+        std::size_t zeros = 0;
+        for (std::size_t b = fp.header.payload_bytes; b < fp.data.size(); ++b) zeros += fp.data[b] == 0;
+        EXPECT_LT(zeros, (fp.data.size() - fp.header.payload_bytes) / 20);
+    }
+}
+
+TEST(Transfer, ReceiverRefusesManifestFramesAsSymbols) {
+    const auto payload = Payload(5000);
+    auto tx = FileTransmitter::Create(payload, "a.bin", 0x1111, 256, 0, 4);
+    ASSERT_TRUE(tx.ok());
+    auto rx = FileReceiver::Create(tx.value().manifest());
+    ASSERT_TRUE(rx.ok());
+    auto fp = tx.value().NextFrame();
+    ASSERT_TRUE(fp.header.is_manifest());
+    // Its CRC is valid and its block/ESI are in range: only the flag stops it poisoning block 0.
+    rx.value().Ingest(fp.header, fp.data);
+    EXPECT_EQ(rx.value().symbols_ingested(), 0u);
+}
+
+TEST(Transfer, PaddingIsNeverTransmittedAndNeverCounted) {
+    // 10 symbols of data in a 16-symbol block: 6 symbols of pure padding that v1 sent every cycle.
+    const auto payload = Payload(10 * 128 - 7);
+    auto tx = FileTransmitter::Create(payload, "pad.bin", 0x31, 128, 16, 1000);
+    ASSERT_TRUE(tx.ok());
+    EXPECT_EQ(FirstPaddingSymbol(tx.value().manifest(), 0), 10u);
+
+    auto rx = FileReceiver::Create(tx.value().manifest());
+    ASSERT_TRUE(rx.ok());
+    EXPECT_EQ(rx.value().symbols_needed(), 10u);
+    EXPECT_DOUBLE_EQ(rx.value().progress(), 0.0) << "known padding is not channel progress";
+
+    std::uint64_t data_frames = 0;
+    while (!rx.value().complete() && data_frames < 1000) {
+        auto fp = tx.value().NextFrame();
+        if (fp.header.is_manifest()) continue;
+        ++data_frames;
+        EXPECT_FALSE(fp.header.esi >= 10 && fp.header.esi < 16) << "sent padding esi " << fp.header.esi;
+        rx.value().Ingest(fp.header, fp.data);
+    }
+    // Clean channel: exactly the data symbols, no more.
+    EXPECT_EQ(data_frames, 10u);
+    EXPECT_DOUBLE_EQ(rx.value().overhead(), 0.0);
+    auto out = rx.value().Finish();
+    ASSERT_TRUE(out.ok()) << ErrorName(out.error());
+    EXPECT_EQ(out.value(), payload);
+}
+
+TEST(Transfer, AutoBlocksAreFewBalancedAndBounded) {
+    EXPECT_EQ(AutoBlockSymbols(1), 1u);
+    EXPECT_EQ(AutoBlockSymbols(128), 128u) << "one block when it fits";
+    EXPECT_EQ(AutoBlockSymbols(FountainParams::kMaxSourceSymbols), FountainParams::kMaxSourceSymbols);
+    // Just over the bound: two balanced blocks, not one full block and a stub.
+    EXPECT_EQ(AutoBlockSymbols(FountainParams::kMaxSourceSymbols + 2),
+              FountainParams::kMaxSourceSymbols / 2 + 1);
+    for (std::uint64_t t : {5ull, 1000ull, 1025ull, 5000ull, 123457ull}) {
+        const std::uint32_t k = AutoBlockSymbols(t);
+        ASSERT_LE(k, FountainParams::kMaxSourceSymbols);
+        const std::uint64_t blocks = (t + k - 1) / k;
+        EXPECT_LT(blocks * k - t, blocks) << "padding must be under one symbol per block, t=" << t;
+    }
 }

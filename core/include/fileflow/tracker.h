@@ -52,7 +52,33 @@ struct TrackerConfig {
 
     // Maximum corner movement between frames, as a fraction of quad size, before the result
     // is rejected as implausible. Guards against snapping onto a different bright object.
+    // Measured from the PREDICTED position when the motion model is on, so it bounds the
+    // surprise, not the speed.
     double max_corner_jump = 0.35;
+
+    // Constant-velocity prediction (F53). OFF, because it was measured and did not help.
+    //
+    // The hypothesis was that a hand moves smoothly, so searching around where the screen is
+    // GOING beats searching around where it WAS. Simulated handheld motion (shake to 4, sweeping
+    // pans to 1 image width/s, at 30, 10 and 6 processed frames/s) gave identical results with and
+    // without it -- the 25% annulus already covers real hand motion -- and at 6 fps with a fast pan
+    // it lost lock once per seed where the plain search lost it never. Frames lost to motion are
+    // lost to BLUR, not to the tracker. Kept switchable so the result can be rechecked on real
+    // rolling-shutter captures; the velocity estimate itself is always maintained, because speed()
+    // drives the receiver's "hold steadier" hint.
+    bool predict_motion = false;
+    // Velocity smoothing time constant, in seconds. A TIME constant rather than a per-frame weight,
+    // because the receiver processes frames at whatever rate it can keep up with: a fixed weight
+    // averaged 3x more frames at 30 fps than at 10, and since corner positions are quantised to a
+    // pixel, the speed estimate came out ~15% noisier at the higher rate (measured; see
+    // ScreenTracker.SpeedIsPerSecondWhateverTheFrameRate). 0.1 s rides through tremor and still
+    // follows a change of direction within a few tenths of a second.
+    double velocity_tau_s = 0.1;
+    // The annulus widens with observed speed: margin = search_margin + this x (speed / scale),
+    // capped at max_search_margin. A fast-moving screen gets a wider window rather than a lost
+    // lock and a full-image reacquisition.
+    double speed_margin_gain = 1.5;
+    double max_search_margin = 0.45;
 };
 
 struct TrackResult {
@@ -68,7 +94,10 @@ class ScreenTracker {
   public:
     static Result<ScreenTracker> Create(const FrameLayout& layout, TrackerConfig cfg = {});
 
-    [[nodiscard]] TrackResult Track(const ImageView8& img);
+    // `timestamp_ns` is the capture time. With it the motion model works in real time, so a frame
+    // the receiver skipped (a busy decoder, a dropped capture) widens the prediction instead of
+    // breaking it. Without it (0, or not increasing) frames are assumed 1/30 s apart.
+    [[nodiscard]] TrackResult Track(const ImageView8& img, std::int64_t timestamp_ns = 0);
 
     // Drop the lock, e.g. after a session restart or a display-mode change.
     void Reset() noexcept;
@@ -104,6 +133,13 @@ class ScreenTracker {
     [[nodiscard]] std::uint64_t full_acquisitions() const noexcept { return acquisitions_; }
     [[nodiscard]] std::uint64_t losses() const noexcept { return losses_; }
 
+    // Screen speed from the motion model, in screen DIAGONALS PER SECOND, worst corner: 0.5 means
+    // a corner is moving half the screen's diagonal each second. Size-normalised so the same
+    // number means the same thing near and far, and per second so it does not depend on how many
+    // frames the receiver had time to process. The receiver UI turns this into "hold steadier";
+    // 0 when there is no lock.
+    [[nodiscard]] double speed() const noexcept;
+
     // Pixels examined on the last frame, SUMMED across every attempt made for that frame.
     // A frame whose refinement failed and then reacquired is charged for both, because it
     // spent both.
@@ -120,8 +156,16 @@ class ScreenTracker {
     TrackerConfig cfg_;
     ScreenDetector detector_;
 
+    // Corners where the motion model expects the screen `dt_s` seconds after the last lock.
+    [[nodiscard]] std::array<Point2, 4> Predicted(double dt_s) const noexcept;
+    // Fold a newly locked quad into the velocity estimate. `fresh` = no previous lock to compare.
+    void UpdateMotion(const std::array<Point2, 4>& quad, double dt_s, bool fresh) noexcept;
+
     TrackState state_ = TrackState::kSearching;
     std::array<Point2, 4> last_quad_{};
+    std::array<Point2, 4> velocity_{};  // per-corner, pixels per SECOND, smoothed
+    std::int64_t last_ts_ = 0;           // capture time of last_quad_, 0 = unknown
+    double dt_s_ = 0.0;                  // seconds since the last lock, for this frame
 
     // Quarter-turns the ACQUISITION applied to align the geometric quad with the grid.
     //

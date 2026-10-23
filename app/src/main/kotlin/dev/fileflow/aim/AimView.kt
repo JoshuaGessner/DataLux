@@ -162,6 +162,50 @@ class AimView(context: Context, private var cols: Int, private var rows: Int) : 
         postInvalidate()
     }
 
+    private var live: String? = null
+    private var liveProgress = -1f
+    private var liveColour = Color.parseColor("#69F0AE")
+    private val liveTrack = Paint().apply { color = Color.parseColor("#40FFFFFF") }
+    private val liveFill = Paint()
+
+    /**
+     * The live receiver's status, as a card at the TOP with a progress bar (C13b).
+     *
+     * Top, not bottom, because it answers the question the person is actually asking — "is it
+     * working, and how long" — and the bottom block is already the aiming evidence. The sentence
+     * comes from native unchanged; deciding what to say is not this view's job (ADR-0014).
+     * [progress] < 0 hides the bar; [colour] is the bar and accent colour.
+     */
+    fun setLive(message: String?, progress: Float, colour: Int) {
+        live = message
+        liveProgress = progress
+        liveColour = colour
+        postInvalidate()
+    }
+
+    private fun drawLive(canvas: Canvas) {
+        val msg = live ?: return
+        val pad = 28f
+        val lineH = 56f
+        val lines = wrap(msg, 30)
+        val barH = if (liveProgress >= 0f) 22f + pad else 0f
+        val blockH = pad * 2 + lines.size * lineH + barH
+        canvas.drawRect(0f, 0f, width.toFloat(), blockH, textScrim)
+        var ty = pad + 42f
+        for (line in lines) {
+            canvas.drawText(line, pad, ty, bigText)
+            ty += lineH
+        }
+        if (liveProgress >= 0f) {
+            val top = ty - 20f
+            val right = width - pad
+            canvas.drawRect(pad, top, right, top + 22f, liveTrack)
+            liveFill.color = liveColour
+            canvas.drawRect(pad, top, pad + (right - pad) * liveProgress.coerceIn(0f, 1f),
+                            top + 22f, liveFill)
+        }
+    }
+
     fun update(a: Aim, w: Int, h: Int) {
         aim = a
         frameW = w
@@ -177,6 +221,7 @@ class AimView(context: Context, private var cols: Int, private var rows: Int) : 
         val a = aim
         if (a == null) {
             drawTextBlock(canvas, listOf(message ?: ""), emptyList())
+            drawLive(canvas)
             return
         }
 
@@ -261,6 +306,7 @@ class AimView(context: Context, private var cols: Int, private var rows: Int) : 
                 a.meanLuminance, a.midFraction),
         )
         drawTextBlock(canvas, wrap(a.guidance, 30), facts)
+        drawLive(canvas)
     }
 
     /**
@@ -274,7 +320,10 @@ class AimView(context: Context, private var cols: Int, private var rows: Int) : 
         val pad = 28f
         val lineH = 56f
         val factH = 38f
-        val blockH = pad * 2 + lines.size * lineH + facts.size * factH
+        // The banner line counts too. It used to be drawn without being measured, so with a banner
+        // showing the last line of text was pushed 46 px off the bottom of the screen.
+        val bannerH = if (banner != null) 46f else 0f
+        val blockH = pad * 2 + bannerH + lines.size * lineH + facts.size * factH
         val top = height - blockH
         canvas.drawRect(0f, top, width.toFloat(), height.toFloat(), textScrim)
 

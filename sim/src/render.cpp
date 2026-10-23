@@ -1,8 +1,11 @@
 #include <fileflow/sim/render.h>
 
+#include <fileflow/fountain.h>  // SplitMix64: motion phases must be reproducible
+
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <vector>
 
 namespace fileflow::sim {
 namespace {
@@ -66,16 +69,77 @@ std::array<Point2, 4> QuadFromView(const ViewConfig& v, const GridGeometry& g) {
     return out;
 }
 
-Image8 RenderOptical(const CellMatrix& cells, const Homography& grid_to_image,
-                     const OpticalRenderConfig& cfg) {
-    Image8 img(cfg.view.image_width, cfg.view.image_height, cfg.background);
-    auto inv_r = grid_to_image.Inverse();
-    if (!inv_r.ok()) return img;
-    const Homography inv = inv_r.value();
+Point2 DistortPoint(Point2 p, const OpticalRenderConfig& cfg) noexcept {
+    if (cfg.lens_k1 == 0.0) return p;
+    const double cx = 0.5 * static_cast<double>(cfg.view.image_width);
+    const double cy = 0.5 * static_cast<double>(cfg.view.image_height);
+    const double norm = std::hypot(cx, cy);
+    const double ux = (p.x - cx) / norm;
+    const double uy = (p.y - cy) / norm;
+    const double s = 1.0 + cfg.lens_k1 * (ux * ux + uy * uy);
+    return {cx + ux * s * norm, cy + uy * s * norm};
+}
 
+namespace {
+
+// Inverse of DistortPoint by fixed-point iteration: the renderer walks OUTPUT pixels, so it needs
+// to know which undistorted point each recorded pixel saw. Converges in a few steps for the
+// |k1| <= ~0.1 any real corrected lens leaves behind.
+Point2 UndistortPoint(Point2 d, const OpticalRenderConfig& cfg) noexcept {
+    if (cfg.lens_k1 == 0.0) return d;
+    const double cx = 0.5 * static_cast<double>(cfg.view.image_width);
+    const double cy = 0.5 * static_cast<double>(cfg.view.image_height);
+    const double norm = std::hypot(cx, cy);
+    const double dx = (d.x - cx) / norm;
+    const double dy = (d.y - cy) / norm;
+    double ux = dx;
+    double uy = dy;
+    for (int i = 0; i < 6; ++i) {
+        const double s = 1.0 + cfg.lens_k1 * (ux * ux + uy * uy);
+        ux = dx / s;
+        uy = dy / s;
+    }
+    return {cx + ux * norm, cy + uy * norm};
+}
+
+// The emitted luminance at image pixel (x, y) seen through `inv` (image -> grid), before noise.
+// Returns false, with the background in `*out`, where the pixel misses the screen. The hit is
+// reported separately because a dark cell and the background can have the same value.
+bool Shade(const CellMatrix& cells, const Homography& inv, const OpticalRenderConfig& cfg, int x,
+           int y, double* out) {
+    *out = cfg.background;
+    const Point2 g =
+        inv.Apply(UndistortPoint({static_cast<double>(x), static_cast<double>(y)}, cfg));
+    if (!std::isfinite(g.x) || !std::isfinite(g.y) || g.x < 0 || g.y < 0) return false;
+    const auto c = static_cast<std::int64_t>(g.x);
+    const auto r = static_cast<std::int64_t>(g.y);
+    if (c >= cells.cols() || r >= cells.rows()) return false;
+
+    double v = cells.at(static_cast<std::uint32_t>(c), static_cast<std::uint32_t>(r));
     const double gcx = 0.5 * static_cast<double>(cells.cols());
     const double gcy = 0.5 * static_cast<double>(cells.rows());
     const double max_r = std::hypot(gcx, gcy);
+    if (cfg.corner_falloff != 1.0 && max_r > 0.0) {
+        const double rad = std::hypot(g.x - gcx, g.y - gcy) / max_r;
+        v *= 1.0 + (cfg.corner_falloff - 1.0) * rad * rad;
+    }
+    v += cfg.black_lift;
+    if (cfg.glare_lift != 0.0 && cells.cols() > 0) {
+        const double t = 1.0 - std::clamp(g.x / static_cast<double>(cells.cols()), 0.0, 1.0);
+        v += cfg.glare_lift * t;
+    }
+    *out = v;
+    return true;
+}
+
+// Quantise, add the deterministic sensor noise, then the defocus blur -- shared by the static and
+// moving renderers so the two differ ONLY in geometry. `on_screen` marks pixels that saw the
+// screen; noise is applied there alone, as the static renderer always did.
+Image8 Finish(const std::vector<double>& radiance, const std::vector<std::uint8_t>& on_screen,
+              const OpticalRenderConfig& cfg) {
+    const int w = cfg.view.image_width;
+    const int h = cfg.view.image_height;
+    Image8 img(w, h, cfg.background);
 
     std::uint64_t rng = cfg.seed | 1ULL;
     const auto next = [&rng]() {
@@ -84,33 +148,16 @@ Image8 RenderOptical(const CellMatrix& cells, const Homography& grid_to_image,
         rng ^= rng << 17;
         return rng;
     };
-
-    for (int y = 0; y < img.height(); ++y) {
-        for (int x = 0; x < img.width(); ++x) {
-            const Point2 g = inv.Apply({static_cast<double>(x), static_cast<double>(y)});
-            if (!std::isfinite(g.x) || !std::isfinite(g.y)) continue;
-            if (g.x < 0 || g.y < 0) continue;
-            const auto c = static_cast<std::int64_t>(g.x);
-            const auto r = static_cast<std::int64_t>(g.y);
-            if (c >= cells.cols() || r >= cells.rows()) continue;
-
-            double v = cells.at(static_cast<std::uint32_t>(c), static_cast<std::uint32_t>(r));
-
-            if (cfg.corner_falloff != 1.0 && max_r > 0.0) {
-                const double rad = std::hypot(g.x - gcx, g.y - gcy) / max_r;
-                v *= 1.0 + (cfg.corner_falloff - 1.0) * rad * rad;
-            }
-            v += cfg.black_lift;
-            if (cfg.glare_lift != 0.0 && cells.cols() > 0) {
-                const double t =
-                    1.0 - std::clamp(g.x / static_cast<double>(cells.cols()), 0.0, 1.0);
-                v += cfg.glare_lift * t;
-            }
+    for (int y = 0; y < h; ++y) {
+        for (int x = 0; x < w; ++x) {
+            const std::size_t i = static_cast<std::size_t>(y) * static_cast<std::size_t>(w) +
+                                  static_cast<std::size_t>(x);
+            if (!on_screen[i]) continue;
+            double v = radiance[i];
             if (cfg.noise_amplitude > 0.0) {
                 const double u = static_cast<double>(next() % 2001) / 1000.0 - 1.0;
                 v += u * cfg.noise_amplitude;
             }
-
             img.set(x, y, static_cast<std::uint8_t>(std::clamp(v, 0.0, 255.0)));
         }
     }
@@ -139,6 +186,113 @@ Image8 RenderOptical(const CellMatrix& cells, const Homography& grid_to_image,
         return blurred;
     }
     return img;
+}
+
+Homography ViewHomography(const ViewConfig& v, const GridGeometry& g, bool* ok) {
+    const auto quad = QuadFromView(v, g);
+    const auto corners = GridCorners(g);
+    auto h = Homography::FromCorrespondences(std::span<const Point2, 4>(corners),
+                                             std::span<const Point2, 4>(quad));
+    *ok = h.ok();
+    return h.ok() ? h.value() : Homography::Identity();
+}
+
+}  // namespace
+
+Image8 RenderOptical(const CellMatrix& cells, const Homography& grid_to_image,
+                     const OpticalRenderConfig& cfg) {
+    auto inv_r = grid_to_image.Inverse();
+    if (!inv_r.ok()) return Image8(cfg.view.image_width, cfg.view.image_height, cfg.background);
+    const Homography inv = inv_r.value();
+
+    const auto n = static_cast<std::size_t>(cfg.view.image_width) *
+                   static_cast<std::size_t>(cfg.view.image_height);
+    std::vector<double> radiance(n, cfg.background);
+    std::vector<std::uint8_t> on_screen(n, 0);
+    for (int y = 0; y < cfg.view.image_height; ++y) {
+        for (int x = 0; x < cfg.view.image_width; ++x) {
+            const std::size_t i = static_cast<std::size_t>(y) *
+                                      static_cast<std::size_t>(cfg.view.image_width) +
+                                  static_cast<std::size_t>(x);
+            if (Shade(cells, inv, cfg, x, y, &radiance[i])) on_screen[i] = 1;
+        }
+    }
+    return Finish(radiance, on_screen, cfg);
+}
+
+ViewConfig ViewAt(const ViewConfig& base, const MotionConfig& m, double t) noexcept {
+    // Two incommensurate sway frequencies per axis plus tremor, with phases from the seed, so the
+    // path is smooth and never periodic over a transfer.
+    SplitMix64 rng(m.phase_seed);
+    auto phase = [&rng] { return rng.NextDouble() * 2.0 * kPi; };
+    const double p[8] = {phase(), phase(), phase(), phase(), phase(), phase(), phase(), phase()};
+    const double s = m.shake;
+    auto wave = [t](double amp, double hz, double ph) {
+        return amp * std::sin(2.0 * kPi * hz * t + ph);
+    };
+
+    // Triangle wave: constant speed `rate`, turning round at +/-range.
+    auto sweep = [&m, t](double rate) {
+        if (rate == 0.0 || !(m.pan_range > 0.0)) return 0.0;
+        const double period = 4.0 * m.pan_range / std::abs(rate);
+        const double u = std::fmod(t, period) / period;  // [0, 1)
+        const double tri = u < 0.25 ? u * 4.0 : (u < 0.75 ? 2.0 - u * 4.0 : u * 4.0 - 4.0);
+        return m.pan_range * tri;
+    };
+
+    ViewConfig v = base;
+    v.offset_x += sweep(m.pan_x) + s * (wave(0.015, 1.1, p[0]) + wave(0.0025, 9.0, p[1]));
+    v.offset_y += sweep(m.pan_y) + s * (wave(0.010, 0.8, p[2]) + wave(0.0025, 8.3, p[3]));
+    v.roll_deg += s * (wave(0.8, 0.7, p[4]) + wave(0.15, 9.7, p[5]));
+    v.yaw_deg += s * wave(1.0, 0.45, p[6]);
+    v.distance *= 1.0 + s * wave(0.02, 0.5, p[7]);
+    return v;
+}
+
+Image8 RenderMoving(const CellMatrix& cells, const GridGeometry& g,
+                    const OpticalRenderConfig& cfg, const MotionConfig& m, double t_start,
+                    Homography* truth) {
+    const int w = cfg.view.image_width;
+    const int h = cfg.view.image_height;
+    const int k = std::max(1, m.subframes);
+    const int bands = std::clamp(m.bands, 1, std::max(1, h));
+
+    // Truth at the middle of the exposure AND the readout: the one homography a receiver could
+    // most nearly recover. Rows above and below it saw the screen elsewhere.
+    bool ok = false;
+    const Homography mid =
+        ViewHomography(ViewAt(cfg.view, m, t_start + 0.5 * (m.exposure_s + m.readout_s)), g, &ok);
+    if (truth != nullptr) *truth = mid;
+
+    const auto n = static_cast<std::size_t>(w) * static_cast<std::size_t>(h);
+    std::vector<double> radiance(n, 0.0);
+    std::vector<std::uint8_t> hits(n, 0);
+    for (int s = 0; s < k; ++s) {
+        const double ts = t_start + m.exposure_s * (static_cast<double>(s) + 0.5) /
+                                        static_cast<double>(k);
+        for (int b = 0; b < bands; ++b) {
+            const int y0 = b * h / bands;
+            const int y1 = (b + 1) * h / bands;
+            const double row_t = m.readout_s * (0.5 * (y0 + y1)) / static_cast<double>(h);
+            bool vok = false;
+            const Homography hb = ViewHomography(ViewAt(cfg.view, m, ts + row_t), g, &vok);
+            auto inv = hb.Inverse();
+            if (!vok || !inv.ok()) continue;
+            for (int y = y0; y < y1; ++y) {
+                for (int x = 0; x < w; ++x) {
+                    const std::size_t i = static_cast<std::size_t>(y) * static_cast<std::size_t>(w) +
+                                          static_cast<std::size_t>(x);
+                    double v = 0.0;
+                    // A pixel the screen crossed during the exposure is a screen pixel: it carries
+                    // the blur's mix of screen and background, and noise like any other.
+                    if (Shade(cells, inv.value(), cfg, x, y, &v)) hits[i] = 1;
+                    radiance[i] += v;
+                }
+            }
+        }
+    }
+    for (double& v : radiance) v /= static_cast<double>(k);
+    return Finish(radiance, hits, cfg);
 }
 
 Image8 RenderView(const CellMatrix& cells, const GridGeometry& g,

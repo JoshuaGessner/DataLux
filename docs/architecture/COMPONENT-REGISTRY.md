@@ -292,6 +292,11 @@ classification accuracy is directly measurable. EXP-008.
 > Per-stage failure accounting is deliberately split (`geometry_failures` vs
 > `photometric_failures`): the screen not being found and the screen not being readable point
 > at completely different causes.
+>
+> **2026-10-23:** `ffsim --image-path` had drifted off this object and assembled its own chain,
+> so the F45 alignment was invisible to the simulator (F52); it drives `FramePipeline` again.
+> Sub-cell alignment (`Align`) is now a global shift followed by independent corner refinement,
+> scored on every structural cell rather than pilots alone (F51).
 
 ## C08 — Rectifier and cell sampler
 > **Status 2026-08-02: IMPLEMENTED, CPU path only** (`core/src/sampler.cpp`, `CellSampler`).
@@ -376,6 +381,11 @@ rate measurement.
 **Open questions.** OQ-009, OQ-014.
 
 ## C12 — Fountain decoder (and encoder)
+> **Status 2026-10-23: IMPLEMENTED, protocol v2** (`core/src/fountain.cpp`; ADR-0015, F49).
+> Systematic random linear fountain over GF(2), incremental Gaussian elimination, k ≤ 1024.
+> Replaced v1's LT + peeling, whose low-degree repair rows wasted 20–35% of goodput under any
+> frame loss. Scheme decided; RISK-016 / OQ-010 no longer block it.
+
 **Responsibility.** Recover source blocks from any sufficient set of received symbols,
 tolerating loss, duplication and reordering.
 **Inputs.** Packets with sequence and fountain metadata.
@@ -407,6 +417,50 @@ temp-file collision or symlink attack; length mismatch.
 temp-file safety tests.
 **Dependencies.** C12, security rules.
 **Open questions.** Streaming versus final hashing — how early can we detect a bad transfer?
+
+## C13a — Session layer (shared cells↔file path)
+> **Status 2026-10-23: IMPLEMENTED** (`core/src/session.cpp`, `TransmitSession`,
+> `ReceiveSession`; ADR-0015, F52). Not in the original registry; extracted for the same reason
+> as C06a. The frame → header → FEC → fountain chain had four hand-written copies (ffsim,
+> ffreplay, the JNI transmitter, the end-to-end tests), and every receiver was handed the
+> transmitter's manifest. Now there is one transmit path and one receive path, and the receiver
+> is told the grid and nothing else.
+
+**Responsibility.** Transmit: file → manifest and symbol frames → rendered cells. Receive:
+normalised cell samples → header (with erasures, F50) → intra-frame FEC at the header's code rate
+→ in-band manifest or fountain symbol → verified file.
+**Inputs.** Layout; file (TX) or C06a cell samples and capture timestamps (RX).
+**Outputs.** Cell matrices (TX); per-frame outcome, `ReceiveStats`, verified file (RX).
+**Interface.** `TransmitSession::Next(CellMatrix*)`; `ReceiveSession::Ingest(samples, ts)`,
+`complete()`, `Finish()`.
+**Threading.** One session per thread; no internal threading.
+**Performance.** Per frame: one header decode (two when erasures were supplied and failed),
+one FEC decode, one fountain ingest.
+**Memory.** Symbols read before the manifest are held, bounded at 4096 frames by default.
+**Failure modes.** First valid manifest owns the session — a foreign transmitter whose manifest
+arrives first wins (T8 behaviour, by design); buffer exhaustion if no manifest arrives for 4096
+readable frames.
+**Tests.** `test_session.cpp`; `test_end_to_end.cpp` drives every channel through it.
+**Dependencies.** C10, C11, C12, C13.
+**Open questions.** OQ-037 (symbol size still fixed by the manifest).
+
+## C13b — Live receiver (camera frames → verified file + what to tell the person)
+> **Status 2026-10-23: IMPLEMENTED, desktop-tested, not yet run on a phone**
+> (`core/src/live.cpp` `LiveReceiver`; `platform/android/src/jni_receiver.cpp`;
+> `app/.../rx/LiveDecoder.kt`; F53, F54). What the Receive button runs.
+
+**Responsibility.** Drive C06a + C13a on each camera frame and reduce their state to one phase,
+one hint (point at screen / hold steadier / not readable) and one sentence for the person holding
+the phone; deliver the file once, and only once, it verifies.
+**Inputs.** Y plane + capture timestamp; grid; exposure (for the blur estimate).
+**Outputs.** `LiveStatus` per frame; the verified file.
+**Threading.** Not thread-safe; `LiveDecoder` feeds it from one worker and DROPS frames that
+arrive while it is busy, so the status never lags the hand.
+**Failure modes.** A slow phone reads fewer frames — slower, never wrong. The motion thresholds
+are simulated (`[HYP]`) and need a real handheld capture.
+**Tests.** `test_live.cpp` on rendered handheld frames: completes under shake, pauses and resumes
+without loss, asks to hold steadier only when reading suffers.
+**Dependencies.** C06a, C13a, C06 (`speed()`).
 
 ## C14 — Adaptive link controller
 > **Status 2026-08-03: DECISION FUNCTION IMPLEMENTED. ACTUATION BLOCKED BY THE PROTOCOL.**
