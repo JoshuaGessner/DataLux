@@ -152,6 +152,20 @@ TEST(ColorTransfer, ColourThatBleedsBetweenCellsStillVerifies) {
     EXPECT_LT(o.frames, 20) << "and in about the frames a clean camera needs";
 }
 
+TEST(ColorTransfer, FourColoursSurviveBlurThatDefeatsEight) {
+    // Colour blurred over about two-thirds of a cell (chroma blur 2 here, with cells three chroma
+    // pixels wide): eight colours cannot be told apart, four -- each pair two channels apart --
+    // still can (F66). This is what the Fast setting is for.
+    sim::ColorChannelConfig camera;
+    camera.chroma_blur = 2;
+    const std::vector<std::uint8_t> file = File(60000);
+    const Outcome four = Transfer(file, ModulationProfile::kM3FourColor, camera, 120);
+    const Outcome eight = Transfer(file, ModulationProfile::kM5EightColor, camera, 40);
+    EXPECT_TRUE(four.verified) << "four colours should survive this blur";
+    EXPECT_FALSE(eight.verified) << "if eight now survive it too, this test needs a harder case";
+    EXPECT_LT(four.frames, 31) << "and still beat black and white's 31 frames";
+}
+
 TEST(ColorTransfer, AnM0ReceiverWithoutColourRefusesM5FramesRatherThanMisreadingThem) {
     // A receiver given no chroma must call an M5 frame unsupported, never decode it as M0.
     const FrameLayout layout = FrameLayout::Create(kGrid, LayoutConfig{}).value();
