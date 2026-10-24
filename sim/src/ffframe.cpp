@@ -211,6 +211,18 @@ int main(int argc, char** argv) {
     const IntraFec::Stats fs = rs.last_fec_stats();
     std::printf("decode: %s; FEC worst codeword used %zu of %u parity bytes\n",
                 std::string(FrameOutcomeName(outcome)).c_str(), fs.worst_budget_used, hd.fec_nsym);
+    const ColorModulator mod(layout, hd.profile);
+    const std::size_t bits = mod.bits_per_cell();
+    SoftSymbolBuffer soft;
+    ColorDiagnostics diag;
+    mod.DemodulatePayload(cf.cell_rgb, &soft, &diag);
+    std::printf("colours %.0f apart, noise %.1f (after bleed), %zu cells sampled\n",
+                diag.centroid_spread, diag.noise_sigma, diag.cells);
+    std::printf("learned:");
+    for (std::size_t c = 0; c < (bits == 2 ? 4U : 8U); ++c) {
+        std::printf(" [%.0f %.0f %.0f]", diag.centroids[c][0], diag.centroids[c][1], diag.centroids[c][2]);
+    }
+    std::printf("\n");
 
     // ---- what the sender drew ----
     std::vector<std::uint8_t> file(test_bytes);
@@ -242,18 +254,6 @@ int main(int argc, char** argv) {
     }
 
     // ---- compare ----
-    const ColorModulator mod(layout, hd.profile);
-    const std::size_t bits = mod.bits_per_cell();
-    SoftSymbolBuffer soft;
-    ColorDiagnostics diag;
-    mod.DemodulatePayload(cf.cell_rgb, &soft, &diag);
-    std::printf("colours %.0f apart, noise %.1f (after bleed), %zu cells sampled\n",
-                diag.centroid_spread, diag.noise_sigma, diag.cells);
-    std::printf("learned:");
-    for (std::size_t c = 0; c < (bits == 2 ? 4U : 8U); ++c) {
-        std::printf(" [%.0f %.0f %.0f]", diag.centroids[c][0], diag.centroids[c][1], diag.centroids[c][2]);
-    }
-    std::printf("\n");
 
     const auto& pay = layout.payload_cells();
     std::array<std::array<std::size_t, 8>, 8> confusion{};

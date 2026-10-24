@@ -57,8 +57,16 @@ data class Aim(
      */
     val tiles: DoubleArray,
     val tileCols: Int,
+    /** The frame analysed, which the bounding box is in. */
+    val frameWidth: Int = 0,
+    val frameHeight: Int = 0,
 ) {
     val clipped: Boolean get() = clippedLeft || clippedTop || clippedRight || clippedBottom
+
+    /** How much of the picture the screen fills along its tighter axis, 0..1; 0 = unknown. */
+    val fill: Double
+        get() = if (frameWidth <= 0 || frameHeight <= 0 || bboxW <= 0 || bboxH <= 0) 0.0
+        else maxOf(bboxW.toDouble() / frameWidth, bboxH.toDouble() / frameHeight)
     val ready: Boolean get() = verdict == AimVerdict.Ready
 }
 
@@ -113,6 +121,8 @@ class AimAnalyser {
             whiteLevel = slots[Slot.WhiteLevel.ordinal],
             tiles = tiles.copyOf(),
             tileCols = TILE_COLS,
+            frameWidth = width,
+            frameHeight = height,
         )
     }
 

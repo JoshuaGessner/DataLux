@@ -746,6 +746,7 @@ class CaptureActivity : AppCompatActivity() {
                 SessionLog.i(LIVE_TAG, "lens at its closest focus, nothing arriving: zoom %.2fx"
                     .format(rec.zoom))
             }
+            fillPicture(a, now)
             if (now - lastReadMs > REFOCUS_AFTER_MS && now - lastRefocusMs > REFOCUS_EVERY_MS &&
                 !pinnedAtClosest()
             ) {
@@ -787,6 +788,36 @@ class CaptureActivity : AppCompatActivity() {
 
         private val baseIso = intent.getIntExtra("iso", CameraRecorder.DEFAULT_ISO)
         @Volatile private var screenSeenMs = 0L
+
+        /**
+         * Zoom so the sender's screen fills the picture, wherever the phone is held.
+         *
+         * Cells need room, and colour most of all: the camera keeps colour at half the resolution
+         * of brightness, so at 6-9 px a cell -- a Pixel 8 held 20 cm from the sender -- each cell
+         * is 3-4 colour pixels and its neighbours bleed in. Eight colours then failed outright
+         * (noise 43-82 against the ~30 they need) while the Galaxy, held at 11-14 cm, read them
+         * at 10-11 px a cell. Zoom is a crop taken BEFORE the camera halves the colour, so it buys
+         * colour resolution per cell, and it lets the phone sit where its lens focuses.
+         *
+         * In when the screen fills under [FILL_LOW] of the picture, towards [FILL_TARGET]; out a
+         * step when the screen runs off the edge. Only on a screen the decoder has verified, and
+         * one step at a time, so tracking settles between steps.
+         */
+        private fun fillPicture(a: dev.fileflow.aim.Aim, now: Long) {
+            if (now - screenSeenMs > STEER_WINDOW_MS || now - lastZoomMs < FILL_ZOOM_EVERY_MS) return
+            val fill = a.fill
+            val target = when {
+                a.clipped && rec.zoom > 1.01f -> rec.zoom / ZOOM_STEP
+                !a.clipped && fill > 0.1 && fill < FILL_LOW ->
+                    rec.zoom * (FILL_TARGET / fill).toFloat().coerceAtMost(FILL_MAX_STEP)
+                else -> return
+            }
+            if (rec.setZoom(target)) {
+                lastZoomMs = now
+                SessionLog.i(LIVE_TAG, "screen fills %.0f%% of the picture%s: zoom %.2fx".format(
+                    fill * 100, if (a.clipped) " and runs off it" else "", rec.zoom))
+            }
+        }
 
         /** The lens is as close as it goes: AF cannot help, only moving back can. */
         private fun pinnedAtClosest(): Boolean {
@@ -1296,6 +1327,11 @@ class CaptureActivity : AppCompatActivity() {
         /** Saved diagnosis frames this far apart, so three are three different moments. */
         private const val DUMP_SPACING_MS = 300L
         private const val ZOOM_STEP = 1.2f
+        /** Zoom to fill: in below this much of the picture, towards that, at most this per step. */
+        private const val FILL_LOW = 0.7
+        private const val FILL_TARGET = 0.85
+        private const val FILL_MAX_STEP = 1.35f
+        private const val FILL_ZOOM_EVERY_MS = 2000L
         private const val WHITE_CEILING = 245.0
         private const val WHITE_FLOOR = 170.0
         /** A payload decoded this recently counts as data arriving. */
