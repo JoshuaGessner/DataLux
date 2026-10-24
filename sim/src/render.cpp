@@ -1,6 +1,7 @@
 #include <fileflow/sim/render.h>
 
 #include <fileflow/fountain.h>  // SplitMix64: motion phases must be reproducible
+#include <fileflow/modulation.h>  // ColorChannelOn
 
 #include <algorithm>
 #include <cmath>
@@ -200,6 +201,69 @@ Homography ViewHomography(const ViewConfig& v, const GridGeometry& g, bool* ok) 
 }
 
 }  // namespace
+
+YuvImage RenderColorView(const CellMatrix& cells, const GridGeometry& g,
+                         const OpticalRenderConfig& cfg, const ColorChannelConfig& color,
+                         Homography* used_transform) {
+    // Each display channel through the optics on its own: blur, falloff, glare and noise apply
+    // to light, channel by channel, before the sensor's filters see it.
+    std::array<Image8, 3> plane;
+    for (int k = 0; k < 3; ++k) {
+        CellMatrix ch(cells.cols(), cells.rows());
+        for (std::uint32_t r = 0; r < cells.rows(); ++r) {
+            for (std::uint32_t c = 0; c < cells.cols(); ++c) {
+                ch.set(c, r, ColorChannelOn(cells.at(c, r), k) ? 255 : 0);
+            }
+        }
+        OpticalRenderConfig one = cfg;
+        one.seed = cfg.seed + static_cast<std::uint64_t>(k) * 7919U;
+        plane[static_cast<std::size_t>(k)] =
+            RenderView(ch, g, one, k == 0 ? used_transform : nullptr);
+    }
+
+    const int w = cfg.view.image_width;
+    const int h = cfg.view.image_height;
+    YuvImage out{Image8(w, h), Image8(w / 2, h / 2), Image8(w / 2, h / 2)};
+    std::vector<double> us(static_cast<std::size_t>(w) * static_cast<std::size_t>(h));
+    std::vector<double> vs(us.size());
+    for (int y = 0; y < h; ++y) {
+        for (int x = 0; x < w; ++x) {
+            std::array<double, 3> cam{};
+            for (std::size_t i = 0; i < 3; ++i) {
+                double acc = 0.0;
+                for (std::size_t j = 0; j < 3; ++j) {
+                    acc += color.mix[i][j] * static_cast<double>(plane[j].at(x, y));
+                }
+                cam[i] = std::clamp(acc * color.gain[i], 0.0, 255.0);
+            }
+            const double yy = 0.299 * cam[0] + 0.587 * cam[1] + 0.114 * cam[2];
+            out.y.set(x, y, static_cast<std::uint8_t>(std::lround(std::clamp(yy, 0.0, 255.0))));
+            const std::size_t i = static_cast<std::size_t>(y) * static_cast<std::size_t>(w) +
+                                  static_cast<std::size_t>(x);
+            us[i] = 128.0 - 0.168736 * cam[0] - 0.331264 * cam[1] + 0.5 * cam[2];
+            vs[i] = 128.0 + 0.5 * cam[0] - 0.418688 * cam[1] - 0.081312 * cam[2];
+        }
+    }
+    // 4:2:0: each chroma sample the mean of its 2x2 block.
+    for (int y = 0; y < h / 2; ++y) {
+        for (int x = 0; x < w / 2; ++x) {
+            double su = 0.0;
+            double sv = 0.0;
+            for (int dy = 0; dy < 2; ++dy) {
+                for (int dx = 0; dx < 2; ++dx) {
+                    const std::size_t i =
+                        static_cast<std::size_t>(2 * y + dy) * static_cast<std::size_t>(w) +
+                        static_cast<std::size_t>(2 * x + dx);
+                    su += us[i];
+                    sv += vs[i];
+                }
+            }
+            out.u.set(x, y, static_cast<std::uint8_t>(std::lround(std::clamp(su / 4.0, 0.0, 255.0))));
+            out.v.set(x, y, static_cast<std::uint8_t>(std::lround(std::clamp(sv / 4.0, 0.0, 255.0))));
+        }
+    }
+    return out;
+}
 
 Image8 RenderOptical(const CellMatrix& cells, const Homography& grid_to_image,
                      const OpticalRenderConfig& cfg) {

@@ -18,6 +18,8 @@ class Transmitter private constructor(
     val rows: Int,
     /** The name the receiver is told — a display hint, which it sanitises. */
     val fileName: String,
+    /** Eight colours, three bits a cell (M5), rather than black and white (F62). */
+    val colour: Boolean = false,
 ) : AutoCloseable {
 
     /** Size of the file being sent, in bytes. */
@@ -52,19 +54,23 @@ class Transmitter private constructor(
             payloadBytes: Int = 128 * 1024,
             seed: Long = 5,
             name: String = TEST_FILE_NAME,
+            colour: Boolean = false,
         ): Transmitter = Transmitter(
             NativeTransmitter.open(
-                cols, rows, nsym, payloadBytes, seed, name.toByteArray(Charsets.UTF_8),
+                cols, rows, nsym, payloadBytes, seed, name.toByteArray(Charsets.UTF_8), colour,
             ),
-            cols, rows, name,
+            cols, rows, name, colour,
         )
 
         /** Sends a real file: its bytes, and the name the receiver will save it under. */
-        fun openFile(cols: Int, rows: Int, nsym: Int, data: ByteArray, name: String): Transmitter =
-            Transmitter(
-                NativeTransmitter.openFile(cols, rows, nsym, data, name.toByteArray(Charsets.UTF_8)),
-                cols, rows, name,
-            )
+        fun openFile(
+            cols: Int, rows: Int, nsym: Int, data: ByteArray, name: String, colour: Boolean = false,
+        ): Transmitter = Transmitter(
+            NativeTransmitter.openFile(
+                cols, rows, nsym, data, name.toByteArray(Charsets.UTF_8), colour,
+            ),
+            cols, rows, name, colour,
+        )
 
         /** What the receiver saves the generated test file as. */
         const val TEST_FILE_NAME = "fileflow-test.bin"
@@ -116,9 +122,10 @@ class Transmitter private constructor(
 internal object NativeTransmitter {
     @JvmStatic external fun open(
         cols: Int, rows: Int, nsym: Int, payloadBytes: Int, seed: Long, nameUtf8: ByteArray,
+        colour: Boolean,
     ): Long
     @JvmStatic external fun openFile(
-        cols: Int, rows: Int, nsym: Int, data: ByteArray, nameUtf8: ByteArray,
+        cols: Int, rows: Int, nsym: Int, data: ByteArray, nameUtf8: ByteArray, colour: Boolean,
     ): Long
     @JvmStatic external fun symbolBytes(handle: Long): Int
     @JvmStatic external fun fileSize(handle: Long): Long

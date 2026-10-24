@@ -189,7 +189,11 @@ Result<FramePipeline> FramePipeline::Create(const FrameLayout& layout, PipelineC
     for (std::uint32_t r = 0; r < g.rows; ++r) {
         for (std::uint32_t c = 0; c < g.cols; ++c) {
             const CellRole role = layout.role(c, r);
-            if (role == CellRole::kPayload || role == CellRole::kHeader) continue;
+            // Colour pilots too: under M5 they show colours, not the M0 levels rendered here.
+            if (role == CellRole::kPayload || role == CellRole::kHeader ||
+                role == CellRole::kColorPilot) {
+                continue;
+            }
             const Anchor a{c, r, structure.at(c, r) == kLevelBright};
             (role == CellRole::kPilot ? pilots : edges).push_back(a);
         }
@@ -210,8 +214,73 @@ Result<FramePipeline> FramePipeline::Create(const FrameLayout& layout, PipelineC
 }
 
 
+std::vector<double> FramePipeline::SampleColor(const ChromaPlanes& chroma, const Homography& h,
+                                               const std::vector<double>& raw_y,
+                                               const PhotometricField& field) const {
+    const std::size_t n = raw_y.size();
+    std::vector<double> rgb(n * 3, std::nan(""));
+
+    // Grid to CHROMA pixels: chroma pixel j covers luma pixels 2j and 2j+1, whose centres average
+    // to 2j + 0.5, so x_chroma = (x_luma - 0.5) / 2 -- folded into the homography's rows.
+    const auto& m = h.m();
+    std::array<double, 9> cm{};
+    for (std::size_t k = 0; k < 3; ++k) {
+        cm[k] = 0.5 * m[k] - 0.25 * m[6 + k];
+        cm[3 + k] = 0.5 * m[3 + k] - 0.25 * m[6 + k];
+        cm[6 + k] = m[6 + k];
+    }
+    const Homography hc(cm);
+    const std::vector<double> u = sampler_.Sample(chroma.u, hc);
+    const std::vector<double> v = sampler_.Sample(chroma.v, hc);
+    if (u.size() != n || v.size() != n) return rgb;
+
+    // Camera RGB, BT.601 full range -- what Camera2's YUV_420_888 carries. Exactness does not
+    // matter: the demodulator learns the colours per frame and needs only that they differ.
+    std::array<std::vector<double>, 3> ch;
+    for (auto& c : ch) c.assign(n, std::nan(""));
+    for (std::size_t i = 0; i < n; ++i) {
+        const double y = raw_y[i];
+        const double cb = u[i] - 128.0;
+        const double cr = v[i] - 128.0;
+        if (std::isnan(y) || std::isnan(cb) || std::isnan(cr)) continue;
+        ch[0][i] = y + 1.402 * cr;
+        ch[1][i] = y - 0.344136 * cb - 0.714136 * cr;
+        ch[2][i] = y + 1.772 * cb;
+    }
+
+    // Shading falls on all three channels alike, so each is normalised against the LUMA field's
+    // local references -- the same erasures, the same correction. Then each channel gets its own
+    // black and white from the pilots, because the camera's white balance is wherever it was
+    // locked, and a white cell reads nothing like (255, 255, 255) through it.
+    const GridGeometry g = layout_->geometry();
+    for (std::size_t k = 0; k < 3; ++k) {
+        const std::vector<double> norm = field.Normalise(ch[k]);
+        std::vector<double> bright;
+        std::vector<double> dark;
+        for (const std::uint32_t idx : layout_->pilot_cells()) {
+            if (idx >= norm.size() || std::isnan(norm[idx])) continue;
+            const bool is_bright = layout_->PilotValue(idx % g.cols, idx / g.cols) == kLevelBright;
+            (is_bright ? bright : dark).push_back(norm[idx]);
+        }
+        if (bright.empty() || dark.empty()) return rgb;
+        auto median = [](std::vector<double>& s) {
+            const auto mid = static_cast<std::ptrdiff_t>(s.size() / 2);
+            std::nth_element(s.begin(), s.begin() + mid, s.end());
+            return s[static_cast<std::size_t>(mid)];
+        };
+        const double white = median(bright);
+        const double black = median(dark);
+        // A channel with no contrast between the pilots carries nothing: leave it erased.
+        if (!(white - black > 8.0)) return rgb;
+        for (std::size_t i = 0; i < n; ++i) {
+            if (!std::isnan(norm[i])) rgb[i * 3 + k] = (norm[i] - black) / (white - black) * 255.0;
+        }
+    }
+    return rgb;
+}
+
 CapturedFrame FramePipeline::Process(const ImageView8& img, std::uint64_t index,
-                                     std::int64_t timestamp_ns) {
+                                     std::int64_t timestamp_ns, const ChromaPlanes* chroma) {
     const GridGeometry g = layout_->geometry();
 
     CapturedFrame out;
@@ -265,6 +334,9 @@ CapturedFrame FramePipeline::Process(const ImageView8& img, std::uint64_t index,
         pf.nodes_above_residual(cfg_.photometric.max_pilot_residual_ratio);
 
     out.cell_samples = pf.Normalise(raw);
+    if (chroma != nullptr && !chroma->u.empty() && !chroma->v.empty()) {
+        out.cell_rgb = SampleColor(*chroma, h, raw, pf);
+    }
     out.phase = FramePhase::kClean;  // temporal classification is component C07, not here
     last_ok_ = true;
     ++diag_.frames_decoded;

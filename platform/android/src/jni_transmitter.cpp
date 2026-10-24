@@ -83,11 +83,16 @@ struct Prepared {
     std::unique_ptr<fileflow::FrameLayout> layout;
     fileflow::GridGeometry geom;
     std::size_t symbol_size = 0;
+    fileflow::ModulationProfile profile = fileflow::ModulationProfile::kM0BinaryLuminance;
 };
 
 // Everything about a transmit session that does not depend on the file. Throws and returns nullopt
 // on a configuration the grid cannot carry.
-std::optional<Prepared> Prepare(JNIEnv* env, jint cols, jint rows, jint nsym) {
+//
+// `colour` selects M5, three bits a cell in eight colours (F62); otherwise M0, black and white.
+std::optional<Prepared> Prepare(JNIEnv* env, jint cols, jint rows, jint nsym, jboolean colour) {
+    const auto profile = colour ? fileflow::ModulationProfile::kM5EightColor
+                                : fileflow::ModulationProfile::kM0BinaryLuminance;
     if (cols <= 0 || rows <= 0) {
         ThrowIllegalState(env, "cols and rows must both be positive");
         return std::nullopt;
@@ -120,11 +125,12 @@ std::optional<Prepared> Prepare(JNIEnv* env, jint cols, jint rows, jint nsym) {
         return std::nullopt;
     }
 
-    std::size_t symbol_size = probe_mod.payload_capacity_bytes();
+    const std::size_t capacity = fileflow::PayloadCapacityBytes(*layout, profile);
+    std::size_t symbol_size = capacity;
     if (nsym > 0) {
         fileflow::IntraFecParams fp;
         fp.nsym = static_cast<std::size_t>(nsym);
-        auto f = fileflow::IntraFec::Create(probe_mod.payload_capacity_bytes(), fp);
+        auto f = fileflow::IntraFec::Create(capacity, fp);
         if (!f.ok()) {
             ThrowIllegalState(env, std::string("intra-frame FEC: ") +
                                        std::string(fileflow::ErrorName(f.error())));
@@ -136,7 +142,7 @@ std::optional<Prepared> Prepare(JNIEnv* env, jint cols, jint rows, jint nsym) {
         ThrowIllegalState(env, "this grid carries no payload");
         return std::nullopt;
     }
-    return Prepared{std::move(layout), geom, symbol_size};
+    return Prepared{std::move(layout), geom, symbol_size, profile};
 }
 
 // Opens the session over `payload`. Throws and returns 0 on failure.
@@ -155,6 +161,7 @@ jlong Start(JNIEnv* env, Prepared prep, std::vector<std::uint8_t> payload, std::
 
     fileflow::TransmitConfig tc;
     tc.fec_nsym = static_cast<std::size_t>(nsym);
+    tc.profile = prep.profile;
     auto tx_r = fileflow::TransmitSession::Create(*handle->layout, handle->payload, std::move(name),
                                                   session_id, tc);
     if (!tx_r.ok()) {
@@ -181,8 +188,8 @@ extern "C" {
 JNIEXPORT jlong JNICALL
 Java_dev_fileflow_tx_NativeTransmitter_open(JNIEnv* env, jclass /*unused*/, jint cols, jint rows,
                                            jint nsym, jint payload_bytes, jlong seed,
-                                           jbyteArray name_utf8) {
-    auto prep = Prepare(env, cols, rows, nsym);
+                                           jbyteArray name_utf8, jboolean colour) {
+    auto prep = Prepare(env, cols, rows, nsym, colour);
     if (!prep) return 0;
     const std::size_t want = payload_bytes > 0 ? static_cast<std::size_t>(payload_bytes)
                                                : prep->symbol_size * 64u;
@@ -198,12 +205,12 @@ Java_dev_fileflow_tx_NativeTransmitter_open(JNIEnv* env, jclass /*unused*/, jint
 JNIEXPORT jlong JNICALL
 Java_dev_fileflow_tx_NativeTransmitter_openFile(JNIEnv* env, jclass /*unused*/, jint cols,
                                                jint rows, jint nsym, jbyteArray data,
-                                               jbyteArray name_utf8) {
+                                               jbyteArray name_utf8, jboolean colour) {
     if (data == nullptr) {
         ThrowIllegalState(env, "no file data");
         return 0;
     }
-    auto prep = Prepare(env, cols, rows, nsym);
+    auto prep = Prepare(env, cols, rows, nsym, colour);
     if (!prep) return 0;
     const jsize n = env->GetArrayLength(data);
     std::vector<std::uint8_t> payload;

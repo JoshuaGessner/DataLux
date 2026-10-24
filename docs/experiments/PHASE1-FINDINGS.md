@@ -2467,6 +2467,60 @@ build clears logcat and the Pixel's side of this test was lost that way.
 
 ---
 
+## F62 — Eight colours: three bits a cell, because the frame rate is not where the gap is `[HYP]`
+
+**Where 34 KB/s goes.** Steady draws 120x260 at 20 states/s with M0, 1 bit a cell: 29,057
+payload cells, ~3.1 KB of file per state after RS (nsym 32, rate 0.875), so **62 KB/s if every
+state were read once**. F61's transfer ran at ~40 KB/s while the screen filled the picture: about
+13 states/s reaching the fountain. The code rate is not the gap, and neither is the decoder (every
+frame decoded). Two terms are: bits per state, and states lost to unsynchronised capture (F60).
+
+**What others do** (published figures, each under its own conditions; units are kilo**bits**):
+
+| System | Rate | How |
+| --- | --- | --- |
+| libcimbar / CameraFileCopy (open source) | ~850 kbit/s (~106 KB/s); 5x5 "mode S" >1 Mbit/s (beta) | 1024x1024 frame, 8x8 tiles, 16 shapes x 4 colours = 6 bits a tile, RS 30/155, wirehair fountain; 8 colours tried and dropped as inconsistent |
+| RescQR (IEEE TMC 2023) | 400+ kbit/s | standard QR codes, recovery of damaged frames |
+| COBRA (MobiSys 2012) | up to 225 kbit/s | colour barcode streaming |
+| LightSync (MobiCom 2013) | ~2x COBRA | decodes torn, mixed-state captures instead of discarding them |
+| RainBar (2016) | up to 958 kbit/s reported | colour, frame-level sync per row band |
+
+FileFlow at F61: 33.9 KB/s = **271 kbit/s** wall clock, 320 kbit/s while receiving. The
+"400 kbps" cited for others is kilobits; the app's display is kilobytes. The real gap is to
+libcimbar's ~106 KB/s, and the lever it uses is bits per tile: 6 against our 1.
+
+**M5** (`kM5EightColor`): every payload cell's red, green and blue are independent bits. Header,
+markers, pilots and the boundary stay M0 black and white, so detection, tracking, alignment and
+the photometric field are untouched and a receiver reads the profile before it needs it. The
+reserved colour pilots show the eight colours in turn. The receiver samples Camera2's chroma
+planes per cell, normalises each channel against the luma field and then against its own
+black/white pilots (white balance is locked wherever it was), seeds eight centroids from the
+colour pilots, settles them with three rounds of k-means over the frame's payload cells (pilots
+anchored, so no two colours can swap), and emits max-log LLRs per bit. Nothing about the
+panel's primaries or the sensor's filters is assumed.
+
+Simulated, 120x200, through a camera model with 15-20% channel crosstalk, a tinted white and
+4:2:0 chroma: a 60 KB file verifies in **11 states against M0's 31** (7,136- against 2,230-byte
+symbols). It holds at blur 2 (where M0 needed 47 states) and at three times the crosstalk; both
+fail together at blur 3. `ColorTransfer.DISABLED_MarginTable` has the table.
+
+**Unknown until a real capture:** whether a phone panel and camera separate eight colours as well
+as the model does -- libcimbar dropped 8 colours for 4 on exactly that, though with auto white
+balance and no per-frame learning. The receiver now logs the learned colours' separation and
+noise ("colours N apart, noise M") and the distinct states/s it reads, which answers it. If blue
+or a near-pair fails, a four-colour subset (two bits a cell) is the fallback.
+
+Presets: **Fast** (new default) = M5 at 20 states/s, **Fastest** = M5 at 30, **Steady** = M0 at
+20. Live exposure 8 → 4 ms: fewer captures straddle a state change (F60), and the servo had
+ISO at its floor at 8 ms.
+
+Sources: [libcimbar](https://github.com/sz3/libcimbar),
+[libcimbar PERFORMANCE](https://raw.githubusercontent.com/sz3/libcimbar/master/PERFORMANCE.md),
+[RescQR](https://dl.acm.org/doi/abs/10.1109/TMC.2023.3277212),
+[COBRA](https://dl.acm.org/doi/10.1145/2307636.2307645).
+
+---
+
 ## What has NOT been validated
 
 To be explicit, since a working simulator invites over-confidence.

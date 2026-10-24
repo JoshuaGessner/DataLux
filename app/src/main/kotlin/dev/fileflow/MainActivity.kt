@@ -64,6 +64,7 @@ class MainActivity : AppCompatActivity() {
             .putExtra("cols", speed.cols)
             .putExtra("rows", speed.rows)
             .putExtra("stateRate", speed.statesPerSecond)
+            .putExtra("colour", speed.colour)
         if (uri != null) {
             // The picker's grant covers this activity; the flag passes it on to the transmitter.
             i.setData(uri).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
@@ -521,12 +522,12 @@ class MainActivity : AppCompatActivity() {
                 "• If it pauses, just aim back: nothing received so far is lost."
 
         private const val SPEED_HELP =
-            "Steady — large cells at 20 frames a second. Works with any phone's camera and is " +
-                "the easiest to hold.\n\n" +
-                "Fast — the same cells at 30 frames a second. Needs a receiver whose camera runs " +
-                "at 60 fps (most recent phones).\n\n" +
-                "Fastest — smaller cells at 30 frames a second. Hold the receiver steady, with the " +
-                "sending screen filling its picture.\n\n" +
+            "Fast — eight colours, three times the data of black and white, at 20 frames a " +
+                "second.\n\n" +
+                "Fastest — colour at 30 frames a second, for a receiver whose camera runs at 50–60 " +
+                "fps (most recent phones).\n\n" +
+                "Steady — black and white. Slower, but for a camera or lighting colour doesn't " +
+                "survive.\n\n" +
                 "Only the sending phone needs this setting; the receiver works it out."
     }
 }

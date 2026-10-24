@@ -81,6 +81,11 @@ class FrameLayout {
     [[nodiscard]] const std::vector<std::uint32_t>& header_cells() const noexcept {
         return header_;
     }
+    // Reserved colour-reference cells, raster order. M0 draws them as ordinary pilots; M5 shows
+    // the eight colours on them in turn, so the receiver has every colour's reference in-frame.
+    [[nodiscard]] const std::vector<std::uint32_t>& color_pilot_cells() const noexcept {
+        return color_pilots_;
+    }
     [[nodiscard]] const std::vector<std::uint32_t>& pilot_cells() const noexcept {
         return pilots_;
     }
@@ -116,6 +121,7 @@ class FrameLayout {
     std::vector<CellRole> roles_;
     std::vector<std::uint32_t> payload_;
     std::vector<std::uint32_t> header_;
+    std::vector<std::uint32_t> color_pilots_;
     std::vector<std::uint32_t> pilots_;
 };
 

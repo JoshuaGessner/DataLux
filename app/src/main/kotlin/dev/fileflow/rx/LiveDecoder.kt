@@ -54,6 +54,11 @@ data class LiveStatus(
     val payloadFrames: Long,
     /** Verified-file bytes per second right now, smoothed in native (TransferRate); 0 = none. */
     val bytesPerSecond: Double,
+    /** Distinct display states whose header has read so far: the state rate actually seen. */
+    val distinctStates: Long,
+    /** Last colour frame: distance between its two closest colours, and their noise (0..255). */
+    val colorSpread: Double,
+    val colorNoise: Double,
     /** The grid this status was decoded against: the detected one once [gridKnown]. */
     val cols: Int,
     val rows: Int,
@@ -117,6 +122,11 @@ class LiveDecoder(
         val busy = AtomicBoolean(false)
         val slots = DoubleArray(NativeReceiver.slotCount())
         var frame: ByteBuffer? = null
+        var u: ByteBuffer? = null
+        var v: ByteBuffer? = null
+        /** Strides of the chroma copied with the current frame; 0 = no colour this frame. */
+        var chromaRowStride = 0
+        var chromaPixelStride = 0
         val worker = Executors.newSingleThreadExecutor { r ->
             Thread(r, "ff-live-decode-$index").apply { priority = Thread.MAX_PRIORITY - 1 }
         }
@@ -138,6 +148,8 @@ class LiveDecoder(
     private val decoded = java.util.concurrent.atomic.AtomicLong()
     private val decodeNs = java.util.concurrent.atomic.AtomicLong()
     private val windowStartNs = java.util.concurrent.atomic.AtomicLong(System.nanoTime())
+    /** Distinct states at the last telemetry line, for the states-seen rate between lines. */
+    @Volatile private var lastDistinct = 0L
     private val closed = AtomicBoolean(false)
     private val nativeLock = Any()
 
@@ -160,7 +172,10 @@ class LiveDecoder(
      * the moment the callback returns) into an idle lane — or drops it if every lane is busy.
      * Returns whether it was taken.
      */
-    fun offer(y: ByteBuffer, width: Int, height: Int, rowStride: Int, timestampNs: Long): Boolean {
+    fun offer(
+        y: ByteBuffer, width: Int, height: Int, rowStride: Int, timestampNs: Long,
+        chroma: dev.fileflow.capture.CameraRecorder.Chroma? = null,
+    ): Boolean {
         if (width <= 0 || height <= 0 || rowStride < width) return false
         // The camera reports stride and size; a buffer shorter than they imply would make the copy
         // below throw ON THE CAMERA THREAD and take the app down mid-transfer. Refuse the frame.
@@ -194,6 +209,14 @@ class LiveDecoder(
                 }
             }
             dst.flip()
+            // Colour, copied as the camera laid it out (native packs it): two bulk copies of a
+            // quarter of the luma each, for the M5 sender that needs them.
+            lane.chromaRowStride = 0
+            if (chroma != null) {
+                lane.u = copyPlane(chroma.u, lane.u).also { lane.v = copyPlane(chroma.v, lane.v) }
+                lane.chromaRowStride = chroma.rowStride
+                lane.chromaPixelStride = chroma.pixelStride
+            }
             lane.worker.execute {
                 try {
                     val s = ingest(lane, dst, width, height, timestampNs) ?: return@execute
@@ -212,6 +235,17 @@ class LiveDecoder(
     }
 
     /** A lane's worker thread. */
+    /** A whole camera plane into a reusable direct buffer, byte for byte. */
+    private fun copyPlane(src: ByteBuffer, into: ByteBuffer?): ByteBuffer {
+        val s = src.duplicate().apply { clear() }
+        val dst = into?.takeIf { it.capacity() >= s.remaining() }
+            ?: ByteBuffer.allocateDirect(s.remaining())
+        dst.clear()
+        dst.put(s)
+        dst.flip()
+        return dst
+    }
+
     private fun ingest(lane: Lane, buf: ByteBuffer, width: Int, height: Int, ts: Long): LiveStatus? {
         val c = committed ?: candidates[Math.floorMod(next.getAndIncrement(), candidates.size)]
         val t0 = System.nanoTime()
@@ -227,7 +261,12 @@ class LiveDecoder(
                 "${width}x$height, grid ${c.cols}x${c.rows}" +
                 "${if (committed == null) " (searching)" else ""}, phase ${s.phase}, " +
                 "read ${"%.2f".format(s.recentReadFraction)}, payloads ${s.payloadFrames}, " +
-                "blur ${"%.2f".format(s.motionBlurCells)} cells")
+                "blur ${"%.2f".format(s.motionBlurCells)} cells, " +
+                "${"%.1f".format((s.distinctStates - lastDistinct).coerceAtLeast(0) / wall)} " +
+                "states/s seen, ${"%.0f".format(s.bytesPerSecond / 1024)} KB/s" +
+                if (s.colorSpread > 0) ", colours ${"%.0f".format(s.colorSpread)} apart, " +
+                    "noise ${"%.1f".format(s.colorNoise)}" else "")
+            lastDistinct = s.distinctStates
         }
         val payloads = s.payloadFrames
         if (payloads > (lastPayloads[c] ?: -1L)) {
@@ -270,7 +309,12 @@ class LiveDecoder(
         lane: Lane, c: Candidate, buf: ByteBuffer, width: Int, height: Int, ts: Long,
     ): LiveStatus? {
         val slots = lane.slots
-        val message = NativeReceiver.ingest(c.handle, buf, width, height, width, ts, lane.index, slots)
+        val colour = lane.chromaRowStride > 0
+        val message = NativeReceiver.ingest(
+            c.handle, buf, width, height, width,
+            if (colour) lane.u else null, if (colour) lane.v else null,
+            lane.chromaRowStride, lane.chromaPixelStride, ts, lane.index, slots,
+        )
         if (slots[Slot.Phase.ordinal] < 0.0) return null
         return LiveStatus(
             phase = LivePhase.from(slots[Slot.Phase.ordinal].toInt()),
@@ -285,6 +329,9 @@ class LiveDecoder(
             fileSize = slots[Slot.FileSize.ordinal].toLong(),
             payloadFrames = slots[Slot.PayloadFrames.ordinal].toLong(),
             bytesPerSecond = slots[Slot.BytesPerSecond.ordinal],
+            distinctStates = slots[Slot.DistinctStates.ordinal].toLong(),
+            colorSpread = slots[Slot.ColorSpread.ordinal],
+            colorNoise = slots[Slot.ColorNoise.ordinal],
             cols = c.cols,
             rows = c.rows,
             gridKnown = committed === c,
@@ -404,7 +451,8 @@ class LiveDecoder(
     /** Declaration order IS the wire format. Keep in lockstep with `Slot` in `jni_receiver.cpp`. */
     private enum class Slot {
         Phase, Hint, Progress, SecondsRemaining, MotionBlurCells, RecentReadFraction,
-        ScreenInView, Frames, FileSize, PayloadFrames, BytesPerSecond,
+        ScreenInView, Frames, FileSize, PayloadFrames, BytesPerSecond, DistinctStates,
+        ColorSpread, ColorNoise,
     }
 
     companion object {
@@ -433,8 +481,9 @@ internal object NativeReceiver {
     @JvmStatic external fun slotCount(): Int
     @JvmStatic external fun open(cols: Int, rows: Int, exposureNs: Long, lanes: Int): Long
     @JvmStatic external fun ingest(
-        handle: Long, y: ByteBuffer, width: Int, height: Int, rowStride: Int, timestampNs: Long,
-        lane: Int, out: DoubleArray,
+        handle: Long, y: ByteBuffer, width: Int, height: Int, rowStride: Int,
+        u: ByteBuffer?, v: ByteBuffer?, chromaRowStride: Int, chromaPixelStride: Int,
+        timestampNs: Long, lane: Int, out: DoubleArray,
     ): String
     @JvmStatic external fun fileName(handle: Long): String
     @JvmStatic external fun fileBytes(handle: Long): ByteArray?

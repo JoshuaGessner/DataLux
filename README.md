@@ -20,7 +20,7 @@ communication protocol.
 > corner alignment, photometric field), a session layer with an **in-band manifest** so a receiver
 > needs only the grid, SHA-256 verification, and an adaptive-code-rate controller. A channel
 > simulator (`sim/`), a capture/replay harness proven bit-identical to live decode that now runs
-> **verified transfers** (`harness/`), libFuzzer targets, 297 tests, CI with 7 jobs. An Android app
+> **verified transfers** (`harness/`), libFuzzer targets, 301 tests, CI with 7 jobs. An Android app
 > (`app/`, `platform/android/`) with a GL transmitter, a Camera2 recorder and an aiming UI.
 >
 > **What has been measured on hardware** (Galaxy S26 Ultra → Pixel 8): camera delivery 59 fps
@@ -133,7 +133,7 @@ docs/            all design documentation (see docs/INDEX.md)
   architecture/  system overview, data flow, component registry
   adr/           architecture decision records
   specifications/ optical frame, modulation, protocol, performance model
-  experiments/   experiment registry, open questions, PHASE1-FINDINGS (F1–F61)
+  experiments/   experiment registry, open questions, PHASE1-FINDINGS (F1–F62)
   testing/       simulator plan, capture harness, benchmark methodology
   planning/      roadmap, feature registry, risk register, device matrix
   security/      threat model, input validation rules
@@ -147,7 +147,7 @@ data/
 
 ```bash
 cmake --preset desktop-release && cmake --build build/desktop-release -j8
-./build/desktop-release/core/tests/fileflow_tests     # 297 tests
+./build/desktop-release/core/tests/fileflow_tests     # 301 tests
 
 cmake --preset core-only && cmake --build build/core-only -j8   # enforces ADR-0010
 python3 tools/check_links.py                                    # every doc link must resolve

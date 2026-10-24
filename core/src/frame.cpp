@@ -64,7 +64,7 @@ Result<FrameHeader> FrameHeader::DecodePlain(std::span<const std::uint8_t> in) {
 
     auto prof = r.U8();
     if (!prof.ok()) return prof.error();
-    if (prof.value() > static_cast<std::uint8_t>(ModulationProfile::kM4MixedFrame)) {
+    if (prof.value() > static_cast<std::uint8_t>(ModulationProfile::kM5EightColor)) {
         // Unknown profile: skip the FRAME, do not abort the session (PROTOCOL-SPEC).
         return Error::kUnknownProfile;
     }

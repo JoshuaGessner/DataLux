@@ -39,6 +39,9 @@ struct TransmitConfig {
     std::uint32_t symbol_size = 0;
     std::uint32_t block_symbols = 0;      // 0 = AutoBlockSymbols
     std::uint32_t manifest_interval = 0;  // 0 = FileTransmitter::AutoManifestInterval
+    // How payload cells carry bits: M0 (one, black or white) or M5 (three, eight colours). Named
+    // in every header, so the receiver needs no configuration for it.
+    ModulationProfile profile = ModulationProfile::kM0BinaryLuminance;
 };
 
 class TransmitSession {
@@ -58,14 +61,17 @@ class TransmitSession {
 
   private:
     TransmitSession(const FrameLayout& layout, std::optional<IntraFec> fec, FileTransmitter tx,
-                    std::size_t nsym)
-        : mod_(layout), fec_(std::move(fec)), tx_(std::move(tx)), nsym_(nsym) {}
+                    std::size_t nsym, ModulationProfile profile)
+        : mod_(layout), color_(layout), fec_(std::move(fec)), tx_(std::move(tx)), nsym_(nsym),
+          profile_(profile) {}
 
     M0Modulator mod_;
+    ColorModulator color_;
     HeaderCodec hdr_;
     std::optional<IntraFec> fec_;
     FileTransmitter tx_;
     std::size_t nsym_;
+    ModulationProfile profile_;
 };
 
 // ---------------------------------------------------------------- receive
@@ -155,7 +161,14 @@ class ReceiveSession {
 
     // One captured frame's photometrically normalised cell samples (FramePipeline output, NaN =
     // erased). `timestamp_ns` is the capture time, used only for rate accounting.
-    FrameOutcome Ingest(std::span<const double> cell_samples, std::int64_t timestamp_ns);
+    //
+    // `cell_rgb` is the frame's colour samples (CapturedFrame::cell_rgb), needed only for a frame
+    // whose header names M5; without them such a frame is kPayloadUnsupported.
+    FrameOutcome Ingest(std::span<const double> cell_samples, std::int64_t timestamp_ns) {
+        return Ingest(cell_samples, {}, timestamp_ns);
+    }
+    FrameOutcome Ingest(std::span<const double> cell_samples, std::span<const double> cell_rgb,
+                        std::int64_t timestamp_ns);
 
     [[nodiscard]] bool has_manifest() const noexcept { return rx_.has_value(); }
     [[nodiscard]] const FileManifest* manifest() const noexcept {
@@ -170,14 +183,17 @@ class ReceiveSession {
     // when the last frame never got that far.
     [[nodiscard]] bool last_reached_fec() const noexcept { return last_reached_fec_; }
     [[nodiscard]] const IntraFec::Stats& last_fec_stats() const noexcept { return last_fec_; }
+    // The last M5 frame's colour evidence: how far apart the eight colours sat, and how noisy.
+    [[nodiscard]] const ColorDiagnostics& last_color() const noexcept { return last_color_; }
 
     // Reassembles and VERIFIES (G3). kFountainIncomplete without a manifest as well.
     [[nodiscard]] Result<std::vector<std::uint8_t>> Finish();
 
   private:
-    ReceiveSession(const FrameLayout& layout, ReceiveConfig cfg) : mod_(layout), cfg_(cfg) {}
+    ReceiveSession(const FrameLayout& layout, ReceiveConfig cfg)
+        : mod_(layout), color_(layout), cfg_(cfg) {}
 
-    const IntraFec* FecFor(std::size_t nsym);
+    const IntraFec* FecFor(std::size_t nsym, std::size_t bits_per_cell);
     FrameOutcome AcceptManifest(const FrameHeader& h, std::span<const std::uint8_t> bytes);
     void NoteSequence(std::uint32_t seq, std::int64_t ts);
 
@@ -187,9 +203,12 @@ class ReceiveSession {
     };
 
     M0Modulator mod_;
+    ColorModulator color_;
     HeaderCodec hdr_;
     ReceiveConfig cfg_;
-    std::map<std::size_t, std::optional<IntraFec>> fec_;  // by nsym; nullopt = unsupported
+    // By (nsym, bits per cell); nullopt = unsupported.
+    std::map<std::pair<std::size_t, std::size_t>, std::optional<IntraFec>> fec_;
+    ColorDiagnostics last_color_{};
     std::optional<FileReceiver> rx_;
     std::vector<Held> held_;
     std::set<std::uint32_t> seen_;

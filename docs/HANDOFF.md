@@ -20,7 +20,7 @@ Read these first, in order:
 
 1. `docs/INDEX.md` — the map of all 53 documents
 2. `docs/vision/PERFORMANCE-PHILOSOPHY.md` — the metric discipline, non-negotiable
-3. `docs/experiments/PHASE1-FINDINGS.md` — **61 findings; this is the project's memory**
+3. `docs/experiments/PHASE1-FINDINGS.md` — **62 findings; this is the project's memory**
 4. `CONTRIBUTING.md` — evidence tags and the rules below
 5. `docs/architecture/COMPONENT-REGISTRY.md` — component status, C01–C20
 
@@ -44,7 +44,7 @@ Read these first, in order:
 
 ```bash
 cmake --preset desktop-release && cmake --build build/desktop-release -j8
-./build/desktop-release/core/tests/fileflow_tests          # must show 297 passing
+./build/desktop-release/core/tests/fileflow_tests          # must show 301 passing
 
 cmake --preset desktop-asan   && cmake --build build/desktop-asan -j8
 ./build/desktop-asan/core/tests/fileflow_tests             # ASan+UBSan, must be clean

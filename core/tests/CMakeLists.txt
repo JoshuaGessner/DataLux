@@ -16,6 +16,7 @@ add_executable(fileflow_tests
     test_session.cpp
     test_pipeline.cpp
     test_live.cpp
+    test_color.cpp
     test_geometry.cpp
     test_sampler.cpp
     test_photometric.cpp

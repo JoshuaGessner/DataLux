@@ -7,6 +7,7 @@
 // far more marked as an erasure than guessed at.
 #pragma once
 
+#include <fileflow/frame.h>
 #include <fileflow/grid.h>
 #include <fileflow/result.h>
 
@@ -93,6 +94,74 @@ class M0Modulator {
     // interpolation advantage of layout Candidate B -- pilots are distributed through the
     // payload area, so the illumination field is interpolated, not extrapolated.
     [[nodiscard]] PhotometricRef EstimateReference(std::span<const double> samples) const;
+
+  private:
+    const FrameLayout* layout_;
+};
+
+// Payload bits per cell under a profile: 1 for M0, 3 for M5. 0 = not one this build carries.
+[[nodiscard]] std::size_t BitsPerCell(ModulationProfile p) noexcept;
+
+// Payload bytes one frame carries under a profile, before intra-frame FEC.
+[[nodiscard]] std::size_t PayloadCapacityBytes(const FrameLayout& layout,
+                                               ModulationProfile p) noexcept;
+
+// The display value of the colour whose red, green and blue are each fully on or off.
+//
+// The LOW THREE BITS are red, green and blue, and a renderer lights a channel when its bit is set.
+// Under that one rule M0's two levels keep their meaning -- 0 has no bit set (black) and 255 has
+// all of them (white) -- so a single renderer draws either profile.
+[[nodiscard]] constexpr std::uint8_t ColorValue(unsigned rgb3) noexcept {
+    return static_cast<std::uint8_t>(rgb3 & 7U);
+}
+[[nodiscard]] constexpr bool ColorChannelOn(std::uint8_t value, int channel) noexcept {
+    return ((value >> (2 - channel)) & 1U) != 0;  // channel 0 red, 1 green, 2 blue
+}
+
+// What the colour demodulator saw, per frame: the evidence for whether eight colours are
+// separable on a given pair of phones, which is the question M5 lives or dies on.
+struct ColorDiagnostics {
+    std::size_t cells = 0;          // payload cells with a colour sample
+    std::size_t pilots = 0;         // colour pilots with a sample
+    double centroid_spread = 0.0;   // smallest distance between two colour centroids, 0..255 units
+    double noise_sigma = 0.0;       // per-channel spread of cells round their centroid
+};
+
+// M5: three bits a cell, one each on red, green and blue (kM5EightColor).
+//
+// The header and every structural cell are drawn exactly as M0 draws them -- the header must be
+// readable before the receiver knows the profile, and markers, pilots and the boundary are what it
+// finds and normalises the screen by. Only payload cells and the reserved colour pilots change.
+//
+// Demodulation does not trust any colour model. Camera and panel disagree about every primary:
+// the display's red leaks into the camera's green, white balance is whatever the locked camera
+// left it at, and the chroma planes have a quarter the resolution. So the eight colours are
+// LEARNED per frame: the colour pilots seed one centroid each, and a few rounds of k-means over the
+// frame's own payload cells settle them where this camera actually sees them. Each bit's
+// confidence is then the max-log likelihood ratio between the nearest colour with that bit set and
+// the nearest without -- a soft symbol, like M0's, for the same erasure discipline downstream.
+class ColorModulator {
+  public:
+    explicit ColorModulator(const FrameLayout& layout) : layout_(&layout) {}
+
+    [[nodiscard]] Status Render(std::span<const std::uint8_t> header_coded,
+                                std::span<const std::uint8_t> payload_coded,
+                                CellMatrix* out) const;
+
+    [[nodiscard]] std::size_t payload_capacity_bytes() const noexcept {
+        return layout_->payload_cells().size() * 3 / 8;
+    }
+
+    // `rgb` is three values per grid cell, interleaved r,g,b, flat row-major, each normalised so the
+    // white pilots read 255 and the black ones 0 in that channel (FramePipeline). NaN = erased.
+    // `out` receives three soft bits per payload cell, in payload-bit order.
+    void DemodulatePayload(std::span<const double> rgb, SoftSymbolBuffer* out,
+                           ColorDiagnostics* diag = nullptr) const;
+
+    // The colour colour-pilot `i` (raster order among them) shows: the eight in turn.
+    [[nodiscard]] static unsigned PilotColor(std::size_t i) noexcept {
+        return static_cast<unsigned>(i % 8);
+    }
 
   private:
     const FrameLayout* layout_;

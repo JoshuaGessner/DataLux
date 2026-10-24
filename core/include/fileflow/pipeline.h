@@ -190,6 +190,13 @@ struct PipelineDiagnostics {
     }
 };
 
+// The chroma planes of a YUV 4:2:0 capture, each half the luma size in both directions, centred
+// as Android and JPEG site them. Only an M5 payload needs them.
+struct ChromaPlanes {
+    ImageView8 u;
+    ImageView8 v;
+};
+
 class FramePipeline {
   public:
     static Result<FramePipeline> Create(const FrameLayout& layout, PipelineConfig cfg = {});
@@ -200,8 +207,11 @@ class FramePipeline {
     // and no ground truth -- rather than as an error. Losing a frame is normal operation on
     // this channel, and the fountain layer is built for it; the caller needs the index gap
     // recorded, not an exception. The reason is in diagnostics().
+    //
+    // With `chroma`, also the colour of every cell (CapturedFrame::cell_rgb), for M5.
     [[nodiscard]] CapturedFrame Process(const ImageView8& img, std::uint64_t index,
-                                        std::int64_t timestamp_ns);
+                                        std::int64_t timestamp_ns,
+                                        const ChromaPlanes* chroma = nullptr);
 
     // Geometry from the most recent Process() call. Only meaningful when the last frame
     // decoded; check last_ok() first.
@@ -238,6 +248,11 @@ class FramePipeline {
     [[nodiscard]] double PilotContrast(const ImageView8& img, const Homography& h, double dx,
                                        double dy) const;
     [[nodiscard]] double PilotContrast(const ImageView8& img, const Homography& h) const;
+
+    // Per-cell colour from the chroma planes and the cells' raw luma (CapturedFrame::cell_rgb).
+    [[nodiscard]] std::vector<double> SampleColor(const ChromaPlanes& chroma, const Homography& h,
+                                                  const std::vector<double>& raw_y,
+                                                  const PhotometricField& field) const;
 
     // Coordinate descent over the four corners. Returns `h` unchanged if nothing improves.
     [[nodiscard]] Homography RefineCorners(const ImageView8& img, const Homography& h,

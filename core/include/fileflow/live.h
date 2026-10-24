@@ -119,6 +119,13 @@ struct LiveStatus {
     std::uint64_t payload_frames = 0;
     // Times the sender switched to a different file and this receiver started over on it.
     std::uint32_t sender_switches = 0;
+    // Distinct display states whose header read: over time, the state rate this receiver actually
+    // sees (EXP-006), against the rate the sender drew.
+    std::uint64_t distinct_states = 0;
+    // The last colour frame's evidence (ColorDiagnostics): how far apart its eight colours sat and
+    // how noisy, 0..255 units. Both 0 until an M5 frame arrives.
+    double color_spread = 0.0;
+    double color_noise = 0.0;
 
     std::string file_name;            // a display hint (sanitised), once the manifest is in
     std::uint64_t file_size = 0;
@@ -180,7 +187,10 @@ class LiveReceiver {
     // THREAD-SAFE across lanes: up to `cfg.lanes` threads may call this at once, each with its own
     // `lane`. The image work runs in the lane, unlocked; only the session and the status are
     // serialised. Returns a COPY of the status, because another lane may be changing it.
-    LiveStatus Ingest(const ImageView8& img, std::int64_t timestamp_ns, std::size_t lane = 0);
+    //
+    // `chroma` carries the frame's colour, which an M5 sender needs; null reads M0 only.
+    LiveStatus Ingest(const ImageView8& img, std::int64_t timestamp_ns, std::size_t lane = 0,
+                      const ChromaPlanes* chroma = nullptr);
 
     // Not for use while another thread may be in Ingest.
     [[nodiscard]] const LiveStatus& status() const noexcept { return status_; }

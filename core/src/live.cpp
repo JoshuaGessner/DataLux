@@ -86,7 +86,7 @@ Result<LiveReceiver> LiveReceiver::Create(GridGeometry grid, LiveConfig cfg) {
 }
 
 LiveStatus LiveReceiver::Ingest(const ImageView8& img, std::int64_t timestamp_ns,
-                                std::size_t lane) {
+                                std::size_t lane, const ChromaPlanes* chroma) {
     std::uint64_t frame_no = 0;
     {
         const std::lock_guard<std::mutex> lock(*mu_);
@@ -101,7 +101,7 @@ LiveStatus LiveReceiver::Ingest(const ImageView8& img, std::int64_t timestamp_ns
     // with nothing held. A lane is only ever driven by one thread at a time (the caller's promise).
     FramePipeline& p = *pipelines_[lane % pipelines_.size()];
     const std::uint64_t geo_fail_before = p.diagnostics().geometry_failures;
-    CapturedFrame cf = p.Process(img, frame_no, timestamp_ns);
+    CapturedFrame cf = p.Process(img, frame_no, timestamp_ns, chroma);
     const bool in_view = p.diagnostics().geometry_failures == geo_fail_before;
 
     const std::lock_guard<std::mutex> lock(*mu_);
@@ -113,7 +113,10 @@ LiveStatus LiveReceiver::Ingest(const ImageView8& img, std::int64_t timestamp_ns
 
     bool read = false;
     if (p.last_ok()) {
-        const FrameOutcome o = session_->Ingest(cf.cell_samples, timestamp_ns);
+        const FrameOutcome o = session_->Ingest(cf.cell_samples, cf.cell_rgb, timestamp_ns);
+        status_.distinct_states = session_->stats().distinct_sequences;
+        status_.color_spread = session_->last_color().centroid_spread;
+        status_.color_noise = session_->last_color().noise_sigma;
         read = o != FrameOutcome::kUnreadable && o != FrameOutcome::kHeaderFailed;
         switch (o) {
             case FrameOutcome::kSymbol:

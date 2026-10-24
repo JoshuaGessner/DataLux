@@ -48,6 +48,8 @@ class TransmitActivity : AppCompatActivity() {
     private var stateRate = 0.0
     /** The Speed setting's display states per second. */
     private var targetStateRate = Speed.DEFAULT.statesPerSecond
+    /** Eight colours (M5) rather than black and white (F62). */
+    private var colour = Speed.DEFAULT.colour
     private var reported = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -136,6 +138,7 @@ class TransmitActivity : AppCompatActivity() {
         // (F59). An explicit `divisor` extra still wins, for scripted sweeps.
         targetStateRate = intent.getDoubleExtra("stateRate", Speed.DEFAULT.statesPerSecond)
             .coerceIn(1.0, 120.0)
+        colour = intent.getBooleanExtra("colour", Speed.DEFAULT.colour)
         val panelHz = if (requestedHz > 0.0) requestedHz else (display?.refreshRate ?: 60f).toDouble()
         val divisor = if (intent.hasExtra("divisor")) {
             intent.getIntExtra("divisor", 1).coerceAtLeast(1)
@@ -156,7 +159,9 @@ class TransmitActivity : AppCompatActivity() {
             return
         }
         if (uri == null) {
-            val t = runCatching { Transmitter.open(cols, rows, nsym, payload, seed = 5L) }
+            val t = runCatching {
+                Transmitter.open(cols, rows, nsym, payload, seed = 5L, colour = colour)
+            }
                 .getOrElse { e ->
                     fail("Could not start sending: ${e.message}")
                     return
@@ -193,7 +198,7 @@ class TransmitActivity : AppCompatActivity() {
                     out.toByteArray()
                 } ?: error("The file could not be opened.")
                 if (bytes.isEmpty()) error("$name is empty — there is nothing to send.")
-                Transmitter.openFile(cols, rows, nsym, bytes, name)
+                Transmitter.openFile(cols, rows, nsym, bytes, name, colour)
             }
             runOnUiThread {
                 if (isFinishing || isDestroyed) {

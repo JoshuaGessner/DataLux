@@ -500,9 +500,11 @@ class CaptureActivity : AppCompatActivity() {
         // 0 = choose: 60 fps where this camera offers it at near-full resolution, else 30 (F60).
         val fps = intent.getIntExtra("fps", 0).takeIf { it > 0 }
             ?: CameraRecorder.Modes.chooseFps(this, maxWidth)
-        // 8 ms, not 16: half the motion blur and half the display-state mixing, and the exposure
-        // control buys the light back with ISO (F60). Never longer than a frame period.
-        val exposureNs = minOf(intent.getLongExtra("exposureNs", 8_000_000L), 1_000_000_000L / fps)
+        // 4 ms. A capture is torn when a display state changes during its exposure plus readout,
+        // so every millisecond cut widens the window in which a state is caught whole (F60). At
+        // 8 ms the exposure servo still sat at the sensor's floor, ISO 30, on the 2.2 MB transfer:
+        // the light was never the limit. Never longer than a frame period.
+        val exposureNs = minOf(intent.getLongExtra("exposureNs", 4_000_000L), 1_000_000_000L / fps)
         SessionLog.start(this, "receive")
         SessionLog.i(LIVE_TAG, "live receive: $fps fps, exposure ${exposureNs / 1e6} ms, " +
             "${LiveDecoder.DEFAULT_LANES} decode lanes")
@@ -592,7 +594,7 @@ class CaptureActivity : AppCompatActivity() {
                         aimView?.sensorRotation = rec.sensorOrientation
                     }
                     previewView?.submit(buf, w, h, stride, rec.sensorOrientation)
-                    decoder.offer(buf, w, h, stride, SystemClock.elapsedRealtimeNanos())
+                    decoder.offer(buf, w, h, stride, SystemClock.elapsedRealtimeNanos(), rec.frameChroma)
                     // Aim analysis drives the coaching, exposure and refocus decisions, and the
                     // coverage map. It runs on this thread and costs a pass over the frame, so a
                     // couple of times a second rather than per frame.

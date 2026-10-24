@@ -44,6 +44,10 @@ struct CapturedFrame {
     // transition band. The demodulator turns NaN into an ERASURE, never a guess.
     std::vector<double> cell_samples;
 
+    // Three per cell, interleaved r,g,b, each channel scaled so this frame's white pilots read 255
+    // and its black ones 0 -- the input M5 demodulates. Empty when the source had no colour.
+    std::vector<double> cell_rgb;
+
     // Ground truth, populated ONLY by the simulator. Live and replay sources leave this
     // empty. Its presence is what lets us measure component accuracy (geometric error,
     // phase-classification accuracy, per-cell error maps) rather than just end-to-end

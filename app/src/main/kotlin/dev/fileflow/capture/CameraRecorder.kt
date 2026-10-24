@@ -72,6 +72,26 @@ class CameraRecorder(private val context: Context) {
     var minFocusDiopters: Float = 0f
         private set
 
+    /**
+     * The U and V planes of a YUV_420_888 frame: half size both ways, sharing one row and pixel
+     * stride (the format guarantees it), usually interleaved with each other (pixel stride 2).
+     */
+    class Chroma(
+        val u: java.nio.ByteBuffer,
+        val v: java.nio.ByteBuffer,
+        val rowStride: Int,
+        val pixelStride: Int,
+    )
+
+    /**
+     * The colour planes of the frame being handed to `onFrame`, valid only DURING that call and
+     * only on the camera thread -- the buffers return to the camera as soon as it returns. M5's
+     * eight colours are read from these (F62).
+     */
+    @Volatile
+    var frameChroma: Chroma? = null
+        private set
+
     /** `SENSOR_ROLLING_SHUTTER_SKEW` of the latest frame, ns; -1 when the camera does not say. */
     @Volatile
     var rollingShutterSkewNs: Long = -1L
@@ -528,7 +548,16 @@ class CameraRecorder(private val context: Context) {
                     } else if (unbounded || timestamps.size < frameCount) {
                         onFrame?.let { cb ->
                             val plane = image.planes[0]
-                            cb(plane.buffer, image.width, image.height, plane.rowStride)
+                            // The colour planes ride along for the callback's duration only:
+                            // the buffers go back to the camera when it returns.
+                            frameChroma = image.planes.takeIf { it.size >= 3 }?.let {
+                                Chroma(it[1].buffer, it[2].buffer, it[1].rowStride, it[1].pixelStride)
+                            }
+                            try {
+                                cb(plane.buffer, image.width, image.height, plane.rowStride)
+                            } finally {
+                                frameChroma = null
+                            }
                         }
                         val code = if (writeFrames) rec.writeFrame(image) else 0
                         if (code == 0) {

@@ -33,6 +33,10 @@ enum class ModulationProfile : std::uint8_t {
     kM2FourLevel = 2,
     kM3FourColor = 3,
     kM4MixedFrame = 4,
+    // Every payload cell's red, green and blue are three independent bits: eight colours, three
+    // bits a cell where M0 carries one. The header band stays M0 -- black and white read the same
+    // in any colour space -- so a receiver learns the profile before it needs it (F62).
+    kM5EightColor = 5,
 };
 
 struct FrameHeader {

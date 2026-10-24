@@ -91,6 +91,34 @@ struct OpticalRenderConfig {
 [[nodiscard]] Image8 RenderView(const CellMatrix& cells, const GridGeometry& g,
                                 const OpticalRenderConfig& cfg, Homography* used_transform);
 
+// How the RECEIVING camera sees the sending panel's three primaries (M5).
+//
+// Display channel j lights camera channel i by `mix[i][j]`: the diagonal is each primary's own
+// response, the rest is crosstalk through overlapping colour filters -- an OLED's red is not the
+// sensor's red. Then a per-channel gain: white balance, wherever the locked camera left it.
+// Defaults are deliberately unkind: ~15-20% crosstalk and a visibly tinted white.
+struct ColorChannelConfig {
+    std::array<std::array<double, 3>, 3> mix = {{{0.82, 0.14, 0.04},
+                                                 {0.12, 0.76, 0.12},
+                                                 {0.03, 0.17, 0.80}}};
+    std::array<double, 3> gain = {1.05, 0.95, 1.15};
+};
+
+// A YUV 4:2:0 capture: full-resolution luma, half-resolution chroma both ways, as Camera2 delivers.
+struct YuvImage {
+    Image8 y;
+    Image8 u;
+    Image8 v;
+};
+
+// Renders `cells` -- colour levels (ColorValue) as M5 draws them, or M0's two -- through the
+// same optics as RenderView, one display channel at a time, then mixes them through the camera's
+// response and subsamples the chroma.
+[[nodiscard]] YuvImage RenderColorView(const CellMatrix& cells, const GridGeometry& g,
+                                       const OpticalRenderConfig& cfg,
+                                       const ColorChannelConfig& color,
+                                       Homography* used_transform);
+
 // The lens model's forward map: undistorted image pixel -> where the camera actually records it.
 // Identity when `cfg.lens_k1` is zero.
 [[nodiscard]] Point2 DistortPoint(Point2 p, const OpticalRenderConfig& cfg) noexcept;

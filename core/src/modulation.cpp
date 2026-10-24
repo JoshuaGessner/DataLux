@@ -1,6 +1,7 @@
 #include <fileflow/modulation.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 
 namespace fileflow {
@@ -249,6 +250,179 @@ void M0Modulator::DemodulatePayload(std::span<const double> samples, const Photo
             continue;
         }
         out->symbols[i] = SoftSymbol{QuantiseLlr(v, ref), false};
+    }
+}
+
+std::size_t BitsPerCell(ModulationProfile p) noexcept {
+    switch (p) {
+        case ModulationProfile::kM0BinaryLuminance: return 1;
+        case ModulationProfile::kM5EightColor: return 3;
+        default: return 0;
+    }
+}
+
+std::size_t PayloadCapacityBytes(const FrameLayout& layout, ModulationProfile p) noexcept {
+    return layout.payload_cells().size() * BitsPerCell(p) / 8;
+}
+
+Status ColorModulator::Render(std::span<const std::uint8_t> header_coded,
+                              std::span<const std::uint8_t> payload_coded,
+                              CellMatrix* out) const {
+    const auto& pay_cells = layout_->payload_cells();
+    if (payload_coded.size() * 8 > pay_cells.size() * 3) return Error::kValueOutOfRange;
+    // Structure and header exactly as M0 draws them; payload filled below.
+    FF_TRY(M0Modulator(*layout_).Render(header_coded, {}, out));
+
+    const auto& pilots = layout_->color_pilot_cells();
+    for (std::size_t i = 0; i < pilots.size(); ++i) {
+        out->set_flat(pilots[i], ColorValue(PilotColor(i)));
+    }
+
+    std::vector<std::uint8_t> bits;
+    PackBits(payload_coded, &bits);
+    for (std::size_t i = 0; i < pay_cells.size(); ++i) {
+        unsigned v = 0;
+        for (std::size_t k = 0; k < 3; ++k) {
+            const std::size_t j = i * 3 + k;  // first bit red, then green, then blue
+            v = (v << 1U) | (j < bits.size() ? (bits[j] & 1U) : 0U);
+        }
+        out->set_flat(pay_cells[i], ColorValue(v));
+    }
+    return Status::Ok();
+}
+
+void ColorModulator::DemodulatePayload(std::span<const double> rgb, SoftSymbolBuffer* out,
+                                       ColorDiagnostics* diag) const {
+    using Vec = std::array<double, 3>;
+    const auto& pay_cells = layout_->payload_cells();
+    out->resize(pay_cells.size() * 3);  // every bit an erasure until proven otherwise
+    const auto cells = static_cast<std::size_t>(layout_->geometry().cells());
+    if (rgb.size() != cells * 3) return;
+
+    auto read = [&rgb](std::uint32_t idx, Vec* v) {
+        for (std::size_t k = 0; k < 3; ++k) {
+            (*v)[k] = rgb[static_cast<std::size_t>(idx) * 3 + k];
+            if (std::isnan((*v)[k])) return false;
+        }
+        return true;
+    };
+    auto dist2 = [](const Vec& a, const Vec& b) {
+        double d = 0.0;
+        for (std::size_t k = 0; k < 3; ++k) d += (a[k] - b[k]) * (a[k] - b[k]);
+        return d;
+    };
+
+    // Seeds: the ideal corners of the colour cube, replaced by what the pilots showed wherever a
+    // pilot of that colour was read.
+    std::array<Vec, 8> mu{};
+    for (unsigned c = 0; c < 8; ++c) {
+        for (int k = 0; k < 3; ++k) {
+            mu[c][static_cast<std::size_t>(k)] = ColorChannelOn(ColorValue(c), k) ? 255.0 : 0.0;
+        }
+    }
+    std::array<Vec, 8> pilot_sum{};
+    std::array<std::size_t, 8> pilot_n{};
+    const auto& pilots = layout_->color_pilot_cells();
+    std::size_t pilots_read = 0;
+    for (std::size_t i = 0; i < pilots.size(); ++i) {
+        Vec v{};
+        if (!read(pilots[i], &v)) continue;
+        const unsigned c = PilotColor(i);
+        for (std::size_t k = 0; k < 3; ++k) pilot_sum[c][k] += v[k];
+        ++pilot_n[c];
+        ++pilots_read;
+    }
+    for (unsigned c = 0; c < 8; ++c) {
+        if (pilot_n[c] == 0) continue;
+        for (std::size_t k = 0; k < 3; ++k) {
+            mu[c][k] = pilot_sum[c][k] / static_cast<double>(pilot_n[c]);
+        }
+    }
+
+    std::vector<Vec> x;
+    std::vector<std::size_t> slot;  // payload-cell index of each sample
+    x.reserve(pay_cells.size());
+    slot.reserve(pay_cells.size());
+    for (std::size_t i = 0; i < pay_cells.size(); ++i) {
+        Vec v{};
+        if (pay_cells[i] >= cells || !read(pay_cells[i], &v)) continue;
+        x.push_back(v);
+        slot.push_back(i);
+    }
+    if (x.empty()) return;
+
+    auto nearest = [&mu, &dist2](const Vec& v) {
+        unsigned best = 0;
+        double bd = dist2(v, mu[0]);
+        for (unsigned c = 1; c < 8; ++c) {
+            const double d = dist2(v, mu[c]);
+            if (d < bd) {
+                bd = d;
+                best = c;
+            }
+        }
+        return best;
+    };
+
+    // Settle the centroids where this frame's cells actually are. The pilots stay in every mean
+    // with their KNOWN colour, which anchors each cluster's identity: k-means alone could swap two
+    // colours and decode every bit of both wrong with complete confidence.
+    constexpr int kRounds = 3;
+    constexpr std::size_t kMinMembers = 16;
+    for (int round = 0; round < kRounds; ++round) {
+        std::array<Vec, 8> sum = pilot_sum;
+        std::array<std::size_t, 8> n = pilot_n;
+        for (const Vec& v : x) {
+            const unsigned c = nearest(v);
+            for (std::size_t k = 0; k < 3; ++k) sum[c][k] += v[k];
+            ++n[c];
+        }
+        for (unsigned c = 0; c < 8; ++c) {
+            if (n[c] < kMinMembers) continue;  // too few to move: keep the seed
+            for (std::size_t k = 0; k < 3; ++k) mu[c][k] = sum[c][k] / static_cast<double>(n[c]);
+        }
+    }
+
+    // Each bit's "clean" distance: how far, on average, flipping that bit moves a colour.
+    std::array<double, 3> clean{};
+    for (std::size_t j = 0; j < 3; ++j) {
+        const unsigned mask = 4U >> j;
+        double acc = 0.0;
+        for (unsigned c = 0; c < 8; ++c) acc += dist2(mu[c], mu[c ^ mask]);
+        clean[j] = std::max(acc / 8.0, 1.0);
+    }
+
+    double noise = 0.0;
+    for (std::size_t s = 0; s < x.size(); ++s) {
+        std::array<double, 8> d{};
+        for (unsigned c = 0; c < 8; ++c) d[c] = dist2(x[s], mu[c]);
+        noise += *std::min_element(d.begin(), d.end());
+        for (std::size_t j = 0; j < 3; ++j) {
+            const unsigned mask = 4U >> j;
+            double d0 = 1e300;
+            double d1 = 1e300;
+            for (unsigned c = 0; c < 8; ++c) {
+                double& slot_d = (c & mask) != 0 ? d1 : d0;
+                slot_d = std::min(slot_d, d[c]);
+            }
+            // Max-log LLR, scaled like M0's: 127 at a textbook cell, 0 on the boundary, positive
+            // for bit 0.
+            const double scaled = std::clamp(127.0 * (d1 - d0) / clean[j], -127.0, 127.0);
+            auto v = static_cast<Llr>(std::lround(scaled));
+            if (v == kLlrErasure) v = 1;
+            out->symbols[slot[s] * 3 + j] = SoftSymbol{v, false};
+        }
+    }
+
+    if (diag != nullptr) {
+        diag->cells = x.size();
+        diag->pilots = pilots_read;
+        diag->noise_sigma = std::sqrt(noise / (3.0 * static_cast<double>(x.size())));
+        double spread = 1e300;
+        for (unsigned a = 0; a < 8; ++a) {
+            for (unsigned b = a + 1; b < 8; ++b) spread = std::min(spread, dist2(mu[a], mu[b]));
+        }
+        diag->centroid_spread = std::sqrt(spread);
     }
 }
 

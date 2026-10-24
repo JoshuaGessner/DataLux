@@ -242,9 +242,9 @@ class OpticalRenderer(
 
     private fun uploadTexture() {
         tx.cells.position(0)
-        // GL_LUMINANCE: one byte per cell, broadcast to RGB by the sampler. M0 is a luminance
-        // modulation, so a single channel is the honest representation — an RGB texture would
-        // triple the upload to carry the same one bit per cell.
+        // GL_LUMINANCE: one byte per cell, the cell's colour code -- the fragment shader turns its
+        // low three bits into red, green and blue, so M5's eight colours need no more upload than
+        // M0's two levels.
         GLES20.glTexImage2D(
             GLES20.GL_TEXTURE_2D, 0, GLES20.GL_LUMINANCE,
             tx.cols, tx.rows, 0,
@@ -307,12 +307,17 @@ class OpticalRenderer(
             }
         """
 
+        // One byte per cell, whose low three bits light red, green and blue (`ColorValue` in
+        // modulation.h). M0's two levels, 0 and 255, come out black and white under the same rule,
+        // so one shader draws either profile.
         private const val FRAGMENT_SRC = """
             precision mediump float;
             varying vec2 vTex;
             uniform sampler2D uTex;
             void main() {
-                gl_FragColor = texture2D(uTex, vTex);
+                float n = floor(texture2D(uTex, vTex).r * 255.0 + 0.5);
+                gl_FragColor = vec4(mod(floor(n / 4.0), 2.0), mod(floor(n / 2.0), 2.0),
+                                    mod(n, 2.0), 1.0);
             }
         """
 

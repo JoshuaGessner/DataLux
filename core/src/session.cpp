@@ -19,13 +19,15 @@ Result<TransmitSession> TransmitSession::Create(const FrameLayout& layout,
     // too small for its own header would build and then fail at render with a generic error.
     if (mod.header_capacity_bytes() < hdr.coded_size()) return Error::kValueOutOfRange;
     if (cfg.fec_nsym >= 255) return Error::kValueOutOfRange;
+    const std::size_t capacity = PayloadCapacityBytes(layout, cfg.profile);
+    if (capacity == 0) return Error::kUnknownProfile;
 
     std::optional<IntraFec> fec;
     std::uint32_t symbol_size = cfg.symbol_size;
     if (cfg.fec_nsym > 0) {
         IntraFecParams fp;
         fp.nsym = cfg.fec_nsym;
-        FF_ASSIGN_OR_RETURN(auto f, IntraFec::Create(mod.payload_capacity_bytes(), fp));
+        FF_ASSIGN_OR_RETURN(auto f, IntraFec::Create(capacity, fp));
         // The fountain symbol must fit the FEC layer's MESSAGE capacity, not the raw frame
         // capacity -- parity occupies the difference.
         const auto required = static_cast<std::uint32_t>(f.message_bytes());
@@ -33,22 +35,23 @@ Result<TransmitSession> TransmitSession::Create(const FrameLayout& layout,
         symbol_size = required;
         fec.emplace(std::move(f));
     } else if (symbol_size == 0) {
-        symbol_size = static_cast<std::uint32_t>(mod.payload_capacity_bytes());
+        symbol_size = static_cast<std::uint32_t>(capacity);
     }
     if (symbol_size == 0 || symbol_size > FountainParams::kMaxSymbolSize ||
-        symbol_size > mod.payload_capacity_bytes()) {
+        symbol_size > capacity) {
         return Error::kValueOutOfRange;
     }
 
     FF_ASSIGN_OR_RETURN(auto tx, FileTransmitter::Create(file, std::move(file_name), session_id,
                                                          symbol_size, cfg.block_symbols,
                                                          cfg.manifest_interval));
-    return TransmitSession(layout, std::move(fec), std::move(tx), cfg.fec_nsym);
+    return TransmitSession(layout, std::move(fec), std::move(tx), cfg.fec_nsym, cfg.profile);
 }
 
 Result<FrameHeader> TransmitSession::Next(CellMatrix* out) {
     auto fp = tx_.NextFrame();
     fp.header.fec_nsym = static_cast<std::uint8_t>(nsym_);
+    fp.header.profile = profile_;
     FF_ASSIGN_OR_RETURN(auto hdr_coded, hdr_.Encode(fp.header));
 
     std::vector<std::uint8_t> payload_coded;
@@ -57,7 +60,11 @@ Result<FrameHeader> TransmitSession::Next(CellMatrix* out) {
     } else {
         payload_coded = std::move(fp.data);
     }
-    FF_TRY(mod_.Render(hdr_coded, payload_coded, out));
+    if (profile_ == ModulationProfile::kM5EightColor) {
+        FF_TRY(color_.Render(hdr_coded, payload_coded, out));
+    } else {
+        FF_TRY(mod_.Render(hdr_coded, payload_coded, out));
+    }
     return fp.header;
 }
 
@@ -99,17 +106,20 @@ Result<ReceiveSession> ReceiveSession::Create(const FrameLayout& layout, Receive
     return ReceiveSession(layout, cfg);
 }
 
-const IntraFec* ReceiveSession::FecFor(std::size_t nsym) {
-    // Built lazily per code rate seen, from the header, so the receiver needs no configuration
-    // for it -- and a transmitter that changes nsym between sessions just works.
-    auto it = fec_.find(nsym);
+const IntraFec* ReceiveSession::FecFor(std::size_t nsym, std::size_t bits_per_cell) {
+    // Built lazily per code rate and profile seen, from the header, so the receiver needs no
+    // configuration for either -- and a transmitter that changes them between sessions just works.
+    const auto key = std::make_pair(nsym, bits_per_cell);
+    auto it = fec_.find(key);
     if (it == fec_.end()) {
         IntraFecParams fp;
         fp.nsym = nsym;
-        auto f = IntraFec::Create(mod_.payload_capacity_bytes(), fp);
+        auto f = IntraFec::Create(bits_per_cell == 3 ? color_.payload_capacity_bytes()
+                                                     : mod_.payload_capacity_bytes(),
+                                  fp);
         std::optional<IntraFec> entry;
         if (f.ok()) entry.emplace(std::move(f).value());
-        it = fec_.emplace(nsym, std::move(entry)).first;
+        it = fec_.emplace(key, std::move(entry)).first;
     }
     return it->second ? &*it->second : nullptr;
 }
@@ -166,7 +176,7 @@ FrameOutcome ReceiveSession::AcceptManifest(const FrameHeader& h,
 }
 
 FrameOutcome ReceiveSession::Ingest(std::span<const double> cell_samples,
-                                    std::int64_t timestamp_ns) {
+                                    std::span<const double> cell_rgb, std::int64_t timestamp_ns) {
     ++stats_.frames;
     last_reached_fec_ = false;
 
@@ -207,15 +217,26 @@ FrameOutcome ReceiveSession::Ingest(std::span<const double> cell_samples,
     }
 
     // --- Payload ---
+    const std::size_t bits = BitsPerCell(h.profile);
+    const bool color = h.profile == ModulationProfile::kM5EightColor;
+    if (bits == 0 || (color && cell_rgb.size() != cell_samples.size() * 3)) {
+        return FrameOutcome::kPayloadUnsupported;
+    }
     const IntraFec* fec = nullptr;
     if (h.fec_nsym > 0) {
-        fec = FecFor(h.fec_nsym);
+        fec = FecFor(h.fec_nsym, bits);
         if (fec == nullptr) return FrameOutcome::kPayloadUnsupported;
     }
 
     SoftSymbolBuffer soft;
-    mod_.DemodulatePayload(cell_samples, ref, &soft);
-    const std::size_t coded_len = fec ? fec->coded_bytes() : mod_.payload_capacity_bytes();
+    if (color) {
+        color_.DemodulatePayload(cell_rgb, &soft, &last_color_);
+    } else {
+        mod_.DemodulatePayload(cell_samples, ref, &soft);
+    }
+    const std::size_t capacity =
+        color ? color_.payload_capacity_bytes() : mod_.payload_capacity_bytes();
+    const std::size_t coded_len = fec ? fec->coded_bytes() : capacity;
     HardDecision hd = HardDecide(soft, coded_len, cfg_.erase_below);
     stats_.payload_cells += soft.size();
     stats_.erased_cells += hd.erasures;

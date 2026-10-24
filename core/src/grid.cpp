@@ -166,6 +166,7 @@ void FrameLayout::Build() {
                 case CellRole::kPayload: payload_.push_back(idx); break;
                 case CellRole::kHeader: header_.push_back(idx); break;
                 case CellRole::kPilot: pilots_.push_back(idx); break;
+                case CellRole::kColorPilot: color_pilots_.push_back(idx); break;
                 default: break;
             }
         }
