@@ -116,6 +116,57 @@ class EnvelopeTest {
     @Test fun notAnEnvelopeIsSaidSo() {
         expectFailure(Envelope.Failure.NotAnEnvelope) { Envelope.unpack("hello".toByteArray(), null, false) }
     }
+
+    @Test fun offSendsTheFileAsItIs() {
+        val data = text(100_000)
+        val p = Envelope.pack(data, "notes.txt", null, Envelope.Mode.Off)
+        assertFalse(p.compressed)
+        assertEquals(0L, p.compressMs)
+        assertTrue(p.bytes.size - data.size < 64)
+        val u = Envelope.unpack(p.bytes, null, false)
+        assertEquals(Envelope.CODEC_NONE, u.codec)
+        assertArrayEquals(data, u.data)
+    }
+
+    @Test fun theCodecAndItsCostTravelWithTheFile() {
+        val data = text(200_000)
+        for (mode in listOf(Envelope.Mode.Auto, Envelope.Mode.Maximum)) {
+            val p = Envelope.pack(data, "notes.txt", null, mode, DeflateCodec)
+            assertEquals(DeflateCodec.id, p.codec)
+            val u = Envelope.unpack(p.bytes, null, false)
+            assertEquals(DeflateCodec.id, u.codec)
+            assertEquals(p.compressMs, u.compressMs)
+            assertArrayEquals(data, u.data)
+        }
+    }
+
+    @Test fun maximumIsNoBiggerThanAuto() {
+        val data = text(300_000)
+        val auto = Envelope.pack(data, "a", null, Envelope.Mode.Auto, DeflateCodec)
+        val max = Envelope.pack(data, "a", null, Envelope.Mode.Maximum, DeflateCodec)
+        assertTrue(max.bytes.size <= auto.bytes.size)
+    }
+
+    @Test fun aVersionOneEnvelopeStillOpens() {
+        // "FFE1" | flags (1 = compressed) | name length | name | original size | raw Deflate
+        val data = text(20_000)
+        val body = DeflateCodec.compress(data, 9, false)!!
+        val name = "old.txt".toByteArray()
+        val v1 = java.nio.ByteBuffer.allocate(4 + 1 + 2 + name.size + 8 + body.size)
+            .put("FFE1".toByteArray()).put(1).putShort(name.size.toShort()).put(name)
+            .putLong(data.size.toLong()).put(body).array()
+        val u = Envelope.unpack(v1, null, false)
+        assertEquals("old.txt", u.name)
+        assertEquals(DeflateCodec.id, u.codec)
+        assertArrayEquals(data, u.data)
+    }
+
+    @Test fun anUnknownCodecIsSaidSo() {
+        val p = Envelope.pack(text(10_000), "a.txt", null, Envelope.Mode.Auto, DeflateCodec)
+        val bad = p.bytes.copyOf()
+        bad[4 + 1 + 2 + "a.txt".length + 8] = 9  // the codec byte
+        expectFailure(Envelope.Failure.UnknownCodec) { Envelope.unpack(bad, null, false) }
+    }
 }
 
 class PairingTest {

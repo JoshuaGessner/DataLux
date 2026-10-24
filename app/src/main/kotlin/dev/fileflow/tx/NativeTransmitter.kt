@@ -65,9 +65,12 @@ class Transmitter private constructor(
         /** Sends a real file: its bytes, and the name the receiver will save it under. */
         fun openFile(
             cols: Int, rows: Int, nsym: Int, data: ByteArray, name: String, colours: Int = 0,
+            /** What [data] is before compression, for the receiver's display; 0 = say nothing. */
+            originalSize: Long = 0, codec: Int = 0, compressMs: Int = 0,
         ): Transmitter = Transmitter(
             NativeTransmitter.openFile(
                 cols, rows, nsym, data, name.toByteArray(Charsets.UTF_8), colours,
+                originalSize, codec, compressMs,
             ),
             cols, rows, name, colours,
         )
@@ -126,6 +129,7 @@ internal object NativeTransmitter {
     ): Long
     @JvmStatic external fun openFile(
         cols: Int, rows: Int, nsym: Int, data: ByteArray, nameUtf8: ByteArray, colours: Int,
+        originalSize: Long, codec: Int, compressMs: Int,
     ): Long
     @JvmStatic external fun symbolBytes(handle: Long): Int
     @JvmStatic external fun fileSize(handle: Long): Long

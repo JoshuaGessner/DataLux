@@ -162,6 +162,9 @@ class TransmitActivity : AppCompatActivity() {
             return
         }
         encrypted = intent.getBooleanExtra("encrypted", false)
+        val compression = runCatching {
+            Envelope.Mode.valueOf(intent.getStringExtra("compression") ?: "")
+        }.getOrDefault(Envelope.Mode.Auto)
 
         // A picked file is read OFF the main thread -- it can be tens of megabytes, from a cloud
         // provider that has to download it first -- and compressed and sealed there too, with a
@@ -181,11 +184,18 @@ class TransmitActivity : AppCompatActivity() {
                     PairingStore.current()
                         ?: error("Encrypted mode is on, but the phones aren't paired. Pair them, then send.")
                 } else null
-                val p = Envelope.pack(bytes, name, key)
+                val p = Envelope.pack(bytes, name, key, compression)
                 packed = p
                 displayName = name
-                // Under encryption the link itself carries no name: it is inside the envelope.
-                Transmitter.openFile(cols, rows, nsym, p.bytes, if (key != null) SEALED_NAME else name, colours)
+                // Under encryption the link itself carries no name -- it is inside the envelope --
+                // and no original size or codec either: the receiver learns those on opening it.
+                if (key != null) {
+                    Transmitter.openFile(cols, rows, nsym, p.bytes, SEALED_NAME, colours)
+                } else {
+                    Transmitter.openFile(cols, rows, nsym, p.bytes, name, colours,
+                                         originalSize = p.originalSize, codec = p.codec,
+                                         compressMs = p.compressMs.coerceAtMost(Int.MAX_VALUE.toLong()).toInt())
+                }
             }
             runOnUiThread {
                 if (isFinishing || isDestroyed) {
@@ -263,7 +273,7 @@ class TransmitActivity : AppCompatActivity() {
         val p = packed
         SessionLog.i(LOG_TAG, "sending ${displayName ?: t.fileName}, " +
             "${formatBytes(p?.originalSize ?: t.fileBytes)} as ${formatBytes(t.fileBytes)}" +
-            "${if (p?.compressed == true) " compressed" else ""}" +
+            "${if (p?.compressed == true) " compressed in ${p.compressMs} ms" else ""}" +
             "${if (p?.encrypted == true) " encrypted" else ""}, " +
             "${t.cols}x${t.rows} ${if (colours > 0) "$colours colours" else "black and white"} at " +
             "${"%.0f".format(targetStateRate)} states/s")
@@ -294,7 +304,9 @@ class TransmitActivity : AppCompatActivity() {
         // the reference phones it is 260-290 px tall, room for one quiet row. The text is dim so it
         // stays well below the receiver's lit threshold, and it is shown only once the frame's
         // real size is known and the row fits; otherwise a toast says the same thing once.
-        val bar = sendingBar(t, estimate)
+        // The best the link can do, a perfect one: what compression is projected against.
+        val linkRate = if (perFrame > 0 && stateRate > 0.0) perFrame * stateRate / 1.05 else 0.0
+        val bar = sendingBar(t, estimate, linkRate)
         setContentView(android.widget.FrameLayout(this).apply {
             setBackgroundColor(android.graphics.Color.BLACK)
             addView(glView)
@@ -338,17 +350,21 @@ class TransmitActivity : AppCompatActivity() {
     }
 
     /** The row in the top margin: file, size, elapsed time, Stop. Starts hidden; see [begin]. */
-    private fun sendingBar(t: Transmitter, estimate: String?): android.view.View {
+    private fun sendingBar(t: Transmitter, estimate: String?, linkRate: Double): android.view.View {
         // ~12% linear luminance against the frame's 100%: readable on black, and captured far
         // below the threshold that separates the frame's lit cells from its dark ones.
         val dim = "#70757A".toColorInt()
         val meta = text("", 13f).apply { setTextColor(dim) }
         barMeta = meta
         val p = packed
+        // Compressed: how much smaller, and the file's own rate at the link's best with the time
+        // compressing took counted in -- the figure to hold the receiver's against.
+        val gain = p?.let { Throughput(it.originalSize, t.fileBytes, linkRate, it.compressMs) }
         barMetaPrefix = formatBytes(p?.originalSize ?: t.fileBytes) +
-            (if (p != null && p.compressed) {
-                " · %.1f× smaller".format(p.originalSize.toDouble() / t.fileBytes.coerceAtLeast(1))
-            } else "") +
+            (if (p != null && p.compressed && gain != null) {
+                " · %.1f× smaller".format(gain.ratio) +
+                    (if (gain.valid) " · ≈${formatRate(gain.effectiveRate)} effective" else "")
+            } else if (linkRate > 0.0) " · ≤${formatRate(linkRate)}" else "") +
             (if (p?.encrypted == true) " · encrypted" else "") +
             (estimate?.let { " · ≥$it at best" } ?: "")
         return android.widget.LinearLayout(this).apply {
@@ -527,6 +543,19 @@ class TransmitActivity : AppCompatActivity() {
             n < 1024 -> "$n bytes"
             n < 1024 * 1024 -> "%.1f KB".format(n / 1024.0)
             else -> "%.1f MB".format(n / (1024.0 * 1024.0))
+        }
+
+        /**
+         * Precision that holds still: whole KB/s from 10 up, so the last digit is not the one that
+         * changes every frame. Below 10, one decimal, because 3 and 3.4 are a real difference there.
+         */
+        fun formatRate(bytesPerSecond: Double): String {
+            val kb = bytesPerSecond / 1024.0
+            return when {
+                kb >= 1000.0 -> "%.1f MB/s".format(kb / 1024.0)
+                kb >= 10.0 -> "%.0f KB/s".format(kb)
+                else -> "%.1f KB/s".format(kb)
+            }
         }
 
         fun formatSeconds(s: Double): String = when {

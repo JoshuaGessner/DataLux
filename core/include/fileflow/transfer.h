@@ -18,6 +18,18 @@
 
 namespace fileflow {
 
+// What the transferred bytes ARE, said up front so a receiver can show the speed that matters to the
+// person -- the original file's bytes per second, not the link's -- before the file has arrived.
+// Optional: a manifest without it is still complete (an encrypted transfer omits it).
+struct ContentHint {
+    std::uint64_t original_size = 0;  // the file before compression; 0 = not said
+    std::uint8_t codec = 0;           // 0 none, 1 deflate, 2 zstd
+    std::uint32_t compress_ms = 0;    // what compressing it cost the sender
+
+    static constexpr std::uint8_t kExtensionType = 1;
+    static constexpr std::uint8_t kEncodedSize = 8 + 1 + 4;
+};
+
 struct FileManifest {
     std::uint64_t file_size = 0;
     Sha256::Digest sha256{};
@@ -26,6 +38,7 @@ struct FileManifest {
     std::uint32_t block_symbols = 0;   // k per block
     std::uint32_t symbol_size = 0;
     std::uint32_t session_id = 0;
+    ContentHint content;
 
     // Hard bounds, all enforced before any allocation derived from them.
     static constexpr std::uint64_t kMaxFileSize = 4ULL * 1024 * 1024 * 1024;
@@ -89,6 +102,9 @@ class FileTransmitter {
 
     [[nodiscard]] const FileManifest& manifest() const noexcept { return manifest_; }
     [[nodiscard]] std::uint32_t manifest_interval() const noexcept { return manifest_interval_; }
+
+    // Adds what the payload is (ContentHint) to every manifest frame from now on.
+    void SetContentHint(const ContentHint& hint);
 
     // Produces the next frame payload in the transmission schedule: a manifest frame every
     // `manifest_interval()` states, otherwise a fountain symbol, round-robining over blocks so a

@@ -45,6 +45,7 @@ add_library(fileflow SHARED
     src/jni_transmitter.cpp
     src/jni_framing.cpp
     src/jni_receiver.cpp
+    src/jni_codec.cpp
 )
 
 target_link_libraries(fileflow PRIVATE

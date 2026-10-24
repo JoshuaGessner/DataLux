@@ -65,6 +65,13 @@ data class LiveStatus(
     val transferSeconds: Double,
     /** Bits per cell the sender uses, from its headers: 1, 2 (four colours) or 3; 0 before. */
     val bitsPerCell: Int,
+    /**
+     * The file before compression, as the sender's manifest says (0 = not said, as under
+     * encryption); the codec (0 none, 1 deflate, 2 zstd) and what compressing cost the sender.
+     */
+    val originalSize: Long,
+    val codec: Int,
+    val compressMs: Long,
     /** The grid this status was decoded against: the detected one once [gridKnown]. */
     val cols: Int,
     val rows: Int,
@@ -350,6 +357,9 @@ class LiveDecoder(
             colorNoise = slots[Slot.ColorNoise.ordinal],
             transferSeconds = slots[Slot.TransferSeconds.ordinal],
             bitsPerCell = slots[Slot.BitsPerCell.ordinal].toInt(),
+            originalSize = slots[Slot.OriginalSize.ordinal].toLong(),
+            codec = slots[Slot.Codec.ordinal].toInt(),
+            compressMs = slots[Slot.CompressMs.ordinal].toLong(),
             cols = c.cols,
             rows = c.rows,
             gridKnown = committed === c,
@@ -383,7 +393,8 @@ class LiveDecoder(
         val opened = if (Envelope.isEnvelope(received) || requireEncrypted) {
             Envelope.unpack(received, key, requireEncrypted)
         } else {
-            Envelope.Unpacked(linkName, received, compressed = false, encrypted = false, received.size)
+            Envelope.Unpacked(linkName, received, Envelope.CODEC_NONE, encrypted = false, received.size,
+                              compressMs = 0, decompressMs = 0)
         }
         val bytes = opened.data
         val safe = opened.name.replace(Regex("[/\\\\\\u0000-\\u001f]"), "_")
@@ -392,8 +403,9 @@ class LiveDecoder(
             ?: saveToAppFolder(context, safe, bytes)?.let {
                 SavedFile(it.name, null, it.absolutePath, bytes.size.toLong())
             }
-        return saved?.copy(linkBytes = opened.packedSize.toLong(), compressed = opened.compressed,
-                           encrypted = opened.encrypted)
+        return saved?.copy(linkBytes = opened.packedSize.toLong(), codec = opened.codec,
+                           encrypted = opened.encrypted, compressMs = opened.compressMs,
+                           decompressMs = opened.decompressMs)
     }
 
     /** Where a received file ended up. [uri] is null when only the app-private fallback worked. */
@@ -404,9 +416,15 @@ class LiveDecoder(
         val bytes: Long,
         /** Bytes that crossed the link: fewer than [bytes] when the file was compressed. */
         val linkBytes: Long = bytes,
-        val compressed: Boolean = false,
+        /** 0 none, 1 deflate, 2 zstd. */
+        val codec: Int = 0,
         val encrypted: Boolean = false,
-    )
+        /** What compressing cost the sender, and opening it cost here, ms. */
+        val compressMs: Long = 0,
+        val decompressMs: Long = 0,
+    ) {
+        val compressed: Boolean get() = codec != 0
+    }
 
     /**
      * Into the public Downloads/FileFlow folder, through MediaStore.
@@ -489,7 +507,7 @@ class LiveDecoder(
     private enum class Slot {
         Phase, Hint, Progress, SecondsRemaining, MotionBlurCells, RecentReadFraction,
         ScreenInView, Frames, FileSize, PayloadFrames, BytesPerSecond, DistinctStates,
-        ColorSpread, ColorNoise, TransferSeconds, BitsPerCell,
+        ColorSpread, ColorNoise, TransferSeconds, BitsPerCell, OriginalSize, Codec, CompressMs,
     }
 
     companion object {

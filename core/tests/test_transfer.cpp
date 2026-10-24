@@ -75,6 +75,52 @@ TEST(FileManifest, RoundTrips) {
     EXPECT_EQ(d.value().file_name, m.file_name);
     EXPECT_EQ(d.value().block_count, m.block_count);
     EXPECT_EQ(d.value().session_id, m.session_id);
+    EXPECT_EQ(d.value().content.original_size, 0U) << "no hint was given";
+}
+
+TEST(FileManifest, CarriesTheContentHint) {
+    FileManifest m;
+    m.file_size = 40000;
+    m.sha256 = Sha256::Of(Payload(100));
+    m.file_name = "notes.txt";
+    m.block_count = 1;
+    m.block_symbols = 80;
+    m.symbol_size = 512;
+    m.session_id = 7;
+    m.content = ContentHint{.original_size = 150000, .codec = 2, .compress_ms = 85};
+    auto d = FileManifest::Decode(m.Encode());
+    ASSERT_TRUE(d.ok()) << ErrorName(d.error());
+    EXPECT_EQ(d.value().content.original_size, 150000U);
+    EXPECT_EQ(d.value().content.codec, 2U);
+    EXPECT_EQ(d.value().content.compress_ms, 85U);
+}
+
+TEST(FileManifest, AnUnknownExtensionIsSkippedNotRejected) {
+    // What a newer sender's manifest looks like to this receiver: an extension it has never heard
+    // of, before the one it knows. It must read the rest, not refuse the transfer.
+    FileManifest m;
+    m.file_size = 1000;
+    m.sha256 = Sha256::Of(Payload(10));
+    m.file_name = "a";
+    m.block_count = 1;
+    m.block_symbols = 2;
+    m.symbol_size = 512;
+    m.session_id = 9;
+    std::vector<std::uint8_t> bytes = m.Encode();
+    // Replace the empty extension block (U16 0, then CRC) with: type 99 len 3 [1 2 3], then a hint.
+    bytes.resize(bytes.size() - 4 - 2);
+    const std::vector<std::uint8_t> ext = {0, static_cast<std::uint8_t>(5 + 2 + ContentHint::kEncodedSize),
+                                           99, 3, 1, 2, 3,
+                                           ContentHint::kExtensionType, ContentHint::kEncodedSize,
+                                           0, 0, 0, 0, 0, 0, 0x10, 0x00,  // 4096
+                                           2, 0, 0, 0, 5};
+    bytes.insert(bytes.end(), ext.begin(), ext.end());
+    const std::uint32_t crc = Crc32(bytes);
+    for (int i = 3; i >= 0; --i) bytes.push_back(static_cast<std::uint8_t>(crc >> (8 * i)));
+    auto d = FileManifest::Decode(bytes);
+    ASSERT_TRUE(d.ok()) << ErrorName(d.error());
+    EXPECT_EQ(d.value().content.original_size, 4096U);
+    EXPECT_EQ(d.value().content.compress_ms, 5U);
 }
 
 TEST(FileManifest, RejectsHostileValues) {

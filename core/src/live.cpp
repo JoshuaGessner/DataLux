@@ -249,6 +249,7 @@ void LiveReceiver::Decide(std::int64_t timestamp_ns, const FramePipeline& lane) 
     if (const FileManifest* m = session_->manifest()) {
         s.file_name = m->file_name;
         s.file_size = m->file_size;
+        s.content = m->content;
     }
 
     // Paused when nothing is arriving: showing "3 s left" while the camera points at the floor

@@ -215,21 +215,16 @@ class CaptureActivity : AppCompatActivity() {
         if (s.fileSize <= 0 || s.phase.terminal) return null
         val secs = elapsedMs / 1000
         val clock = "${secs / 60}:${"%02d".format(secs % 60)}"
-        val rate = if (s.bytesPerSecond > 0.0) " · ${formatRate(s.bytesPerSecond)}" else ""
-        return "${TransmitActivity.formatBytes(s.fileSize)}$rate · $clock"
-    }
-
-    /**
-     * Precision that holds still: whole KB/s from 10 up, so the last digit is not the one that
-     * changes every frame. Below 10, one decimal, because 3 and 3.4 are a real difference there.
-     */
-    private fun formatRate(bytesPerSecond: Double): String {
-        val kb = bytesPerSecond / 1024.0
-        return when {
-            kb >= 1000.0 -> "%.1f MB/s".format(kb / 1024.0)
-            kb >= 10.0 -> "%.0f KB/s".format(kb)
-            else -> "%.1f KB/s".format(kb)
-        }
+        val rate = if (s.bytesPerSecond > 0.0) " · ${TransmitActivity.formatRate(s.bytesPerSecond)}" else ""
+        val line = "${TransmitActivity.formatBytes(s.fileSize)}$rate · $clock"
+        // A compressed file (the sender's manifest says so, outside encrypted mode): a second
+        // line with the file's own rate -- the link's, times how much smaller it travels, less
+        // what compressing cost -- and what that saves over sending it as it is.
+        if (s.codec == 0 || s.originalSize <= 0 || s.bytesPerSecond <= 0.0) return line
+        val gain = Throughput(s.originalSize, s.fileSize, s.bytesPerSecond, s.compressMs)
+        return line + "\n%.1f× smaller · ≈%s effective · %s".format(
+            gain.ratio, TransmitActivity.formatRate(gain.effectiveRate), Throughput.describeSaving(gain.secondsSaved),
+        )
     }
 
     /** When the detail line was last redrawn: statuses arrive per decoded frame, 50 a second. */
@@ -979,11 +974,21 @@ class CaptureActivity : AppCompatActivity() {
                     appendLine("  size        ${TransmitActivity.formatBytes(saved.bytes)}")
                     appendLine("  integrity   SHA-256 matched the sender's")
                     appendLine("  transfer    ${"%.1f".format(link)} s, first data to verified")
-                    appendLine("  goodput     ${"%.1f".format(saved.bytes / 1024.0 / link)} KB/s" +
-                               if (saved.compressed) " (file bytes; ${"%.1f".format(
-                                   saved.linkBytes / 1024.0 / link)} KB/s on the link, " +
-                                   "${"%.2f".format(saved.bytes.toDouble() / saved.linkBytes)}x " +
-                                   "compressed)" else "")
+                    appendLine("  link        ${"%.1f".format(saved.linkBytes / 1024.0 / link)} KB/s, " +
+                               "${TransmitActivity.formatBytes(saved.linkBytes)} on the link")
+                    if (saved.compressed) {
+                        val gain = gainOf(saved, link)
+                        appendLine("  compressed  ${Throughput.codecName(saved.codec)}, " +
+                                   "${"%.2f".format(gain.ratio)}x; ${saved.compressMs} ms to compress, " +
+                                   "${saved.decompressMs} ms to open")
+                        appendLine("  effective   ${"%.1f".format(gain.effectiveRate / 1024.0)} KB/s " +
+                                   "of file, all costs counted; ${Throughput.describeSaving(gain.secondsSaved)} " +
+                                   "against ${"%.1f".format(gain.uncompressedSeconds)} s uncompressed")
+                    } else {
+                        appendLine("  compressed  no" + if (saved.compressMs > 0) {
+                            " (the sender's ${saved.compressMs} ms check found it would not shrink)"
+                        } else "")
+                    }
                     if (saved.encrypted) appendLine("  encrypted   AES-256-GCM, paired key")
                     appendLine("  from Receive ${"%.1f".format(seconds)} s, " +
                                "${"%.1f".format(saved.bytes / 1024.0 / seconds)} KB/s " +
@@ -1009,6 +1014,11 @@ class CaptureActivity : AppCompatActivity() {
             runOnUiThread { showResult(report, saved, s, link, seconds, refused) }
         }.start()
     }
+
+    /** The link's rate over [link] seconds, and what compression made of it. */
+    private fun gainOf(saved: LiveDecoder.SavedFile, link: Double) = Throughput(
+        saved.bytes, saved.linkBytes, saved.linkBytes / link, saved.compressMs, saved.decompressMs,
+    )
 
     /**
      * The end of a transfer: what arrived, and what to do with it next.
@@ -1056,22 +1066,27 @@ class CaptureActivity : AppCompatActivity() {
             col.addView(text(saved.name, 18f, com.google.android.material.R.attr.colorOnSurface, bold = true)
                 .apply { gravity = Gravity.CENTER })
             col.addView(space(12))
-            // The speed of the link -- what the card showed while it ran -- and, smaller, the
-            // whole time from pressing Receive, which also counts finding the sender.
-            col.addView(title(formatRate(saved.bytes / link), 34f).apply { gravity = Gravity.CENTER })
+            // The headline is the file's own bytes per second -- what the person waited for --
+            // with compressing and opening counted in. Compressed, the link's rate and what
+            // compression saved (or cost) against sending it as it is follow, so the two can be
+            // compared; smaller, the whole time from pressing Receive, which also counts aiming.
+            val gain = gainOf(saved, link)
+            col.addView(title(TransmitActivity.formatRate(gain.effectiveRate), 34f).apply { gravity = Gravity.CENTER })
             col.addView(text(
-                "${TransmitActivity.formatBytes(saved.bytes)} in ${"%.1f".format(link)} s",
+                "${TransmitActivity.formatBytes(saved.bytes)} in ${"%.1f".format(gain.totalSeconds)} s",
             ).apply { gravity = Gravity.CENTER })
-            // Compressed: the headline is the file's own bytes per second, which is what the
-            // person waited for; the link's rate is the smaller number, said once.
-            if (saved.compressed) {
-                col.addView(text(
-                    "%.1f× compressed · link %s".format(
-                        saved.bytes.toDouble() / saved.linkBytes, formatRate(saved.linkBytes / link),
-                    ),
-                    13f,
-                ).apply { gravity = Gravity.CENTER; setPadding(0, dp(2), 0, 0) })
-            }
+            col.addView(text(
+                if (saved.compressed) {
+                    "Link %s · %.1f× smaller with %s\n%s against %s uncompressed".format(
+                        TransmitActivity.formatRate(gain.linkRate), gain.ratio, Throughput.codecName(saved.codec),
+                        Throughput.describeSaving(gain.secondsSaved).replaceFirstChar { it.uppercase() },
+                        TransmitActivity.formatSeconds(gain.uncompressedSeconds),
+                    )
+                } else {
+                    "Link %s · not compressed".format(TransmitActivity.formatRate(gain.linkRate))
+                },
+                13f,
+            ).apply { gravity = Gravity.CENTER; setPadding(0, dp(2), 0, 0) })
             if (seconds - link >= 1.0) {
                 col.addView(text("${"%.0f".format(seconds)} s from Receive, including aiming", 13f)
                     .apply { gravity = Gravity.CENTER; setPadding(0, dp(2), 0, 0) })

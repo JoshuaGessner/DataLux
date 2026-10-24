@@ -22,10 +22,15 @@ with the sending screen filling the receiving camera's view:
 A 2 MB photo takes about 8 seconds on Fastest and 12 on Fast. Eight colours need a receiving
 camera that sees colour sharply; four colours are much easier to tell apart, so **Fast** is the
 default and works with more phones. If the receiver says it can read the screen but not its
-colours, step the sender down a setting. Text, documents and other compressible files go
-faster still: FileFlow compresses them automatically when that helps, so a 1 MB text file may only
-need a few hundred kilobytes on the link. Photos and videos are already compressed, so they travel
-at the link speed.
+colours, step the sender down a setting.
+
+Text, documents and other compressible files go faster still: FileFlow compresses them with
+Zstandard before sending, so a 1 MB text file may need only a few hundred kilobytes on the link.
+Photos and videos are already compressed; a quick check spots them and sends them as they are.
+**Settings › Compression** offers **Auto** (the default), **Maximum** (smallest transfer, longer to
+prepare) and **Off**. The receiver shows the link's speed and the file's *effective* speed, which
+counts the time spent compressing and opening, along with how much time compression saved or cost
+compared with sending the file uncompressed. Turn compression off to compare the two.
 
 Speeds depend on both phones — the receiving camera needs to run at 50–60 frames a second for the
 faster settings, which most recent phones do. The receiver works out the sender's setting on its

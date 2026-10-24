@@ -39,10 +39,25 @@ std::vector<std::uint8_t> FileManifest::Encode() const {
     w.U8(static_cast<std::uint8_t>(std::min(file_name.size(), kMaxNameLength)));
     w.Bytes({reinterpret_cast<const std::uint8_t*>(file_name.data()),
              std::min(file_name.size(), kMaxNameLength)});
-    w.U16(0);  // extension length: none. Readers SKIP unknown extensions by length.
+    // Extensions: type, length, value, each skipped by length by a reader that does not know it.
+    if (content.original_size > 0) {
+        w.U16(2 + ContentHint::kEncodedSize);
+        w.U8(ContentHint::kExtensionType);
+        w.U8(ContentHint::kEncodedSize);
+        w.U64(content.original_size);
+        w.U8(content.codec);
+        w.U32(content.compress_ms);
+    } else {
+        w.U16(0);
+    }
     const std::uint32_t crc = Crc32(w.data());
     w.U32(crc);
     return std::move(w).take();
+}
+
+void FileTransmitter::SetContentHint(const ContentHint& hint) {
+    manifest_.content = hint;
+    manifest_bytes_ = manifest_.Encode();
 }
 
 Result<FileManifest> FileManifest::Decode(std::span<const std::uint8_t> in) {
@@ -102,7 +117,28 @@ Result<FileManifest> FileManifest::Decode(std::span<const std::uint8_t> in) {
     // Forward compatibility: unknown extensions are SKIPPED BY LENGTH, never rejected.
     // A protocol that rejects unknown fields cannot be extended without breaking every
     // deployed receiver (PROTOCOL-SPEC).
-    FF_TRY(r.Skip(extlen.value()));
+    std::size_t ext_left = extlen.value();
+    while (ext_left >= 2) {
+        auto type = r.U8();
+        auto len = r.U8();
+        if (!type.ok() || !len.ok()) return Error::kTruncated;
+        ext_left -= 2;
+        if (len.value() > ext_left) return Error::kLengthMismatch;
+        if (type.value() == ContentHint::kExtensionType && len.value() == ContentHint::kEncodedSize) {
+            auto orig = r.U64();
+            auto codec = r.U8();
+            auto ms = r.U32();
+            if (!orig.ok() || !codec.ok() || !ms.ok()) return Error::kTruncated;
+            // A hint, never trusted for anything but display; bounded all the same.
+            if (orig.value() <= kMaxFileSize) {
+                m.content = ContentHint{orig.value(), codec.value(), ms.value()};
+            }
+        } else {
+            FF_TRY(r.Skip(len.value()));
+        }
+        ext_left -= len.value();
+    }
+    FF_TRY(r.Skip(ext_left));
 
     FF_TRY(m.Validate());
     return m;

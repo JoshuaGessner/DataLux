@@ -141,6 +141,8 @@ struct LiveStatus {
 
     std::string file_name;            // a display hint (sanitised), once the manifest is in
     std::uint64_t file_size = 0;
+    // What the sender said the file is before compression (ContentHint), when it said.
+    ContentHint content;
 };
 
 // The speed and the time left of a transfer in progress, from its verified progress over time.

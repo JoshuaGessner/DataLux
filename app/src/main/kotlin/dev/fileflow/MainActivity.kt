@@ -22,6 +22,7 @@ import com.google.android.material.button.MaterialButton
 import com.google.android.material.button.MaterialButtonToggleGroup
 import com.google.android.material.materialswitch.MaterialSwitch
 import dev.fileflow.rx.LiveDecoder
+import dev.fileflow.secure.Envelope
 import dev.fileflow.secure.PairingStore
 import dev.fileflow.ui.Ui.Style
 import dev.fileflow.ui.Ui.button
@@ -64,6 +65,8 @@ class MainActivity : AppCompatActivity() {
 
     /** Encrypted mode: files are sealed to a paired phone (`secure/`). One switch, both tabs. */
     private var encrypted = false
+    /** How hard the sender compresses: the Settings choice, Auto unless changed. */
+    private var compression = Envelope.Mode.Auto
     private val securityRows = ArrayList<Pair<MaterialSwitch, TextView>>()
     private var afterPairing: (() -> Unit)? = null
     private val pair = registerForActivityResult(
@@ -93,6 +96,7 @@ class MainActivity : AppCompatActivity() {
             .putExtra("stateRate", speed.statesPerSecond)
             .putExtra("colours", speed.colours)
             .putExtra("encrypted", encrypted)
+            .putExtra("compression", compression.name)
         if (uri != null) {
             // The picker's grant covers this activity; the flag passes it on to the transmitter.
             i.setData(uri).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
@@ -121,6 +125,9 @@ class MainActivity : AppCompatActivity() {
         val prefs = getPreferences(MODE_PRIVATE)
         speed = Speed.named(prefs.getString(PREF_SPEED, null))
         encrypted = prefs.getBoolean(PREF_ENCRYPTED, false)
+        compression = runCatching {
+            Envelope.Mode.valueOf(prefs.getString(PREF_COMPRESSION, null) ?: "")
+        }.getOrDefault(Envelope.Mode.Auto)
 
         val content = FrameLayout(this)
         pages[TAB_SEND] = sendPage()
@@ -459,33 +466,14 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun settingsPage(prefs: android.content.SharedPreferences): View {
-        val toggle = MaterialButtonToggleGroup(this).apply {
-            isSingleSelection = true
-            isSelectionRequired = true
-            Speed.entries.forEach { s ->
-                // Outlined style, untouched: inside a toggle group it is what draws the checked
-                // segment filled and the others clear.
-                addView(MaterialButton(
-                    context, null, com.google.android.material.R.attr.materialButtonOutlinedStyle,
-                ).apply {
-                    id = View.generateViewId()
-                    tag = s
-                    text = s.label
-                    isAllCaps = false
-                    textSize = 14f
-                    minHeight = dp(48)
-                    maxLines = 1
-                    // The default 24 dp side padding truncated "Steady" to "Ste…".
-                    setPaddingRelative(dp(4), paddingTop, dp(4), paddingBottom)
-                }, LinearLayout.LayoutParams(0, WRAP, 1f))
-            }
-            check((0 until childCount).map { getChildAt(it) }.first { it.tag == speed }.id)
-            addOnButtonCheckedListener { group, id, checked ->
-                if (!checked) return@addOnButtonCheckedListener
-                speed = group.findViewById<View>(id).tag as Speed
-                prefs.edit { putString(PREF_SPEED, speed.name) }
-                updateSpeedLabel()
-            }
+        val toggle = segmented(Speed.entries, speed, { it.label }) {
+            speed = it
+            prefs.edit { putString(PREF_SPEED, speed.name) }
+            updateSpeedLabel()
+        }
+        val compressionToggle = segmented(Envelope.Mode.entries, compression, { it.name }) {
+            compression = it
+            prefs.edit { putString(PREF_COMPRESSION, compression.name) }
         }
         val body = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -500,6 +488,16 @@ class MainActivity : AppCompatActivity() {
                 space(8),
                 toggle.apply { layoutParams = matchWidth() },
             ), matchWidth())
+            addView(card(
+                LinearLayout(context).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
+                    addView(title("Compression", 18f), LinearLayout.LayoutParams(0, WRAP, 1f))
+                    addView(helpButton("Compression", COMPRESSION_HELP))
+                },
+                space(8),
+                compressionToggle.apply { layoutParams = matchWidth() },
+            ), matchWidth(dp(12)))
             addView(row(R.drawable.ic_help, "How it works", null) {
                 showHelp("How it works", HOW_IT_WORKS)
             }, matchWidth(dp(12)))
@@ -519,6 +517,37 @@ class MainActivity : AppCompatActivity() {
             addView(body)
         }
     }
+
+    /** One choice of several, as a row of segments, [selected] checked. */
+    private fun <T> segmented(
+        entries: List<T>, selected: T, label: (T) -> String, onPick: (T) -> Unit,
+    ): MaterialButtonToggleGroup =
+        MaterialButtonToggleGroup(this).apply {
+            isSingleSelection = true
+            isSelectionRequired = true
+            entries.forEach { s ->
+                // Outlined style, untouched: inside a toggle group it is what draws the checked
+                // segment filled and the others clear.
+                addView(MaterialButton(
+                    context, null, com.google.android.material.R.attr.materialButtonOutlinedStyle,
+                ).apply {
+                    id = View.generateViewId()
+                    tag = s
+                    text = label(s)
+                    isAllCaps = false
+                    textSize = 14f
+                    minHeight = dp(48)
+                    maxLines = 1
+                    // The default 24 dp side padding truncated "Steady" to "Ste…".
+                    setPaddingRelative(dp(4), paddingTop, dp(4), paddingBottom)
+                }, LinearLayout.LayoutParams(0, WRAP, 1f))
+            }
+            check((0 until childCount).map { getChildAt(it) }.first { it.tag == selected }.id)
+            addOnButtonCheckedListener { group, id, checked ->
+                @Suppress("UNCHECKED_CAST")
+                if (checked) onPick(group.findViewById<View>(id).tag as T)
+            }
+        }
 
     /** A tappable list row: icon, title, optional subtitle, chevron. */
     private fun row(
@@ -590,6 +619,7 @@ class MainActivity : AppCompatActivity() {
         const val ACTION_SEND_FILE = "dev.fileflow.action.SEND_FILE"
         private const val PREF_SPEED = "speed"
         private const val PREF_ENCRYPTED = "encrypted"
+        private const val PREF_COMPRESSION = "compression"
         private const val PREF_TAB = "tab"
         private const val TAB_SEND = 1
         private const val TAB_RECEIVE = 2
@@ -621,6 +651,16 @@ class MainActivity : AppCompatActivity() {
                 "until you close FileFlow, or 30 minutes.\n\n" +
                 "Turn it on on BOTH phones. In encrypted mode the receiver refuses any file that " +
                 "isn't sealed to its pairing."
+
+        private const val COMPRESSION_HELP =
+            "Auto — files that compress, like documents, text and spreadsheets, are made smaller " +
+                "before sending, so fewer bytes cross the light link. Photos, videos and archives " +
+                "are already compressed, and a quick check sends those as they are.\n\n" +
+                "Maximum — the strongest compression, for the smallest transfer. It takes longer " +
+                "before sending starts, which pays off on big, very compressible files.\n\n" +
+                "Off — every file is sent exactly as it is. Use it to compare speeds.\n\n" +
+                "The receiving phone shows the link's speed, the file's effective speed, and the " +
+                "time compression saved or cost. Only the sending phone needs this setting."
 
         private const val SPEED_HELP =
             "Fastest — eight colours at 30 frames a second: three times the data of black and " +

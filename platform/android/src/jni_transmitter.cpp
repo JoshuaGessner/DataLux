@@ -149,7 +149,7 @@ std::optional<Prepared> Prepare(JNIEnv* env, jint cols, jint rows, jint nsym, ji
 
 // Opens the session over `payload`. Throws and returns 0 on failure.
 jlong Start(JNIEnv* env, Prepared prep, std::vector<std::uint8_t> payload, std::string name,
-            jint nsym) {
+            jint nsym, fileflow::ContentHint content = {}) {
     if (payload.empty()) {
         ThrowIllegalState(env, "the file is empty");
         return 0;
@@ -164,6 +164,7 @@ jlong Start(JNIEnv* env, Prepared prep, std::vector<std::uint8_t> payload, std::
     fileflow::TransmitConfig tc;
     tc.fec_nsym = static_cast<std::size_t>(nsym);
     tc.profile = prep.profile;
+    tc.content = content;
     auto tx_r = fileflow::TransmitSession::Create(*handle->layout, handle->payload, std::move(name),
                                                   session_id, tc);
     if (!tx_r.ok()) {
@@ -207,7 +208,8 @@ Java_dev_fileflow_tx_NativeTransmitter_open(JNIEnv* env, jclass /*unused*/, jint
 JNIEXPORT jlong JNICALL
 Java_dev_fileflow_tx_NativeTransmitter_openFile(JNIEnv* env, jclass /*unused*/, jint cols,
                                                jint rows, jint nsym, jbyteArray data,
-                                               jbyteArray name_utf8, jint colours) {
+                                               jbyteArray name_utf8, jint colours,
+                                               jlong original_size, jint codec, jint compress_ms) {
     if (data == nullptr) {
         ThrowIllegalState(env, "no file data");
         return 0;
@@ -225,8 +227,16 @@ Java_dev_fileflow_tx_NativeTransmitter_openFile(JNIEnv* env, jclass /*unused*/, 
     if (n > 0) {
         env->GetByteArrayRegion(data, 0, n, reinterpret_cast<jbyte*>(payload.data()));
     }
+    // What the payload is before compression, for the receiver's display (ContentHint). Bounded
+    // here as everywhere: a hint is never trusted for anything but showing a number.
+    fileflow::ContentHint hint;
+    if (original_size > 0 && static_cast<std::uint64_t>(original_size) <= fileflow::FileManifest::kMaxFileSize) {
+        hint.original_size = static_cast<std::uint64_t>(original_size);
+        hint.codec = static_cast<std::uint8_t>(codec & 0xFF);
+        hint.compress_ms = compress_ms > 0 ? static_cast<std::uint32_t>(compress_ms) : 0U;
+    }
     return Start(env, std::move(*prep), std::move(payload),
-                 fileflow::android_jni::Utf8(env, name_utf8), nsym);
+                 fileflow::android_jni::Utf8(env, name_utf8), nsym, hint);
 }
 
 JNIEXPORT jlong JNICALL

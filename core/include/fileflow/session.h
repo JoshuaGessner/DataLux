@@ -42,6 +42,9 @@ struct TransmitConfig {
     // How payload cells carry bits: M0 (one, black or white) or M5 (three, eight colours). Named
     // in every header, so the receiver needs no configuration for it.
     ModulationProfile profile = ModulationProfile::kM0BinaryLuminance;
+    // What the file is before compression, put in the manifest for the receiver's display.
+    // original_size 0 = say nothing (an encrypted transfer).
+    ContentHint content{};
 };
 
 class TransmitSession {
