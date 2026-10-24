@@ -512,8 +512,10 @@ void ColorModulator::DemodulatePayload(std::span<const double> rgb, SoftSymbolBu
         return o;
     };
     using Mat = std::array<std::array<double, 3>, 3>;
-    // Squared distance in the metric w: with w the inverse noise covariance, the sharp luma
-    // direction counts for more than the blurred chroma ones, as it should.
+    // Squared distance under the weights w -- plain Euclidean, w the identity. Weighting by the
+    // inverse residual covariance, so the sharp luma direction would count for more, was tried and
+    // measured worse on real-camera-like frames: 11.9% of cells wrong against 3.5% under heavy
+    // chroma blur (ffframe, F67). The pooled covariance is dominated by the cells already confused.
     auto metric = [](const Mat& w, const Vec& d) {
         double acc = 0.0;
         for (std::size_t i = 0; i < 3; ++i) {
@@ -554,7 +556,7 @@ void ColorModulator::DemodulatePayload(std::span<const double> rgb, SoftSymbolBu
                 for (std::size_t k = 0; k < kF; ++k) bleed[i][k] = bt[k][i];
             }
         }
-        // Residual covariance once the bleed is accounted for: the decision metric.
+        // Residual spread once the bleed is accounted for: the noise the decisions face.
         Mat cov{};
         for (std::size_t s = 0; s < x.size(); ++s) {
             const Vec& own = mu[static_cast<std::size_t>(label[pay_cells[slot[s]]])];
@@ -566,18 +568,10 @@ void ColorModulator::DemodulatePayload(std::span<const double> rgb, SoftSymbolBu
         }
         residual_var = 0.0;
         std::vector<std::vector<double>> cv(3, std::vector<double>(3));
-        std::vector<std::vector<double>> id(3, std::vector<double>(3, 0.0));
         for (std::size_t i = 0; i < 3; ++i) {
             for (std::size_t k = 0; k < 3; ++k) cv[i][k] = cov[i][k] / static_cast<double>(x.size());
             cv[i][i] += 4.0;  // a floor: a perfectly clean frame must not divide by zero
             residual_var += cv[i][i];
-            id[i][i] = 1.0;
-        }
-        std::vector<std::vector<double>> winv;
-        if (solve(cv, id, &winv)) {
-            for (std::size_t i = 0; i < 3; ++i) {
-                for (std::size_t k = 0; k < 3; ++k) w[i][k] = winv[i][k];
-            }
         }
         // Re-decide every payload cell under the fitted model, for the next pass and the bits.
         const std::array<Vec, 8> q = own_part(bleed);
@@ -643,6 +637,7 @@ void ColorModulator::DemodulatePayload(std::span<const double> rgb, SoftSymbolBu
             for (unsigned b = a + 1; b < n_colors; ++b) spread = std::min(spread, dist2(mu[a], mu[b]));
         }
         diag->centroid_spread = std::sqrt(spread);
+        for (unsigned c = 0; c < n_colors; ++c) diag->centroids[c] = mu[c];
     }
 }
 

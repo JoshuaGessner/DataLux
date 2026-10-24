@@ -11,6 +11,7 @@
 #include <fileflow/grid.h>
 #include <fileflow/result.h>
 
+#include <array>
 #include <cstdint>
 #include <span>
 #include <vector>
@@ -126,6 +127,8 @@ struct ColorDiagnostics {
     std::size_t pilots = 0;         // colour pilots with a sample
     double centroid_spread = 0.0;   // smallest distance between two colour centroids, 0..255 units
     double noise_sigma = 0.0;       // per-channel spread of cells round their centroid
+    // Where each palette colour was learned to sit, r,g,b -- for diagnosis (ffframe).
+    std::array<std::array<double, 3>, 8> centroids{};
 };
 
 // M5: three bits a cell, one each on red, green and blue (kM5EightColor). And M3: two bits a

@@ -153,11 +153,12 @@ TEST(ColorTransfer, ColourThatBleedsBetweenCellsStillVerifies) {
 }
 
 TEST(ColorTransfer, FourColoursSurviveBlurThatDefeatsEight) {
-    // Colour blurred over about two-thirds of a cell (chroma blur 2 here, with cells three chroma
-    // pixels wide): eight colours cannot be told apart, four -- each pair two channels apart --
-    // still can (F66). This is what the Fast setting is for.
+    // Colour blurred across a whole cell (chroma blur 3 here, with cells three chroma pixels wide):
+    // eight colours cannot be told apart, four -- each pair two channels apart -- still can (F66).
+    // This is what the Fast setting is for. (Blur 2 was the case until the demodulator dropped its
+    // covariance weighting; eight colours read that now, F67.)
     sim::ColorChannelConfig camera;
-    camera.chroma_blur = 2;
+    camera.chroma_blur = 3;
     const std::vector<std::uint8_t> file = File(60000);
     const Outcome four = Transfer(file, ModulationProfile::kM3FourColor, camera, 120);
     const Outcome eight = Transfer(file, ModulationProfile::kM5EightColor, camera, 40);

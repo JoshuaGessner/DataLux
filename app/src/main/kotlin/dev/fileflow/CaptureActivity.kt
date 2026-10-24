@@ -234,6 +234,18 @@ class CaptureActivity : AppCompatActivity() {
 
     /** When the detail line was last redrawn: statuses arrive per decoded frame, 50 a second. */
     private var detailShownMs = 0L
+
+    /** Frames still to save for diagnosis, and why (FrameDump). */
+    @Volatile private var dumpRequest = 0
+    @Volatile private var dumpTag = ""
+    private var lastDumpMs = 0L
+    private var dumpedStall = false
+    private var dumpedGood = false
+
+    private fun requestDump(count: Int, tag: String) {
+        dumpTag = tag
+        dumpRequest = count
+    }
     private var thermalListener: android.os.PowerManager.OnThermalStatusChangedListener? = null
 
     /** Close, details and help, along the bottom of the receive screen. */
@@ -257,7 +269,18 @@ class CaptureActivity : AppCompatActivity() {
                 v.details = !v.details
                 v.invalidate()
                 b.alpha = if (v.details) 1f else 0.7f
-            }.apply { alpha = 0.7f })
+            }.apply {
+                alpha = 0.7f
+                // Long press: save three raw frames for diagnosis -- the evidence for "why can't
+                // this phone read that one", in a form the desktop tools can replay.
+                setOnLongClickListener {
+                    requestDump(3, "manual")
+                    android.widget.Toast.makeText(
+                        context, "Saving 3 frames for diagnosis", android.widget.Toast.LENGTH_SHORT,
+                    ).show()
+                    true
+                }
+            })
             addView(View(context), LinearLayout.LayoutParams(dp(12), 1))
             addView(round(R.drawable.ic_help, "Tips") {
                 showHelp("Tips", RECEIVE_TIPS)
@@ -601,6 +624,15 @@ class CaptureActivity : AppCompatActivity() {
                     }
                     previewView?.submit(buf, w, h, stride, rec.sensorOrientation, rec.frameChroma)
                     decoder.offer(buf, w, h, stride, SystemClock.elapsedRealtimeNanos(), rec.frameChroma)
+                    // Raw frames for offline diagnosis (FrameDump), when something asked for them.
+                    val dumpNow = SystemClock.elapsedRealtime()
+                    if (dumpRequest > 0 && dumpNow - lastDumpMs >= DUMP_SPACING_MS &&
+                        FrameDump.save(this, dumpTag, buf, w, h, stride, rec.frameChroma,
+                                       coach.cameraFact())
+                    ) {
+                        dumpRequest--
+                        lastDumpMs = dumpNow
+                    }
                     // Aim analysis drives the coaching, exposure and refocus decisions, and the
                     // coverage map. It runs on this thread and costs a pass over the frame, so a
                     // couple of times a second rather than per frame.
@@ -833,6 +865,15 @@ class CaptureActivity : AppCompatActivity() {
                 shown = wanted
                 wanted
             } else held
+            // Frames for diagnosis, automatically: three when colour stalls, once per session, and
+            // one at the first good data, for comparison.
+            if (kind == "colour-stall" && !dumpedStall) {
+                dumpedStall = true
+                requestDump(3, "stall")
+            } else if (s.payloadFrames > 0 && !dumpedGood) {
+                dumpedGood = true
+                requestDump(1, "good")
+            }
             if (out.text != lastShown) {
                 lastShown = out.text
                 SessionLog.i(LIVE_TAG, "status: ${s.phase}/${s.hint} ${"%.0f".format(s.progress * 100)}% " +
@@ -1237,6 +1278,8 @@ class CaptureActivity : AppCompatActivity() {
         private const val ZOOM_EVERY_MS = 1500L
         /** Headers reading but no colour frame decoding for this long: suggest a slower setting. */
         private const val COLOUR_STALL_MS = 6000L
+        /** Saved diagnosis frames this far apart, so three are three different moments. */
+        private const val DUMP_SPACING_MS = 300L
         private const val ZOOM_STEP = 1.2f
         private const val WHITE_CEILING = 245.0
         private const val WHITE_FLOOR = 170.0
