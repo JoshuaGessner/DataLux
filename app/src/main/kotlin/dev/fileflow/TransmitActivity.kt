@@ -12,6 +12,7 @@ import androidx.core.view.WindowInsetsControllerCompat
 import dev.fileflow.secure.Envelope
 import dev.fileflow.secure.PairingStore
 import dev.fileflow.tx.OpticalRenderer
+import dev.fileflow.tx.ScreenShape
 import dev.fileflow.tx.Transmitter
 import dev.fileflow.ui.Ui.button
 import dev.fileflow.ui.Ui.dp
@@ -280,7 +281,10 @@ class TransmitActivity : AppCompatActivity() {
         // An explicit divisor is a scripted sweep and is held fixed; otherwise the renderer
         // re-derives it from the vsync rate the panel actually runs at (F59).
         val adaptive = !intent.hasExtra("divisor")
-        val r = OpticalRenderer(t, divisor, marginPx, if (adaptive) targetStateRate else 0.0)
+        // The display's real corners and cutouts, unless a margin was asked for explicitly (scripted
+        // runs that reproduce F34 pass one).
+        val shape = if (intent.hasExtra("marginPx")) null else ScreenShape.of(window.decorView.rootWindowInsets)
+        val r = OpticalRenderer(t, divisor, marginPx, shape, if (adaptive) targetStateRate else 0.0)
         renderer = r
 
         glView = GLSurfaceView(this).apply {

@@ -53,6 +53,11 @@ class OpticalRenderer(
      */
     private val marginPx: Int = 0,
     /**
+     * The display's real shape -- its rounded corners and camera cutouts -- when known. Then the
+     * frame is as large as fits INSIDE that shape, and [marginPx] is only the fallback.
+     */
+    private val shape: ScreenShape? = null,
+    /**
      * When > 0, states per second to aim for, with the divisor re-derived from the MEASURED vsync
      * interval rather than taken as given.
      *
@@ -176,12 +181,28 @@ class OpticalRenderer(
         // rounded corners (F34).
         val usableW = (width - 2 * marginPx).coerceAtLeast(1)
         val usableH = (height - 2 * marginPx).coerceAtLeast(1)
-        pitchPx = minOf(usableW / tx.cols, usableH / tx.rows).coerceAtLeast(1)
+        val uniform = minOf(usableW / tx.cols, usableH / tx.rows).coerceAtLeast(1)
+        // With the display's shape known, the largest pitch whose frame clears the rounded corners
+        // and cutouts. A uniform margin wide enough for the corners also took that much off the
+        // SIDES, where the edge is straight: on a 1080-wide Galaxy, 72 px a side left 7 px a cell
+        // and a frame 78% of the screen's width, where 8 px a cell (89%) clears the corners easily
+        // -- the frame's corners sit 130 px down, below where the glass starts to curve.
+        pitchPx = shape?.let { s ->
+            (minOf((width - 2 * ScreenShape.MIN_SIDE_PX) / tx.cols,
+                   (height - 2 * ScreenShape.MIN_SIDE_PX) / tx.rows) downTo uniform + 1)
+                .firstOrNull { p ->
+                    val w = p * tx.cols
+                    val h = p * tx.rows
+                    s.fits((width - w) / 2, (height - h) / 2, (width + w) / 2, (height + h) / 2)
+                }
+        } ?: uniform
         drawnWidth = pitchPx * tx.cols
         drawnHeight = pitchPx * tx.rows
 
-        dev.fileflow.SessionLog.i(TAG, "surface ${width}x$height, margin $marginPx => pitch $pitchPx px/cell, " +
-                   "drawn ${drawnWidth}x$drawnHeight for a ${tx.cols}x${tx.rows} grid")
+        dev.fileflow.SessionLog.i(TAG, "surface ${width}x$height, " +
+                   (if (pitchPx > uniform) "fitted to the screen's corners" else "margin $marginPx") +
+                   " => pitch $pitchPx px/cell, drawn ${drawnWidth}x$drawnHeight for a " +
+                   "${tx.cols}x${tx.rows} grid")
 
         if (drawnWidth > width || drawnHeight > height) {
             Log.e(TAG, "grid ${tx.cols}x${tx.rows} cannot fit ${width}x$height even at 1 px/cell")
@@ -328,6 +349,63 @@ class OpticalRenderer(
             b.put(v)
             b.position(0)
             return b
+        }
+    }
+}
+
+/**
+ * Where a display can actually show light: its rounded corners (centre and radius of each arc) and
+ * its camera cutouts, in the same pixels as the drawing surface -- which, edge to edge with the
+ * system bars hidden, is the window's.
+ */
+class ScreenShape(
+    /** Each rounded corner as (centreX, centreY, radius). */
+    private val corners: List<Triple<Int, Int, Int>>,
+    private val cutouts: List<android.graphics.Rect>,
+) {
+    /** True when the rectangle lies inside every corner's arc and clear of every cutout. */
+    fun fits(left: Int, top: Int, right: Int, bottom: Int): Boolean {
+        for ((cx, cy, r) in corners) {
+            if (r <= 0) continue
+            // How far the frame's corner on this side reaches past the arc's centre, towards the
+            // display's corner. Only a corner past the centre on BOTH axes is where the glass curves,
+            // and there it must stay inside the arc.
+            val dx = if (cx < (left + right) / 2) cx - left else right - cx
+            val dy = if (cy < (top + bottom) / 2) cy - top else bottom - cy
+            if (dx > 0 && dy > 0 && kotlin.math.hypot(dx.toDouble(), dy.toDouble()) > r - SAFETY_PX) {
+                return false
+            }
+        }
+        for (c in cutouts) {
+            if (left - SAFETY_PX < c.right && right + SAFETY_PX > c.left &&
+                top - SAFETY_PX < c.bottom && bottom + SAFETY_PX > c.top
+            ) {
+                return false
+            }
+        }
+        return true
+    }
+
+    companion object {
+        /** Kept clear of every straight edge regardless, and of the arcs and cutouts beyond them. */
+        const val MIN_SIDE_PX = 24
+        private const val SAFETY_PX = 16
+
+        /** The window's shape, or null when the platform will not say (then: a uniform margin). */
+        fun of(insets: android.view.WindowInsets?): ScreenShape? {
+            if (insets == null) return null
+            val corners = listOf(
+                android.view.RoundedCorner.POSITION_TOP_LEFT,
+                android.view.RoundedCorner.POSITION_TOP_RIGHT,
+                android.view.RoundedCorner.POSITION_BOTTOM_RIGHT,
+                android.view.RoundedCorner.POSITION_BOTTOM_LEFT,
+            ).map { insets.getRoundedCorner(it) }
+            // A display that reports no corners at all is one we know nothing about.
+            if (corners.all { it == null }) return null
+            return ScreenShape(
+                corners.filterNotNull().map { Triple(it.center.x, it.center.y, it.radius) },
+                insets.displayCutout?.boundingRects.orEmpty(),
+            )
         }
     }
 }
