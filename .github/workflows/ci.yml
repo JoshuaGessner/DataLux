@@ -203,7 +203,7 @@ jobs:
           done
       - name: Upload crashes
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: fuzz-crashes
           path: crash-*
@@ -226,7 +226,7 @@ jobs:
           "$SDKMANAGER" --install "ndk;29.0.14206865" "cmake;3.22.1" "platforms;android-37.0"
       # Gradle itself, at the version gradle/wrapper/gradle-wrapper.properties names. The
       # repository carries no wrapper JAR (no binaries are committed), so it is provisioned here.
-      - uses: gradle/actions/setup-gradle@v4
+      - uses: gradle/actions/setup-gradle@v6
         with:
           gradle-version: '9.8.1'
       - name: Assemble, unit tests, lint
