@@ -12,13 +12,17 @@ import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
+import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.edit
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import com.google.android.material.bottomnavigation.BottomNavigationView
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.button.MaterialButtonToggleGroup
+import com.google.android.material.materialswitch.MaterialSwitch
 import dev.fileflow.rx.LiveDecoder
+import dev.fileflow.secure.PairingStore
 import dev.fileflow.ui.Ui.Style
 import dev.fileflow.ui.Ui.button
 import dev.fileflow.ui.Ui.card
@@ -58,13 +62,37 @@ class MainActivity : AppCompatActivity() {
         androidx.activity.result.contract.ActivityResultContracts.OpenDocument(),
     ) { uri -> if (uri != null) send(uri) }
 
+    /** Encrypted mode: files are sealed to a paired phone (`secure/`). One switch, both tabs. */
+    private var encrypted = false
+    private val securityRows = ArrayList<Pair<MaterialSwitch, TextView>>()
+    private var afterPairing: (() -> Unit)? = null
+    private val pair = registerForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult(),
+    ) { r ->
+        refreshSecurity()
+        val next = afterPairing
+        afterPairing = null
+        if (r.resultCode == RESULT_OK) next?.invoke()
+    }
+
+    /** Runs [action] now, or after pairing when encrypted mode is on and the phones are not paired. */
+    private fun withPairing(action: () -> Unit) {
+        if (!encrypted || PairingStore.current() != null) {
+            action()
+        } else {
+            afterPairing = action
+            pair.launch(Intent(this, PairActivity::class.java))
+        }
+    }
+
     /** Opens the transmitter on [uri], or on the generated test file when null. */
-    private fun send(uri: android.net.Uri?) {
+    private fun send(uri: android.net.Uri?) = withPairing {
         val i = Intent(this, TransmitActivity::class.java)
             .putExtra("cols", speed.cols)
             .putExtra("rows", speed.rows)
             .putExtra("stateRate", speed.statesPerSecond)
             .putExtra("colour", speed.colour)
+            .putExtra("encrypted", encrypted)
         if (uri != null) {
             // The picker's grant covers this activity; the flag passes it on to the transmitter.
             i.setData(uri).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
@@ -72,7 +100,7 @@ class MainActivity : AppCompatActivity() {
         startActivity(i)
     }
 
-    private fun receive() {
+    private fun receive() = withPairing {
         // LIVE: decode on the phone until the file verifies (C13b). The receiver chooses its own
         // capture rate, exposure and grid; the sender's grid is only tried first. Scripted
         // experiments still reach the recording path by launching CaptureActivity without `live`.
@@ -83,6 +111,7 @@ class MainActivity : AppCompatActivity() {
                 .putExtra("gridRows", speed.rows)
                 .putExtra("live", true)
                 .putExtra("maxWidth", 4096)
+                .putExtra("encrypted", encrypted)
         )
     }
 
@@ -91,6 +120,7 @@ class MainActivity : AppCompatActivity() {
         WindowCompat.setDecorFitsSystemWindows(window, false)
         val prefs = getPreferences(MODE_PRIVATE)
         speed = Speed.named(prefs.getString(PREF_SPEED, null))
+        encrypted = prefs.getBoolean(PREF_ENCRYPTED, false)
 
         val content = FrameLayout(this)
         pages[TAB_SEND] = sendPage()
@@ -108,7 +138,7 @@ class MainActivity : AppCompatActivity() {
                 .LABEL_VISIBILITY_LABELED
             setOnItemSelectedListener { item ->
                 show(item.itemId)
-                prefs.edit().putInt(PREF_TAB, item.itemId).apply()
+                prefs.edit { putInt(PREF_TAB, item.itemId) }
                 true
             }
         }
@@ -151,6 +181,63 @@ class MainActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         refreshReceived()
+        refreshSecurity()  // a pairing expires on its own
+    }
+
+    /**
+     * The encrypted-mode switch, with the pairing's state under it. The same row sits on Send and
+     * Receive, because it has to be on for BOTH phones and each person is looking at a different tab.
+     */
+    private fun securityRow(): View {
+        val sw = MaterialSwitch(this).apply {
+            isChecked = encrypted
+            contentDescription = "Encrypted mode"
+        }
+        val sub = text("", 13f)
+        securityRows += sw to sub
+        sw.setOnCheckedChangeListener { _, on ->
+            if (on == encrypted) return@setOnCheckedChangeListener
+            encrypted = on
+            getPreferences(MODE_PRIVATE).edit { putBoolean(PREF_ENCRYPTED, on) }
+            if (!on) PairingStore.forget()
+            refreshSecurity()
+        }
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(4), dp(4), 0, dp(8))
+            addView(ImageView(context).apply {
+                setImageResource(R.drawable.ic_lock)
+                imageTintList = ColorStateList.valueOf(
+                    themeColor(com.google.android.material.R.attr.colorOnSurfaceVariant),
+                )
+            }, LinearLayout.LayoutParams(dp(24), dp(24)))
+            addView(LinearLayout(context).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(dp(12), 0, dp(8), 0)
+                addView(text("Encrypted", 16f, com.google.android.material.R.attr.colorOnSurface))
+                addView(sub)
+                // Tapping the state pairs (again): the way to recover from a mismatched code.
+                setOnClickListener {
+                    if (encrypted) pair.launch(Intent(this@MainActivity, PairActivity::class.java))
+                }
+            }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+            addView(sw)
+            addView(helpButton("Encrypted mode", ENCRYPTION_HELP))
+        }
+    }
+
+    private fun refreshSecurity() {
+        val key = PairingStore.current()
+        val state = when {
+            !encrypted -> "Off"
+            key != null -> "Paired · ${key.code}"
+            else -> "Not paired · tap to pair"
+        }
+        securityRows.forEach { (sw, sub) ->
+            if (sw.isChecked != encrypted) sw.isChecked = encrypted
+            sub.text = state
+        }
     }
 
     private fun show(tab: Int, animate: Boolean = true) {
@@ -233,8 +320,10 @@ class MainActivity : AppCompatActivity() {
                 centred(text("It appears on this screen as light for the other phone to scan.")),
             ),
             listOf(
-                button("Choose a file", R.drawable.ic_file) { pickFile.launch(arrayOf("*/*")) }
-                    .apply { layoutParams = matchWidth() },
+                securityRow(),
+                button("Choose a file", R.drawable.ic_file) {
+                    withPairing { pickFile.launch(arrayOf("*/*")) }
+                }.apply { layoutParams = matchWidth() },
                 button("Send a test file", R.drawable.ic_bolt, Style.Tonal) { send(null) }
                     .apply { layoutParams = matchWidth(dp(10)) },
                 speedLabel,
@@ -256,6 +345,7 @@ class MainActivity : AppCompatActivity() {
             centred(text("Fill this camera's picture with the sending screen.")),
         ),
         listOf(
+            securityRow(),
             button("Start receiving", R.drawable.ic_camera) { receive() }
                 .apply { layoutParams = matchWidth() },
         ),
@@ -393,7 +483,7 @@ class MainActivity : AppCompatActivity() {
             addOnButtonCheckedListener { group, id, checked ->
                 if (!checked) return@addOnButtonCheckedListener
                 speed = group.findViewById<View>(id).tag as Speed
-                prefs.edit().putString(PREF_SPEED, speed.name).apply()
+                prefs.edit { putString(PREF_SPEED, speed.name) }
                 updateSpeedLabel()
             }
         }
@@ -418,7 +508,7 @@ class MainActivity : AppCompatActivity() {
             }, matchWidth(dp(8)))
             addView(text("Version ${runCatching {
                 packageManager.getPackageInfo(packageName, 0).versionName
-            }.getOrNull() ?: "?"}", 13f).apply {
+            }.getOrNull() ?: "?"} · open source, AGPL-3.0", 13f).apply {
                 gravity = Gravity.CENTER
                 setPadding(0, dp(20), 0, 0)
             }, matchWidth())
@@ -499,6 +589,7 @@ class MainActivity : AppCompatActivity() {
         const val ACTION_RECEIVE = "dev.fileflow.action.RECEIVE"
         const val ACTION_SEND_FILE = "dev.fileflow.action.SEND_FILE"
         private const val PREF_SPEED = "speed"
+        private const val PREF_ENCRYPTED = "encrypted"
         private const val PREF_TAB = "tab"
         private const val TAB_SEND = 1
         private const val TAB_RECEIVE = 2
@@ -520,6 +611,16 @@ class MainActivity : AppCompatActivity() {
                 "• Keep the two phones parallel.\n\n" +
                 "• It finds the sender's speed setting by itself.\n\n" +
                 "• If it pauses, just aim back: nothing received so far is lost."
+
+        private const val ENCRYPTION_HELP =
+            "Off: like a QR code, anyone whose camera can see the sending screen could read the " +
+                "file.\n\n" +
+                "On: each file is sealed with AES-256 to a key only the two paired phones hold. " +
+                "Pair by holding the phones face to face — each reads the other's code with its " +
+                "front camera. Nothing goes over a network, and the key is never stored: it lasts " +
+                "until you close FileFlow, or 30 minutes.\n\n" +
+                "Turn it on on BOTH phones. In encrypted mode the receiver refuses any file that " +
+                "isn't sealed to its pairing."
 
         private const val SPEED_HELP =
             "Fast — eight colours, three times the data of black and white, at 20 frames a " +

@@ -23,6 +23,6 @@ set_target_properties(fileflow_harness PROPERTIES CXX_STANDARD 20 CXX_STANDARD_R
 # waste. Gated on ANDROID rather than on a new option so it cannot be forgotten.
 if(NOT ANDROID)
     add_executable(ffreplay src/main.cpp)
-    target_link_libraries(ffreplay PRIVATE fileflow_harness fileflow_core fileflow_warnings)
+    target_link_libraries(ffreplay PRIVATE fileflow_harness fileflow_warnings)
     set_target_properties(ffreplay PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
 endif()

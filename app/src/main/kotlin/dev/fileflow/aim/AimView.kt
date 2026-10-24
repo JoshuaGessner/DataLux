@@ -5,6 +5,7 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.view.View
+import androidx.core.graphics.toColorInt
 
 /**
  * Draws the aiming analysis REGISTERED ONTO the live camera preview.
@@ -36,6 +37,9 @@ import android.view.View
  * [sensorRotation] before being drawn; without that, moving the phone left moved the box up.
  */
 class AimView(context: Context, private var cols: Int, private var rows: Int) : View(context) {
+
+    /** For layout tools: the default grid. The app always passes the sender's. */
+    constructor(context: Context) : this(context, 120, 260)
 
     /**
      * Clockwise degrees to turn a sensor frame into display orientation. Set from
@@ -75,12 +79,12 @@ class AimView(context: Context, private var cols: Int, private var rows: Int) : 
     private val edgePaint = Paint().apply {
         style = Paint.Style.STROKE
         strokeWidth = 16f
-        color = Color.parseColor("#FF5252")
+        color = "#FF5252".toColorInt()
         isAntiAlias = true
     }
     private val textScrim = Paint().apply {
         style = Paint.Style.FILL
-        color = Color.parseColor("#B0000000")
+        color = "#B0000000".toColorInt()
     }
     private val bigText = Paint().apply {
         color = Color.WHITE
@@ -89,13 +93,13 @@ class AimView(context: Context, private var cols: Int, private var rows: Int) : 
         isFakeBoldText = true
     }
     private val bannerText = Paint().apply {
-        color = Color.parseColor("#80CBC4")
+        color = "#80CBC4".toColorInt()
         textSize = 38f
         isAntiAlias = true
         isFakeBoldText = true
     }
     private val smallText = Paint().apply {
-        color = Color.parseColor("#CFD8DC")
+        color = "#CFD8DC".toColorInt()
         textSize = 29f
         isAntiAlias = true
     }
@@ -193,8 +197,8 @@ class AimView(context: Context, private var cols: Int, private var rows: Int) : 
 
     private var live: String? = null
     private var liveProgress = -1f
-    private var liveColour = Color.parseColor("#69F0AE")
-    private val liveTrack = Paint().apply { color = Color.parseColor("#40FFFFFF") }
+    private var liveColour = "#69F0AE".toColorInt()
+    private val liveTrack = Paint().apply { color = "#40FFFFFF".toColorInt() }
     private val liveFill = Paint()
 
     /**
@@ -283,7 +287,7 @@ class AimView(context: Context, private var cols: Int, private var rows: Int) : 
         val r = l + w
         val b = t + h
         val arm = minOf(w, h) * 0.14f
-        guidePaint.color = if (locked) Color.parseColor("#69F0AE") else Color.parseColor("#B3FFFFFF")
+        guidePaint.color = if (locked) "#69F0AE".toColorInt() else "#B3FFFFFF".toColorInt()
         for ((x, y, dx, dy) in listOf(
             arrayOf(l, t, 1f, 1f), arrayOf(r, t, -1f, 1f),
             arrayOf(l, b, 1f, -1f), arrayOf(r, b, -1f, -1f),
@@ -321,11 +325,11 @@ class AimView(context: Context, private var cols: Int, private var rows: Int) : 
         val oy = (cr?.top ?: 0f) + (areaH - dispH * scale) / 2f
 
         val colour = when (a.verdict) {
-            AimVerdict.Ready -> Color.parseColor("#69F0AE")
-            AimVerdict.Clipped -> Color.parseColor("#FF5252")
-            AimVerdict.TooFar, AimVerdict.NoScreenFound -> Color.parseColor("#90A4AE")
-            AimVerdict.TooBright, AimVerdict.TooDark -> Color.parseColor("#FFB74D")
-            AimVerdict.Blurred -> Color.parseColor("#CE93D8")
+            AimVerdict.Ready -> "#69F0AE".toColorInt()
+            AimVerdict.Clipped -> "#FF5252".toColorInt()
+            AimVerdict.TooFar, AimVerdict.NoScreenFound -> "#90A4AE".toColorInt()
+            AimVerdict.TooBright, AimVerdict.TooDark -> "#FFB74D".toColorInt()
+            AimVerdict.Blurred -> "#CE93D8".toColorInt()
             AimVerdict.Unknown -> Color.GRAY
         }
         screenPaint.color = colour
@@ -337,8 +341,8 @@ class AimView(context: Context, private var cols: Int, private var rows: Int) : 
             if (a.bboxW > 0 && a.bboxH > 0 && a.verdict != AimVerdict.NoScreenFound) {
                 val (bx0, by0) = rotatePoint(a.bboxX, a.bboxY)
                 val (bx1, by1) = rotatePoint(a.bboxX + a.bboxW, a.bboxY + a.bboxH)
-                screenPaint.color = if (locked) Color.parseColor("#69F0AE")
-                                    else Color.parseColor("#99FFFFFF")
+                screenPaint.color = if (locked) "#69F0AE".toColorInt()
+                                    else "#99FFFFFF".toColorInt()
                 canvas.drawRoundRect(
                     ox + minOf(bx0, bx1) * scale, oy + minOf(by0, by1) * scale,
                     ox + maxOf(bx0, bx1) * scale, oy + maxOf(by0, by1) * scale,

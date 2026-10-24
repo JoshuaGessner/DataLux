@@ -98,7 +98,7 @@ object Ui {
         val attr = when (style) {
             Style.Filled -> com.google.android.material.R.attr.materialButtonStyle
             Style.Tonal -> com.google.android.material.R.attr.materialButtonOutlinedStyle
-            Style.Text -> com.google.android.material.R.attr.borderlessButtonStyle
+            Style.Text -> androidx.appcompat.R.attr.borderlessButtonStyle
         }
         return MaterialButton(this, null, attr).apply {
             text = label

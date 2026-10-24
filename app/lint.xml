@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Lint findings that are decisions, not oversights. Each is ignored for a stated reason, so a
+     clean lint run means something: anything new it reports is a real finding. -->
+<lint>
+    <!-- arm64 only, deliberately: the native decoder is one arm64 library, and an x86_64 build
+         would only run on emulators and ChromeOS, which have no camera and display pipeline this
+         app can use. -->
+    <issue id="ChromeOsAbiSupport" severity="ignore" />
+    <!-- The interface is English only for now, and its text is written in code beside the logic
+         it describes. Translation would move every string into resources in one change. -->
+    <issue id="SetTextI18n" severity="ignore" />
+    <!-- "A newer version is available": these read the network and fire whenever anything is
+         published, so a build that passed yesterday would fail today with no change to the code.
+         Versions are updated on purpose, and only to releases at least two weeks old. -->
+    <issue id="GradleDependency" severity="ignore" />
+    <issue id="NewerVersionAvailable" severity="ignore" />
+    <issue id="AndroidGradlePluginVersion" severity="ignore" />
+</lint>

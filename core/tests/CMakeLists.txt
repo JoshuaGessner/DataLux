@@ -28,8 +28,9 @@ add_executable(fileflow_tests
     test_end_to_end.cpp
 )
 
+# fileflow_core comes in through fileflow_sim and fileflow_harness (both link it PUBLIC). Naming
+# it here as well put it on the link line twice, which Apple's linker warns about.
 target_link_libraries(fileflow_tests PRIVATE
-    fileflow_core
     fileflow_sim
     fileflow_harness
     fileflow_warnings

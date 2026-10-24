@@ -5,6 +5,7 @@ import android.graphics.Color
 import android.view.Gravity
 import android.widget.LinearLayout
 import android.widget.TextView
+import androidx.core.graphics.toColorInt
 import com.google.android.material.card.MaterialCardView
 import com.google.android.material.progressindicator.LinearProgressIndicator
 import dev.fileflow.ui.Ui.dp
@@ -33,14 +34,14 @@ class StatusCard(context: Context) : MaterialCardView(context) {
     /** A quiet second line under the bar: speed and elapsed time, once there is something to say. */
     private val detail = TextView(context).apply {
         textSize = 13f
-        setTextColor(Color.parseColor("#B3FFFFFF"))
+        setTextColor("#B3FFFFFF".toColorInt())
         visibility = GONE
     }
     private val bar = LinearProgressIndicator(context).apply {
         max = 1000
         trackCornerRadius = context.dp(3)
         trackThickness = context.dp(6)
-        trackColor = Color.parseColor("#33FFFFFF")
+        trackColor = "#33FFFFFF".toColorInt()
         trackStopIndicatorSize = 0  // the M3 end dot read as a stray orange speck on an empty bar
     }
 
@@ -48,7 +49,7 @@ class StatusCard(context: Context) : MaterialCardView(context) {
         radius = context.dp(24).toFloat()
         cardElevation = 0f
         strokeWidth = 0
-        setCardBackgroundColor(Color.parseColor("#CC101418"))
+        setCardBackgroundColor("#CC101418".toColorInt())
         contentDescription = "Transfer status"
         addView(LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL

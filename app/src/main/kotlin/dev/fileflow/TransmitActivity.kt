@@ -5,9 +5,12 @@ import android.os.Bundle
 import android.util.Log
 import android.view.WindowManager
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.graphics.toColorInt
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import dev.fileflow.secure.Envelope
+import dev.fileflow.secure.PairingStore
 import dev.fileflow.tx.OpticalRenderer
 import dev.fileflow.tx.Transmitter
 import dev.fileflow.ui.Ui.button
@@ -158,47 +161,31 @@ class TransmitActivity : AppCompatActivity() {
             fail("Nothing to send — FileFlow sends a file, and this share did not include one.")
             return
         }
-        if (uri == null) {
-            val t = runCatching {
-                Transmitter.open(cols, rows, nsym, payload, seed = 5L, colour = colour)
-            }
-                .getOrElse { e ->
-                    fail("Could not start sending: ${e.message}")
-                    return
-                }
-            begin(t, divisor, marginPx, seconds)
-            return
-        }
+        encrypted = intent.getBooleanExtra("encrypted", false)
 
         // A picked file is read OFF the main thread -- it can be tens of megabytes, from a cloud
-        // provider that has to download it first -- with a holding screen meanwhile.
+        // provider that has to download it first -- and compressed and sealed there too, with a
+        // holding screen meanwhile.
         setContentView(message("Preparing the file…"))
         Thread {
             val opened = runCatching {
-                val (name, size) = describe(uri)
-                if (size > MAX_FILE_BYTES) {
-                    error("$name is ${formatBytes(size)}. The most this can send is " +
-                          "${formatBytes(MAX_FILE_BYTES)} — at optical speeds a bigger file " +
-                          "would take too long to be practical.")
+                val (name, bytes) = if (uri == null) {
+                    // The test file is random, so it does NOT compress: what it measures is the
+                    // link, which is what a test is for.
+                    Transmitter.TEST_FILE_NAME to testBytes(if (payload > 0) payload else DEFAULT_TEST_BYTES)
+                } else {
+                    readFile(uri)
                 }
-                val bytes = contentResolver.openInputStream(uri)?.use { input ->
-                    // Bounded read: a provider that misreported the size cannot exhaust memory.
-                    val out = java.io.ByteArrayOutputStream()
-                    val buf = ByteArray(64 * 1024)
-                    var total = 0L
-                    while (true) {
-                        val n = input.read(buf)
-                        if (n < 0) break
-                        total += n
-                        if (total > MAX_FILE_BYTES) {
-                            error("$name is larger than ${formatBytes(MAX_FILE_BYTES)}.")
-                        }
-                        out.write(buf, 0, n)
-                    }
-                    out.toByteArray()
-                } ?: error("The file could not be opened.")
-                if (bytes.isEmpty()) error("$name is empty — there is nothing to send.")
-                Transmitter.openFile(cols, rows, nsym, bytes, name, colour)
+                // Encrypted mode with no pairing is refused here, never silently sent in the clear.
+                val key = if (encrypted) {
+                    PairingStore.current()
+                        ?: error("Encrypted mode is on, but the phones aren't paired. Pair them, then send.")
+                } else null
+                val p = Envelope.pack(bytes, name, key)
+                packed = p
+                displayName = name
+                // Under encryption the link itself carries no name: it is inside the envelope.
+                Transmitter.openFile(cols, rows, nsym, p.bytes, if (key != null) SEALED_NAME else name, colour)
             }
             runOnUiThread {
                 if (isFinishing || isDestroyed) {
@@ -211,6 +198,42 @@ class TransmitActivity : AppCompatActivity() {
                 )
             }
         }.start()
+    }
+
+    /** What was handed to the link, and the name the person knows the file by. */
+    @Volatile private var packed: Envelope.Packed? = null
+    @Volatile private var displayName: String? = null
+    private var encrypted = false
+
+    /** The generated test file: incompressible, the same every time for a given size. */
+    private fun testBytes(n: Int): ByteArray = ByteArray(n).also { java.util.Random(5L).nextBytes(it) }
+
+    /** A picked or shared document's name and bytes, read with a hard size bound. */
+    private fun readFile(uri: android.net.Uri): Pair<String, ByteArray> {
+        val (name, size) = describe(uri)
+        if (size > MAX_FILE_BYTES) {
+            error("$name is ${formatBytes(size)}. The most this can send is " +
+                  "${formatBytes(MAX_FILE_BYTES)} — at optical speeds a bigger file " +
+                  "would take too long to be practical.")
+        }
+        val bytes = contentResolver.openInputStream(uri)?.use { input ->
+            // Bounded read: a provider that misreported the size cannot exhaust memory.
+            val out = java.io.ByteArrayOutputStream()
+            val buf = ByteArray(64 * 1024)
+            var total = 0L
+            while (true) {
+                val n = input.read(buf)
+                if (n < 0) break
+                total += n
+                if (total > MAX_FILE_BYTES) {
+                    error("$name is larger than ${formatBytes(MAX_FILE_BYTES)}.")
+                }
+                out.write(buf, 0, n)
+            }
+            out.toByteArray()
+        } ?: error("The file could not be opened.")
+        if (bytes.isEmpty()) error("$name is empty — there is nothing to send.")
+        return name to bytes
     }
 
     /** Display name and size of a picked document; size -1 when the provider does not say. */
@@ -237,8 +260,13 @@ class TransmitActivity : AppCompatActivity() {
     private fun begin(t: Transmitter, divisor: Int, marginPx: Int, seconds: Int) {
         tx = t
         SessionLog.start(this, "send")
-        SessionLog.i(LOG_TAG, "sending ${t.fileName}, ${formatBytes(t.fileBytes)}, " +
-            "${t.cols}x${t.rows} at ${"%.0f".format(targetStateRate)} states/s")
+        val p = packed
+        SessionLog.i(LOG_TAG, "sending ${displayName ?: t.fileName}, " +
+            "${formatBytes(p?.originalSize ?: t.fileBytes)} as ${formatBytes(t.fileBytes)}" +
+            "${if (p?.compressed == true) " compressed" else ""}" +
+            "${if (p?.encrypted == true) " encrypted" else ""}, " +
+            "${t.cols}x${t.rows} ${if (colour) "colour" else "black and white"} at " +
+            "${"%.0f".format(targetStateRate)} states/s")
         // An explicit divisor is a scripted sweep and is held fixed; otherwise the renderer
         // re-derives it from the vsync rate the panel actually runs at (F59).
         val adaptive = !intent.hasExtra("divisor")
@@ -283,7 +311,7 @@ class TransmitActivity : AppCompatActivity() {
             } else {
                 android.widget.Toast.makeText(
                     this,
-                    "Sending ${t.fileName} (${formatBytes(fileBytes)}). Back stops.",
+                    "Sending ${displayName ?: t.fileName} (${formatBytes(fileBytes)}). Back stops.",
                     android.widget.Toast.LENGTH_LONG,
                 ).show()
             }
@@ -313,10 +341,15 @@ class TransmitActivity : AppCompatActivity() {
     private fun sendingBar(t: Transmitter, estimate: String?): android.view.View {
         // ~12% linear luminance against the frame's 100%: readable on black, and captured far
         // below the threshold that separates the frame's lit cells from its dark ones.
-        val dim = android.graphics.Color.parseColor("#70757A")
+        val dim = "#70757A".toColorInt()
         val meta = text("", 13f).apply { setTextColor(dim) }
         barMeta = meta
-        barMetaPrefix = formatBytes(t.fileBytes) +
+        val p = packed
+        barMetaPrefix = formatBytes(p?.originalSize ?: t.fileBytes) +
+            (if (p != null && p.compressed) {
+                " · %.1f× smaller".format(p.originalSize.toDouble() / t.fileBytes.coerceAtLeast(1))
+            } else "") +
+            (if (p?.encrypted == true) " · encrypted" else "") +
             (estimate?.let { " · ≥$it at best" } ?: "")
         return android.widget.LinearLayout(this).apply {
             orientation = android.widget.LinearLayout.HORIZONTAL
@@ -325,7 +358,7 @@ class TransmitActivity : AppCompatActivity() {
             setPadding(dp(20), dp(10), dp(12), dp(6))
             addView(android.widget.LinearLayout(context).apply {
                 orientation = android.widget.LinearLayout.VERTICAL
-                addView(text(t.fileName, 15f).apply {
+                addView(text(displayName ?: t.fileName, 15f).apply {
                     setTextColor(dim)
                     maxLines = 1
                     ellipsize = android.text.TextUtils.TruncateAt.MIDDLE
@@ -483,6 +516,10 @@ class TransmitActivity : AppCompatActivity() {
          * simulated tens of KB/s a file this size is already many minutes of holding a phone up.
          */
         const val MAX_FILE_BYTES = 64L * 1024 * 1024
+        /** The name an encrypted transfer shows on the link: the real one is inside the envelope. */
+        const val SEALED_NAME = "Encrypted file"
+        /** The test file, when no size is asked for: about 64 colour frames, as before. */
+        const val DEFAULT_TEST_BYTES = 600 * 1024
         /** Long enough for the GL surface to be sized and the bar measured. */
         private const val BAR_FIT_DELAY_MS = 500L
 

@@ -225,7 +225,9 @@ TEST(Transfer, JoinsMidTransmissionAndStillCompletes) {
         ASSERT_GE(p, last) << "progress went backwards, which a user would read as a fault";
         last = p;
         // Never claim completion before the hash gate would agree.
-        if (p < 1.0) ASSERT_FALSE(rx.value().complete());
+        if (p < 1.0) {
+            ASSERT_FALSE(rx.value().complete());
+        }
     }
 
     ASSERT_TRUE(rx.value().complete()) << "joining late must not make a transfer unrecoverable";

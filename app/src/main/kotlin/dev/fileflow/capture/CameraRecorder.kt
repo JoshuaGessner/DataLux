@@ -981,6 +981,14 @@ class CameraRecorder(private val context: Context) {
     }
 
     private fun openCamera(mgr: CameraManager, id: String, handler: Handler): CameraDevice? {
+        // The callers ask for the permission first; checked again here because it can be revoked
+        // from Settings while the app is running, and openCamera would then throw.
+        if (context.checkSelfPermission(android.Manifest.permission.CAMERA) !=
+            android.content.pm.PackageManager.PERMISSION_GRANTED
+        ) {
+            Log.e(TAG, "camera permission not granted")
+            return null
+        }
         var device: CameraDevice? = null
         val latch = CountDownLatch(1)
         mgr.openCamera(id, object : CameraDevice.StateCallback() {

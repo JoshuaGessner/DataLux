@@ -1,19 +1,18 @@
 plugins {
     id("com.android.application")
-    id("org.jetbrains.kotlin.android")
 }
 
 android {
     namespace = "dev.fileflow"
-    compileSdk = 35
+    compileSdk = 37
 
     defaultConfig {
         applicationId = "dev.fileflow"
         // ADR-0013 / ADR-0004: FrameTimeline and AChoreographer_postVsyncCallback are API 33.
         minSdk = 33
-        targetSdk = 35
-        versionCode = 1
-        versionName = "0.1.0-phase2"
+        targetSdk = 37
+        versionCode = 2
+        versionName = "0.2.0"
 
         ndk {
             // arm64 only (ADR-0013). HWASan is ARM64-only anyway, and the emulator is useless
@@ -58,9 +57,6 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
-    kotlinOptions {
-        jvmTarget = "17"
-    }
 
     packaging {
         jniLibs {
@@ -71,10 +67,15 @@ android {
 }
 
 dependencies {
-    implementation("androidx.core:core-ktx:1.15.0")
-    implementation("androidx.appcompat:appcompat:1.7.0")
-    implementation("androidx.activity:activity-ktx:1.9.3")
+    implementation("androidx.core:core-ktx:1.19.1")
+    implementation("androidx.appcompat:appcompat:1.8.0")
+    implementation("androidx.activity:activity-ktx:1.13.0")
     // Material 3: the components (cards, segmented buttons, dialogs, progress) and the dynamic
     // colour that make the app look like the rest of the phone rather than a debug tool.
-    implementation("com.google.android.material:material:1.12.0")
+    implementation("com.google.android.material:material:1.14.0")
+    // QR codes for pairing in encrypted mode: drawing this phone's key, reading the other's.
+    // ZXing's core is pure Java (Apache-2.0) and needs no Play Services.
+    implementation("com.google.zxing:core:3.5.4")
+
+    testImplementation("junit:junit:4.13.2")
 }

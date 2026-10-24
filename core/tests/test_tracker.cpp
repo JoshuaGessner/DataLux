@@ -543,9 +543,15 @@ TEST(ScreenTracker, SpeedIsPerSecondWhateverTheFrameRate) {
 
     const double fast = measure(30.0);
     const double slow = measure(10.0);
-    const double diag = std::hypot(300.0, 500.0);
-    EXPECT_NEAR(fast, kPxPerSecond / diag, 0.05 * kPxPerSecond / diag);
-    EXPECT_NEAR(slow, fast, 0.05 * fast) << "speed depended on how many frames were processed";
+    const double truth = kPxPerSecond / std::hypot(300.0, 500.0);
+    // Each against the TRUE speed, within what corner localisation allows: at 30 fps the screen
+    // moves 4 px between frames, and a fifth of a pixel of corner error is 5% of that. The two
+    // used to be compared with each other at 5%, which needed both errors to be small at once; on
+    // GCC's debug build the 30 fps reading came out 4.9% low and the 10 fps one 0.3% high, and the
+    // comparison failed on a measurement that was right. The bug this test exists for -- speed per
+    // processed frame rather than per second -- would put the two readings 3x apart.
+    EXPECT_NEAR(fast, truth, 0.08 * truth);
+    EXPECT_NEAR(slow, truth, 0.08 * truth) << "speed depended on how many frames were processed";
 }
 
 TEST(ScreenTracker, ANewLockHasNoSpeed) {

@@ -17,12 +17,19 @@ import android.widget.ScrollView
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
+import androidx.core.graphics.toColorInt
 import dev.fileflow.aim.AimAnalyser
 import dev.fileflow.aim.AimVerdict
 import dev.fileflow.aim.AimView
 import dev.fileflow.aim.LumaPreviewView
 import dev.fileflow.capture.CameraRecorder
 import dev.fileflow.rx.Grids
+import dev.fileflow.rx.LiveDecoder
+import dev.fileflow.rx.LiveHint
+import dev.fileflow.rx.LivePhase
+import dev.fileflow.rx.LiveStatus
+import dev.fileflow.secure.Envelope
+import dev.fileflow.secure.PairingStore
 import dev.fileflow.ui.StatusCard
 import dev.fileflow.ui.Ui.Style
 import dev.fileflow.ui.Ui.button
@@ -32,10 +39,6 @@ import dev.fileflow.ui.Ui.showHelp
 import dev.fileflow.ui.Ui.space
 import dev.fileflow.ui.Ui.text
 import dev.fileflow.ui.Ui.title
-import dev.fileflow.rx.LiveDecoder
-import dev.fileflow.rx.LiveHint
-import dev.fileflow.rx.LivePhase
-import dev.fileflow.rx.LiveStatus
 import java.io.File
 
 /**
@@ -76,7 +79,7 @@ class CaptureActivity : AppCompatActivity() {
             // LIGHT theme, which is what an operator actually saw while trying to line up a camera
             // during a two-device run: a wall of small text and no aiming help at all.
             textSize = 13f
-            setTextColor(Color.parseColor("#CFD8DC"))
+            setTextColor("#CFD8DC".toColorInt())
             setPadding(28, 28, 28, 28)
             setTextIsSelectable(true)
         }
@@ -521,7 +524,10 @@ class CaptureActivity : AppCompatActivity() {
         v.showFrameGuide = true
         val decoder = LiveDecoder(grids, exposureNs)
         liveDecoder = decoder
-        statusCard?.set("Fill the picture with the sending screen.", 0f, LIVE_OK)
+        statusCard?.set(
+            (if (encrypted) "Encrypted · " else "") + "Fill the picture with the sending screen.",
+            0f, LIVE_OK,
+        )
         val started = SystemClock.elapsedRealtime()
         val rec = CameraRecorder(this)
         liveRecorder = rec
@@ -879,6 +885,8 @@ class CaptureActivity : AppCompatActivity() {
     private var liveRecorder: CameraRecorder? = null
     private var liveDecoder: LiveDecoder? = null
     private var liveFinished = false
+    /** Encrypted mode: only a file sealed to the current pairing is accepted. */
+    private val encrypted by lazy { intent.getBooleanExtra("encrypted", false) }
 
     private fun colourFor(s: LiveStatus): Int = when {
         s.phase == LivePhase.Failed -> LIVE_BAD
@@ -893,8 +901,15 @@ class CaptureActivity : AppCompatActivity() {
         val decoder = liveDecoder ?: return
         // Off the UI thread: the file can be megabytes.
         Thread {
+            // Opened with the pairing, if any; in encrypted mode a plain or foreign file is refused,
+            // and the refusal says why instead of passing for a storage failure.
+            var refused: String? = null
             val saved = if (s.phase == LivePhase.Verified) {
-                runCatching { decoder.saveVerified(this) }.getOrNull()
+                runCatching {
+                    decoder.saveVerified(this, PairingStore.current(), requireEncrypted = encrypted)
+                }.onFailure { e ->
+                    if (e is Envelope.UnpackException) refused = e.failure.message
+                }.getOrNull()
             } else null
             val seconds = elapsedMs / 1000.0
             // The link's own time, first data to verified; the whole time from Receive includes
@@ -908,13 +923,22 @@ class CaptureActivity : AppCompatActivity() {
                     appendLine("  size        ${TransmitActivity.formatBytes(saved.bytes)}")
                     appendLine("  integrity   SHA-256 matched the sender's")
                     appendLine("  transfer    ${"%.1f".format(link)} s, first data to verified")
-                    appendLine("  goodput     ${"%.1f".format(saved.bytes / 1024.0 / link)} KB/s")
+                    appendLine("  goodput     ${"%.1f".format(saved.bytes / 1024.0 / link)} KB/s" +
+                               if (saved.compressed) " (file bytes; ${"%.1f".format(
+                                   saved.linkBytes / 1024.0 / link)} KB/s on the link, " +
+                                   "${"%.2f".format(saved.bytes.toDouble() / saved.linkBytes)}x " +
+                                   "compressed)" else "")
+                    if (saved.encrypted) appendLine("  encrypted   AES-256-GCM, paired key")
                     appendLine("  from Receive ${"%.1f".format(seconds)} s, " +
                                "${"%.1f".format(saved.bytes / 1024.0 / seconds)} KB/s " +
                                "(includes finding the sender)")
                     appendLine("  grid        ${s.cols}x${s.rows}")
                     appendLine()
                     appendLine("  saved to    ${saved.location}")
+                } else if (refused != null) {
+                    appendLine("REFUSED")
+                    appendLine()
+                    appendLine(refused)
                 } else if (s.phase == LivePhase.Verified) {
                     appendLine("RECEIVED and verified, but it could not be saved to storage.")
                 } else {
@@ -926,7 +950,7 @@ class CaptureActivity : AppCompatActivity() {
                 appendLine("  frames read ${s.frames}")
             }
             report.lineSequence().forEach { SessionLog.i(LOG_TAG, it) }
-            runOnUiThread { showResult(report, saved, s, link, seconds) }
+            runOnUiThread { showResult(report, saved, s, link, seconds, refused) }
         }.start()
     }
 
@@ -938,6 +962,7 @@ class CaptureActivity : AppCompatActivity() {
      */
     private fun showResult(
         report: String, saved: LiveDecoder.SavedFile?, s: LiveStatus, link: Double, seconds: Double,
+        refused: String? = null,
     ) {
         text.text = report
         statusCard = null
@@ -964,6 +989,7 @@ class CaptureActivity : AppCompatActivity() {
         col.addView(title(
             when {
                 ok -> "Received"
+                refused != null -> "Not accepted"
                 s.phase == LivePhase.Verified -> "Couldn't save the file"
                 else -> "Transfer failed"
             },
@@ -980,18 +1006,32 @@ class CaptureActivity : AppCompatActivity() {
             col.addView(text(
                 "${TransmitActivity.formatBytes(saved.bytes)} in ${"%.1f".format(link)} s",
             ).apply { gravity = Gravity.CENTER })
+            // Compressed: the headline is the file's own bytes per second, which is what the
+            // person waited for; the link's rate is the smaller number, said once.
+            if (saved.compressed) {
+                col.addView(text(
+                    "%.1f× compressed · link %s".format(
+                        saved.bytes.toDouble() / saved.linkBytes, formatRate(saved.linkBytes / link),
+                    ),
+                    13f,
+                ).apply { gravity = Gravity.CENTER; setPadding(0, dp(2), 0, 0) })
+            }
             if (seconds - link >= 1.0) {
                 col.addView(text("${"%.0f".format(seconds)} s from Receive, including aiming", 13f)
                     .apply { gravity = Gravity.CENTER; setPadding(0, dp(2), 0, 0) })
             }
-            col.addView(text("Verified · saved to ${saved.location.substringBeforeLast('/')}", 13f)
+            col.addView(text(
+                (if (saved.encrypted) "Encrypted · " else "") +
+                    "Verified · saved to ${saved.location.substringBeforeLast('/')}",
+                13f,
+            )
                 .apply { gravity = Gravity.CENTER; setPadding(0, dp(6), 0, 0) })
         } else {
-            col.addView(text(s.message).apply { gravity = Gravity.CENTER })
+            col.addView(text(refused ?: s.message).apply { gravity = Gravity.CENTER })
         }
         col.addView(space(32))
 
-        if (uri != null && saved != null) {
+        if (uri != null) {
             val mime = contentResolver.getType(uri) ?: "application/octet-stream"
             col.addView(button("Open", R.drawable.ic_open) {
                 val view = android.content.Intent(android.content.Intent.ACTION_VIEW)
@@ -1128,7 +1168,7 @@ class CaptureActivity : AppCompatActivity() {
         (text.parent as? android.view.ViewGroup)?.removeView(text)
         setContentView(
             ScrollView(this).apply {
-                setBackgroundColor(Color.parseColor("#101418"))
+                setBackgroundColor("#101418".toColorInt())
                 addView(text)
             }.padForSystemBars()
         )
@@ -1199,9 +1239,9 @@ class CaptureActivity : AppCompatActivity() {
         private const val STEER_WINDOW_MS = 1000L
         /** ...and relaxes to its starting point once it has not for this long. */
         private const val RELAX_AFTER_MS = 3000L
-        private val LIVE_OK = Color.parseColor("#69F0AE")
-        private val LIVE_WARN = Color.parseColor("#FFB74D")
-        private val LIVE_BAD = Color.parseColor("#FF5252")
+        private val LIVE_OK = "#69F0AE".toColorInt()
+        private val LIVE_WARN = "#FFB74D".toColorInt()
+        private val LIVE_BAD = "#FF5252".toColorInt()
         /** Consecutive Ready verdicts before recording starts. See the note in [startAiming]. */
         private const val READY_STREAK = 6
     }

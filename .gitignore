@@ -18,3 +18,17 @@ __pycache__/
 # Raw experiment data is append-only and committed deliberately, not ignored.
 # Large capture sets live outside the repo; see docs/testing/CAPTURE-HARNESS.md
 captures/
+
+# Kept locally, not published: design notes, research, experiment data and developer tooling,
+# and binaries of any kind (the Gradle wrapper JAR included -- CI provisions Gradle itself).
+/docs/
+/data/
+/tools/
+/CONTRIBUTING.md
+/fileflow.code-workspace
+/gradlew
+/gradlew.bat
+/gradle/wrapper/gradle-wrapper.jar
+*.apk
+*.aab
+*.jar

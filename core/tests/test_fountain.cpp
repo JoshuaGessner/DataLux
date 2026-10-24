@@ -75,7 +75,9 @@ TEST(Fountain, RowsAreDeterministicDenseAndNeverEmpty) {
             ones += n;
         }
         // Dense means ~k/2 per row. Low density is exactly what made v1's repair symbols useless.
-        if (k >= 63) EXPECT_NEAR(static_cast<double>(ones) / 200.0, k / 2.0, k * 0.1) << "k=" << k;
+        if (k >= 63) {
+            EXPECT_NEAR(static_cast<double>(ones) / 200.0, k / 2.0, k * 0.1) << "k=" << k;
+        }
     }
 }
 

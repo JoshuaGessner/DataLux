@@ -115,7 +115,8 @@ class M0Modulator {
     return static_cast<std::uint8_t>(rgb3 & 7U);
 }
 [[nodiscard]] constexpr bool ColorChannelOn(std::uint8_t value, int channel) noexcept {
-    return ((value >> (2 - channel)) & 1U) != 0;  // channel 0 red, 1 green, 2 blue
+    // Channel 0 red, 1 green, 2 blue.
+    return ((static_cast<unsigned>(value) >> static_cast<unsigned>(2 - channel)) & 1U) != 0;
 }
 
 // What the colour demodulator saw, per frame: the evidence for whether eight colours are

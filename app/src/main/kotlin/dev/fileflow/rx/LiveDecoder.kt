@@ -2,6 +2,8 @@ package dev.fileflow.rx
 
 import android.content.Context
 import dev.fileflow.SessionLog
+import dev.fileflow.secure.Envelope
+import dev.fileflow.secure.PairingKey
 import java.io.File
 import java.nio.ByteBuffer
 import java.util.concurrent.Executors
@@ -350,20 +352,35 @@ class LiveDecoder(
      * the manifest's — sanitised in native, and sanitised again here, because it came off a screen
      * that anyone could have been showing (THREAT-MODEL T3).
      */
-    fun saveVerified(context: Context): SavedFile? {
+    //
+    // The verified bytes are an envelope (`Envelope`): opened here, with the pairing [key] when
+    // there is one, and refused -- [Envelope.UnpackException], nothing written -- when it is sealed
+    // to another pairing, has been altered, or is plain while [requireEncrypted].
+    fun saveVerified(
+        context: Context, key: PairingKey? = null, requireEncrypted: Boolean = false,
+    ): SavedFile? {
         // Under the same lock as close(): leaving the screen at the moment of completion would
         // otherwise free the native receiver while its bytes were being read out.
-        val (bytes, raw) = synchronized(nativeLock) {
+        val (received, linkName) = synchronized(nativeLock) {
             if (closed.get()) return null
             val b = NativeReceiver.fileBytes(handle) ?: return null
             b to NativeReceiver.fileName(handle)
         }
-        val safe = raw.replace(Regex("[/\\\\\\u0000-\\u001f]"), "_")
+        // A sender from before envelopes sent the bare file; accepted only outside encrypted mode.
+        val opened = if (Envelope.isEnvelope(received) || requireEncrypted) {
+            Envelope.unpack(received, key, requireEncrypted)
+        } else {
+            Envelope.Unpacked(linkName, received, compressed = false, encrypted = false, received.size)
+        }
+        val bytes = opened.data
+        val safe = opened.name.replace(Regex("[/\\\\\\u0000-\\u001f]"), "_")
             .trimStart('.').ifBlank { "received.bin" }
-        return runCatching { saveToDownloads(context, safe, bytes) }.getOrNull()
+        val saved = runCatching { saveToDownloads(context, safe, bytes) }.getOrNull()
             ?: saveToAppFolder(context, safe, bytes)?.let {
                 SavedFile(it.name, null, it.absolutePath, bytes.size.toLong())
             }
+        return saved?.copy(linkBytes = opened.packedSize.toLong(), compressed = opened.compressed,
+                           encrypted = opened.encrypted)
     }
 
     /** Where a received file ended up. [uri] is null when only the app-private fallback worked. */
@@ -372,6 +389,10 @@ class LiveDecoder(
         val uri: android.net.Uri?,
         val location: String,
         val bytes: Long,
+        /** Bytes that crossed the link: fewer than [bytes] when the file was compressed. */
+        val linkBytes: Long = bytes,
+        val compressed: Boolean = false,
+        val encrypted: Boolean = false,
     )
 
     /**

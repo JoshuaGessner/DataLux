@@ -1,10 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
     <!-- The receiver needs the camera. Nothing else is requested: NG7 rules out network code of
          any kind, including for capability exchange, so there is deliberately no INTERNET
          permission and adding one would contradict the project's premise. -->
     <uses-permission android:name="android.permission.CAMERA" />
+
+    <!-- Every screen is portrait, by design: the sender's pattern and the receiver's framing are
+         laid out for two phones held upright, face to back. Hence the lint suppression on each. -->
 
     <uses-feature android:name="android.hardware.camera.any" android:required="true" />
     <!-- Manual sensor control is what locks exposure/ISO/focus for the session. Not required:
@@ -30,6 +34,7 @@
             android:name=".MainActivity"
             android:exported="true"
             android:screenOrientation="portrait"
+            tools:ignore="LockedOrientationActivity,DiscouragedApi"
             android:configChanges="orientation|screenSize|keyboardHidden">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
@@ -38,10 +43,20 @@
             <meta-data android:name="android.app.shortcuts" android:resource="@xml/shortcuts" />
         </activity>
 
+        <!-- Pairing for encrypted mode: both phones show a QR code and read each other's with the
+             front camera. Not exported: only FileFlow itself starts a pairing. -->
+        <activity
+            android:name=".PairActivity"
+            android:exported="false"
+            android:screenOrientation="portrait"
+            tools:ignore="LockedOrientationActivity,DiscouragedApi"
+            android:configChanges="orientation|screenSize|keyboardHidden" />
+
         <activity
             android:name=".ProbeActivity"
             android:exported="true"
             android:screenOrientation="portrait"
+            tools:ignore="LockedOrientationActivity,DiscouragedApi"
             android:configChanges="orientation|screenSize|keyboardHidden" />
 
         <!-- The capture run (C05 CPU path, EXP-007's verification half). Exported so a run is
@@ -52,6 +67,7 @@
             android:name=".CaptureActivity"
             android:exported="true"
             android:screenOrientation="portrait"
+            tools:ignore="LockedOrientationActivity,DiscouragedApi"
             android:theme="@style/Theme.FileFlow.Fullscreen"
             android:configChanges="orientation|screenSize|keyboardHidden" />
 
@@ -61,6 +77,7 @@
             android:name=".AimActivity"
             android:exported="true"
             android:screenOrientation="portrait"
+            tools:ignore="LockedOrientationActivity,DiscouragedApi"
             android:theme="@style/Theme.FileFlow.Fullscreen"
             android:configChanges="orientation|screenSize|keyboardHidden" />
 
@@ -73,6 +90,7 @@
             android:name=".TransmitActivity"
             android:exported="true"
             android:screenOrientation="portrait"
+            tools:ignore="LockedOrientationActivity,DiscouragedApi"
             android:theme="@style/Theme.FileFlow.Fullscreen"
             android:configChanges="orientation|screenSize|keyboardHidden|screenLayout|smallestScreenSize">
             <!-- "Share → FileFlow" from any app sends that one file, the same as picking it with

@@ -1,193 +1,88 @@
-# FileFlow — a native screen-to-camera optical modem
+# FileFlow
 
-FileFlow transfers arbitrary files from the **display of one Android phone** to the
-**camera of another**, using no Wi-Fi, cellular, Bluetooth, NFC, USB, or external
-accessory. The only channel is light: one phone renders a modulated optical frame
-sequence, the other decodes it through its camera.
+**Send files between two phones using nothing but light.** One phone shows the file on its screen
+as a fast-changing colour pattern; the other reads it with its camera. No Wi-Fi, no Bluetooth, no
+cables, no accounts, no internet — FileFlow doesn't even ask for network access.
 
-The goal is **maximum verified application-layer goodput** on hardware people already
-own — replacing rapidly-changing QR-code streams with a purpose-built screen-to-camera
-communication protocol.
+Every file is checked end to end (SHA-256) before it is saved, so what arrives is exactly what was
+sent. With **encrypted mode** on, files are sealed so that only the phone you paired with can open
+them.
 
-> **Project status: Phase 2 — Android transmitter and receiver running on hardware; protocol v2;
-> one verified hand-held transfer on real optics (F59), at 0.9 KB/s.**
-> *Updated 2026-10-23. The previous status ("simulated only … no Android code") had been false
-> since 2026-08-04 — the same stale-status failure the 2026-08-03 update was written to fix.*
->
-> **What exists:** a portable C++20 core (`core/`) — GF(256)/Reed–Solomon with errors-and-erasures
-> decoding, a systematic GF(2) random linear fountain (ADR-0015), intra-frame FEC, M0 binary
-> luminance with soft symbols, the full CV path (detection, homography, tracking, sub-cell and
-> corner alignment, photometric field), a session layer with an **in-band manifest** so a receiver
-> needs only the grid, SHA-256 verification, and an adaptive-code-rate controller. A channel
-> simulator (`sim/`), a capture/replay harness proven bit-identical to live decode that now runs
-> **verified transfers** (`harness/`), libFuzzer targets, 301 tests, CI with 7 jobs. An Android app
-> (`app/`, `platform/android/`) with a GL transmitter, a Camera2 recorder and an aiming UI.
->
-> **What has been measured on hardware** (Galaxy S26 Ultra → Pixel 8): camera delivery 59 fps
-> (F28); the density cliff between 5.93 and 7.30 camera px/cell (EXP-001); frame headers read off a
-> real screen, `H` = 0.03–0.38 (F36, F45); cell erasure 0.44 after alignment fixes (F45–F48); live
-> decode cost at 4080-wide capture, searching, 44–55 ms/frame on the Pixel 8 and 31 ms on the S26
-> (F57 — and 140 ms before the native library was built optimised); with parallel decode lanes and
-> 60 fps capture, **~60 frames decoded per second** on the Pixel 8, and its rolling-shutter skew,
-> 9.7 ms at 4032x2268 (F60).
->
-> **The app** sends a file chosen with the system picker (or shared to it from any app) or a test
-> file, and the receiver finds the sender's grid itself (F58) and saves the verified file to
-> Downloads/FileFlow. The first hand-held two-phone attempt never left the aiming screen (F56, F57).
->
-> **The first verified transfer** (F59): 195.1 KB, Pixel 8 → S26 Ultra, both hand-held, SHA-256
-> matched — **0.9 KB/s wall-clock goodput**, 216.6 s from pressing Receive. Most of that was spent
-> held too close (12 cm) with the sender at half its intended state rate; moved to ~25 cm it went
-> from 0% to verified in four seconds. One run: a measured goodput, not yet a characterised one.
->
-> **What has not:** `Fd`, and goodput under conditions anyone would choose. Every other goodput
-> figure in this repository is a simulator or model output, labelled `[HYP]` (RISK-024).
+## How fast
 
-## The one metric that matters
+Measured between two phones held about 10 cm apart (Pixel 8 sending, Galaxy S26 Ultra receiving),
+with the sending screen filling the receiving camera's view:
 
-```
-goodput = verified original file payload bits / total transfer time
-```
+| Speed setting | What it sends | Measured |
+| --- | --- | --- |
+| **Fastest** (default) | 8 colours, 30 frames a second | **≈ 265 KB/s** (2.1 Mbit/s) |
+| **Fast** | 8 colours, 20 frames a second | ≈ 175 KB/s |
+| **Steady** | black and white, 20 frames a second | ≈ 35–45 KB/s |
 
-Seven different rates get confused in this problem space. FileFlow keeps them separate,
-always, in every document and every log line:
+A 2 MB photo takes about 8 seconds on Fastest. Text, documents and other compressible files go
+faster still: FileFlow compresses them automatically when that helps, so a 1 MB text file may only
+need a few hundred kilobytes on the link. Photos and videos are already compressed, so they travel
+at the link speed.
 
-| Metric | What it means |
-|---|---|
-| Display refresh rate | Hz the panel scans out |
-| **Display state rate `Fd`** | **distinct optical frames actually presented per second — not the refresh rate** |
-| Camera capture rate | fps the sensor delivers |
-| Raw optical symbol rate | cells × distinct display states per second |
-| Raw encoded bit rate | symbol rate × bits per symbol |
-| Corrected decoder bit rate | after FEC overhead, losses and erasures |
-| **Payload goodput** | **verified file bytes ÷ wall-clock transfer time** |
+Speeds depend on both phones — the receiving camera needs to run at 50–60 frames a second for the
+faster settings, which most recent phones do. The receiver works out the sender's setting on its
+own.
 
-`Fd` is the one most easily conflated with the refresh rate, and it is bounded by the
-*receiver*, not the transmitter. It has never been measured on hardware (OQ-029, EXP-006);
-every goodput figure in this repository assumes a value for it and says so.
+## Using it
 
-Any performance claim that does not name which of these it refers to is treated as a
-documentation defect. See [docs/vision/PERFORMANCE-PHILOSOPHY.md](docs/vision/PERFORMANCE-PHILOSOPHY.md).
+**To send:** open FileFlow, tap **Choose a file** (or share a file to FileFlow from any app), and
+hold the phone steady with its screen facing the other phone.
 
-## Milestones
+**To receive:** tap **Start receiving** and point the camera at the sending screen. Fill the corner
+marks with the pattern — closer is faster, as long as the camera can focus. If you move away, the
+transfer pauses; aim back and it carries on from where it was. Nothing received is lost.
 
-Every milestone is defined **on real hardware**. Simulation cannot satisfy any of them, so
-nothing below is complete; the middle column says how far the simulated equivalent has got.
+Received files are saved to **Downloads › FileFlow** and listed in the **Received** tab.
 
-| # | Target | Simulated equivalent | On hardware |
-|---|---|---|---|
-| 1 | Reliable static-pattern detection and rectification | **Working** — worst cell-centre error < 0.25 cells, survives 20° yaw + 12° pitch | **Not started** |
-| 2 | Reliable live binary packet transmission | **Working** — through the real decode chain | **Not started** |
-| 3 | Reliable arbitrary-file transfer | **Working** — SHA-256 verified under noise, occlusion, glare, falloff and 10% frame loss | **Not started** |
-| 4 | Sustained verified goodput > 200 KB/s on reference phones | — | **Not started** |
-| 5 | Sustained verified goodput > 500 KB/s, controlled stationary setup | — | **Not started** |
-| 6 | Investigate whether 120 Hz/120 fps devices can exceed 1 MB/s | — | Research target |
+## Encrypted mode
 
-⚠ "Working" above means *in an uncalibrated simulator* (RISK-024), which models neither display
-subpixel structure, sensor MTF, moiré nor diffraction. Finding F16 shows this matters: the
-simulator reports **no density cliff** at any grid tested, which is exactly what a model
-omitting those mechanisms is guaranteed to report — not evidence that none exists.
+Turn on **Encrypted** on both phones (the switch is on the Send and Receive tabs). The first time,
+FileFlow asks you to **pair**: hold the two phones face to face, screens together. Each shows a QR
+code and reads the other's with its front camera; both then show the same six-digit code. If the
+codes match, you're paired.
 
-Milestones 4–6 are **research targets, not guarantees.** The first-order model in
-[docs/specifications/PERFORMANCE-MODEL.md](docs/specifications/PERFORMANCE-MODEL.md)
-indicates milestone 4 is *not* reachable with binary luminance at 60 display states/s
-on any candidate grid — it requires multilevel modulation or a higher state rate.
-That is a modelled conclusion awaiting measurement, not a finding.
+- Each file is encrypted with **AES-256-GCM** under a key that only the two paired phones hold.
+  The file's name travels inside the encryption too.
+- The key comes from a fresh **ECDH (P-256)** exchange made just for that pairing and is never
+  stored: it lasts until FileFlow closes, or 30 minutes.
+- In encrypted mode the receiver refuses anything that isn't sealed to its pairing, including
+  unencrypted files, so encryption can't be quietly switched off by the sender.
 
-## Architecture at a glance
+Without encrypted mode, a FileFlow transfer is like a QR code: anyone whose camera can see the
+sending screen could read it. See [SECURITY.md](SECURITY.md) for the details.
 
-```
-Kotlin app shell  ──►  C++ NDK performance core
-                        ├── TX: OpenGL ES / Vulkan full-screen symbol matrix
-                        └── RX: Camera2 / NDK Camera, low-copy YUV or GPU texture
-                              → screen tracker → rectifier → soft demodulator
-                              → intra-frame FEC → fountain decoder → file verify
-```
+## Requirements
 
-Full description: [docs/architecture/ARCHITECTURE-OVERVIEW.md](docs/architecture/ARCHITECTURE-OVERVIEW.md).
+- Android 13 or newer, on a 64-bit ARM phone (practically every phone from the last several years).
+- A rear camera for receiving, and a front camera for pairing.
 
-## Where to start reading
+## Installing
 
-1. [docs/INDEX.md](docs/INDEX.md) — the map of every document
-2. [docs/vision/PROJECT-VISION.md](docs/vision/PROJECT-VISION.md) — what this is and why
-3. [docs/vision/TERMINOLOGY.md](docs/vision/TERMINOLOGY.md) — the vocabulary, read this early
-4. [docs/architecture/ARCHITECTURE-OVERVIEW.md](docs/architecture/ARCHITECTURE-OVERVIEW.md)
-5. [docs/planning/ROADMAP.md](docs/planning/ROADMAP.md) — what happens in what order
-6. [docs/experiments/FIRST-THREE-EXPERIMENTS.md](docs/experiments/FIRST-THREE-EXPERIMENTS.md) — the immediate work
+FileFlow is built from source for now. Open the project in a recent Android Studio, let it sync,
+and run the **app** configuration on your phone. (Command line: with Gradle 9.8 and the Android
+SDK installed, `gradle :app:assembleRelease`.)
 
-## Repository layout
+## License
 
-```
-core/            portable C++20 decode chain. NO Android headers — enforced by CI
-  include/fileflow/  public headers
-  src/               one file per component (flat; see ENGINEERING-PRACTICES §2)
-  tests/             GoogleTest — runs on desktop, no device needed
-sim/             channel simulator + optical renderer (ffsim)
-harness/         capture-bundle writer and replay source (ffreplay)
-platform/android/ JNI adapters — marshalling only, all judgement in core/ (ADR-0014)
-app/             Kotlin shell: transmitter, Camera2 recorder, aiming UI
-fuzz/            libFuzzer targets — Linux CI only (Apple clang ships no libFuzzer, F5)
-docs/            all design documentation (see docs/INDEX.md)
-  vision/        objective, goals/non-goals, terminology, performance philosophy
-  research/      literature review, platform research, prior-art matrix, bibliography
-  architecture/  system overview, data flow, component registry
-  adr/           architecture decision records
-  specifications/ optical frame, modulation, protocol, performance model
-  experiments/   experiment registry, open questions, PHASE1-FINDINGS (F1–F63)
-  testing/       simulator plan, capture harness, benchmark methodology
-  planning/      roadmap, feature registry, risk register, device matrix
-  security/      threat model, input validation rules
-tools/           grid_sweep.sh, adapt_sweep.sh, grid_fit.py, check_links.py
-  perf_model/    reproducible first-order goodput calculator
-data/
-  experiments/   raw experimental results (never deleted, never rewritten)
-```
+FileFlow is free software under the **GNU Affero General Public License v3.0** — see
+[LICENSE](LICENSE). You may use, study, change and share it; if you distribute it or offer it as a
+service, modified or not, you must make your complete source available under the same license.
 
-## Building and running
+**Commercial licensing:** to build FileFlow's technology into a closed-source product, contact the
+copyright holder for a commercial license.
 
-```bash
-cmake --preset desktop-release && cmake --build build/desktop-release -j8
-./build/desktop-release/core/tests/fileflow_tests     # 301 tests
-
-cmake --preset core-only && cmake --build build/core-only -j8   # enforces ADR-0010
-python3 tools/check_links.py                                    # every doc link must resolve
-```
-
-Presets: `desktop-debug`, `desktop-release`, `desktop-asan`, `desktop-fuzz`, `core-only`.
-
-```bash
-# End-to-end transfer through the real decode chain, rendering real pixels
-./build/desktop-release/sim/ffsim --payload 65536 --image-path --image-size 1200 2000
-
-# Record a capture bundle, then replay it through the production decoder. ffreplay is told only
-# the grid (from the bundle); it reads the code rate and manifest from the frames, verifies the
-# file, and reports goodput plus the display-state rates EXP-006 needs (ADR-0015)
-./build/desktop-release/sim/ffsim --payload 16384 --image-path --record /tmp/bundle
-./build/desktop-release/harness/ffreplay /tmp/bundle --out /tmp/received.bin
-
-./build/desktop-release/sim/ffsim --help
-```
-
-## Reproducing the numbers
-
-```bash
-python3 tools/perf_model/perf_model.py          # markdown tables
-python3 tools/perf_model/perf_model.py --json   # machine-readable
-tools/grid_sweep.sh                             # grid-density sweep (EXP-001 dry run, F16)
-tools/adapt_sweep.sh                            # code-rate ladder + controller (EXP-023)
-```
-
-Every number in the performance model document is generated by that script. If you
-change a parameter, regenerate the tables rather than editing them by hand. Experiment
-results ship with the script that produced them (CONTRIBUTING rule 6).
+"FileFlow" and the FileFlow logo identify this project; the license does not grant permission to
+use them for other products.
 
 ## Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md). The rules that matter most: never report a
-target as an achievement, never delete an unfavourable result, and never let a design
-decision live only in a chat log or a commit message.
+Bug reports and pull requests are welcome. By submitting a contribution you agree that it may be
+distributed under the AGPL-3.0 and that the copyright holder may also license it commercially, so
+that the dual licensing above stays possible.
 
-## Licence
-
-**Apache-2.0** — see [LICENSE](LICENSE). Decided in
-[ADR-0013](docs/adr/ADR-0013-toolchain-and-build-system.md) (D4); OQ-021 is closed.
+Copyright © 2026 Josh Gessner.

@@ -35,5 +35,16 @@ target_compile_options(fileflow_warnings INTERFACE
     # dropping -Werror.
     -Wno-missing-field-initializers
 
+    # GCC only, and for the same reason. From GCC 12 its flow analysis reports reads inside
+    # libstdc++'s own inlined code that cannot happen: -Wmaybe-uninitialized on the vectors inside
+    # a moved-from std::optional<PhotometricField> (every member of which has an initializer), and
+    # -Warray-bounds "subscript 7 of a 7-element array" from vector::push_back after a
+    # reallocation. Both are long-standing GCC defects (bugs 80635 and 107852 and their
+    # duplicates), neither fires under Clang, and both broke CI on GCC 15 with no change to the
+    # code they point at. Real out-of-bounds and uninitialised reads are caught at runtime by the
+    # ASan/UBSan job, which runs the whole suite.
+    $<$<CXX_COMPILER_ID:GNU>:-Wno-maybe-uninitialized>
+    $<$<CXX_COMPILER_ID:GNU>:-Wno-array-bounds>
+
     $<$<BOOL:${FILEFLOW_WERROR}>:-Werror>
 )

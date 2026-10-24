@@ -1,4 +1,8 @@
+<!-- The Material "settings" gear. Its path is long because a gear has many teeth; it is drawn
+     once per screen at 24 dp, so the VectorPath performance hint does not apply. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    tools:ignore="VectorPath"
     android:width="24dp" android:height="24dp" android:viewportWidth="24" android:viewportHeight="24"
     android:tint="?attr/colorControlNormal">
     <path android:fillColor="@android:color/white"

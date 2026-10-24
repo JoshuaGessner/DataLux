@@ -4,6 +4,7 @@ import android.os.Bundle
 import android.widget.ScrollView
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.view.isVisible
 import dev.fileflow.probe.CapabilityProbe
 import dev.fileflow.ui.Ui.Style
 import dev.fileflow.ui.Ui.button
@@ -63,8 +64,7 @@ class ProbeActivity : AppCompatActivity() {
             addView(card(*summary().map { (k, v) -> fact(k, v) }.toTypedArray()), matchWidth(dp(8)))
             addView(card(
                 button("Show the full report", R.drawable.ic_info, Style.Text) {
-                    full.visibility = if (full.visibility == android.view.View.VISIBLE)
-                        android.view.View.GONE else android.view.View.VISIBLE
+                    full.isVisible = !full.isVisible
                 }.apply { layoutParams = matchWidth() },
                 full,
             ), matchWidth(dp(12)))

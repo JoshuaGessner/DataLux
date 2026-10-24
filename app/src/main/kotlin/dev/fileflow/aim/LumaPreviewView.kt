@@ -7,6 +7,8 @@ import android.graphics.Paint
 import android.graphics.RectF
 import android.util.Log
 import android.view.View
+import androidx.core.graphics.createBitmap
+import androidx.core.graphics.withTranslation
 import java.nio.ByteBuffer
 
 /**
@@ -78,7 +80,7 @@ class LumaPreviewView(context: Context) : View(context) {
                 bmpW = dw
                 bmpH = dh
                 pixels = IntArray(dw * dh)
-                bitmap = Bitmap.createBitmap(dw, dh, Bitmap.Config.ARGB_8888)
+                bitmap = createBitmap(dw, dh)
                 Log.i(TAG, "preview bitmap ${dw}x$dh from camera ${w}x$h (step $step)")
             }
             this.rotationDeg = ((rotationDeg % 360) + 360) % 360
@@ -138,12 +140,11 @@ class LumaPreviewView(context: Context) : View(context) {
             // an edge, which is the single fact an operator most needs to see (F33).
             val s = minOf(vw / dw, vh / dh)
 
-            canvas.save()
-            canvas.translate(vw / 2f, vh / 2f)
-            canvas.rotate(rotationDeg.toFloat())
-            canvas.scale(s, s)
-            canvas.drawBitmap(bmp, -bmpW / 2f, -bmpH / 2f, paint)
-            canvas.restore()
+            canvas.withTranslation(vw / 2f, vh / 2f) {
+                rotate(rotationDeg.toFloat())
+                scale(s, s)
+                drawBitmap(bmp, -bmpW / 2f, -bmpH / 2f, paint)
+            }
 
             if (!logged) {
                 logged = true
