@@ -89,10 +89,12 @@ struct Prepared {
 // Everything about a transmit session that does not depend on the file. Throws and returns nullopt
 // on a configuration the grid cannot carry.
 //
-// `colour` selects M5, three bits a cell in eight colours (F62); otherwise M0, black and white.
-std::optional<Prepared> Prepare(JNIEnv* env, jint cols, jint rows, jint nsym, jboolean colour) {
-    const auto profile = colour ? fileflow::ModulationProfile::kM5EightColor
-                                : fileflow::ModulationProfile::kM0BinaryLuminance;
+// `colours` picks the modulation: 8 is M5, three bits a cell (F62); 4 is M3, two bits a cell in
+// four colours a weaker camera can still tell apart (F66); anything else M0, black and white.
+std::optional<Prepared> Prepare(JNIEnv* env, jint cols, jint rows, jint nsym, jint colours) {
+    const auto profile = colours == 8   ? fileflow::ModulationProfile::kM5EightColor
+                         : colours == 4 ? fileflow::ModulationProfile::kM3FourColor
+                                        : fileflow::ModulationProfile::kM0BinaryLuminance;
     if (cols <= 0 || rows <= 0) {
         ThrowIllegalState(env, "cols and rows must both be positive");
         return std::nullopt;
@@ -188,8 +190,8 @@ extern "C" {
 JNIEXPORT jlong JNICALL
 Java_dev_fileflow_tx_NativeTransmitter_open(JNIEnv* env, jclass /*unused*/, jint cols, jint rows,
                                            jint nsym, jint payload_bytes, jlong seed,
-                                           jbyteArray name_utf8, jboolean colour) {
-    auto prep = Prepare(env, cols, rows, nsym, colour);
+                                           jbyteArray name_utf8, jint colours) {
+    auto prep = Prepare(env, cols, rows, nsym, colours);
     if (!prep) return 0;
     const std::size_t want = payload_bytes > 0 ? static_cast<std::size_t>(payload_bytes)
                                                : prep->symbol_size * 64u;
@@ -205,12 +207,12 @@ Java_dev_fileflow_tx_NativeTransmitter_open(JNIEnv* env, jclass /*unused*/, jint
 JNIEXPORT jlong JNICALL
 Java_dev_fileflow_tx_NativeTransmitter_openFile(JNIEnv* env, jclass /*unused*/, jint cols,
                                                jint rows, jint nsym, jbyteArray data,
-                                               jbyteArray name_utf8, jboolean colour) {
+                                               jbyteArray name_utf8, jint colours) {
     if (data == nullptr) {
         ThrowIllegalState(env, "no file data");
         return 0;
     }
-    auto prep = Prepare(env, cols, rows, nsym, colour);
+    auto prep = Prepare(env, cols, rows, nsym, colours);
     if (!prep) return 0;
     const jsize n = env->GetArrayLength(data);
     std::vector<std::uint8_t> payload;

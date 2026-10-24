@@ -91,7 +91,7 @@ class MainActivity : AppCompatActivity() {
             .putExtra("cols", speed.cols)
             .putExtra("rows", speed.rows)
             .putExtra("stateRate", speed.statesPerSecond)
-            .putExtra("colour", speed.colour)
+            .putExtra("colours", speed.colours)
             .putExtra("encrypted", encrypted)
         if (uri != null) {
             // The picker's grant covers this activity; the flag passes it on to the transmitter.
@@ -623,10 +623,11 @@ class MainActivity : AppCompatActivity() {
                 "isn't sealed to its pairing."
 
         private const val SPEED_HELP =
-            "Fast — eight colours, three times the data of black and white, at 20 frames a " +
-                "second.\n\n" +
-                "Fastest — colour at 30 frames a second, for a receiver whose camera runs at 50–60 " +
-                "fps (most recent phones).\n\n" +
+            "Fastest — eight colours at 30 frames a second: three times the data of black and " +
+                "white. Needs a receiver whose camera sees colour sharply.\n\n" +
+                "Fast — four colours at 30 frames a second: twice the data of black and white, and " +
+                "much easier for a camera to read. Use it if the receiver says it can't read the " +
+                "colours.\n\n" +
                 "Steady — black and white. Slower, but for a camera or lighting colour doesn't " +
                 "survive.\n\n" +
                 "Only the sending phone needs this setting; the receiver works it out."

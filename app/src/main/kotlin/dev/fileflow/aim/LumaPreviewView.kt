@@ -62,7 +62,13 @@ class LumaPreviewView(context: Context) : View(context) {
      *   display-rotation term to subtract, and [AimView] rotates its schematic by the same value —
      *   one expression in both places means the overlay cannot drift off the image it annotates.
      */
-    fun submit(buf: ByteBuffer, w: Int, h: Int, stride: Int, rotationDeg: Int) {
+    //
+    // With [chroma] the picture is in colour -- the sender's pattern IS colour, and showing it grey
+    // made people think the colour mode was not running. Without, luma only, as before.
+    fun submit(
+        buf: ByteBuffer, w: Int, h: Int, stride: Int, rotationDeg: Int,
+        chroma: dev.fileflow.capture.CameraRecorder.Chroma? = null,
+    ) {
         if (w <= 0 || h <= 0) return
         val now = System.currentTimeMillis()
         // Aiming is a human feedback loop; it does not need every frame, and repainting at capture
@@ -86,12 +92,29 @@ class LumaPreviewView(context: Context) : View(context) {
             this.rotationDeg = ((rotationDeg % 360) + 360) % 360
             val px = pixels
             var i = 0
+            val cu = chroma?.u
+            val cv = chroma?.v
+            val cRow = chroma?.rowStride ?: 0
+            val cPix = chroma?.pixelStride ?: 0
+            val cLimit = minOf(cu?.capacity() ?: 0, cv?.capacity() ?: 0)
             for (y in 0 until dh) {
                 var src = y * step * stride
+                val cy = (y * step / 2) * cRow
                 for (x in 0 until dw) {
                     // Absolute get: the buffer's position belongs to whoever else is reading it.
                     val v = buf.get(src).toInt() and 0xFF
-                    px[i++] = -0x1000000 or (v shl 16) or (v shl 8) or v
+                    val ci = cy + (x * step / 2) * cPix
+                    px[i++] = if (cu != null && cv != null && ci < cLimit) {
+                        // BT.601 full range, integer: what Camera2's YUV_420_888 carries.
+                        val cb = (cu.get(ci).toInt() and 0xFF) - 128
+                        val cr = (cv.get(ci).toInt() and 0xFF) - 128
+                        val r = (v + ((359 * cr) shr 8)).coerceIn(0, 255)
+                        val g = (v - ((88 * cb + 183 * cr) shr 8)).coerceIn(0, 255)
+                        val b = (v + ((454 * cb) shr 8)).coerceIn(0, 255)
+                        -0x1000000 or (r shl 16) or (g shl 8) or b
+                    } else {
+                        -0x1000000 or (v shl 16) or (v shl 8) or v
+                    }
                     src += step
                 }
             }

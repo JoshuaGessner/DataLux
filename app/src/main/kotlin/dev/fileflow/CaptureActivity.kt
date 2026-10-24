@@ -599,7 +599,7 @@ class CaptureActivity : AppCompatActivity() {
                     if (aimView?.sensorRotation != rec.sensorOrientation) {
                         aimView?.sensorRotation = rec.sensorOrientation
                     }
-                    previewView?.submit(buf, w, h, stride, rec.sensorOrientation)
+                    previewView?.submit(buf, w, h, stride, rec.sensorOrientation, rec.frameChroma)
                     decoder.offer(buf, w, h, stride, SystemClock.elapsedRealtimeNanos(), rec.frameChroma)
                     // Aim analysis drives the coaching, exposure and refocus decisions, and the
                     // coverage map. It runs on this thread and costs a pass over the frame, so a
@@ -862,13 +862,15 @@ class CaptureActivity : AppCompatActivity() {
                 a.verdict == AimVerdict.NoScreenFound -> null  // the decoder's "point at" is right
                 // The screen is in view and its headers read -- framing, focus and exposure are all
                 // good enough -- yet no colour frame has decoded for a while. That is this camera
-                // and that screen not separating eight colours (F65), and nothing the person can do
-                // with THIS phone fixes it; the sending phone's setting can.
+                // and that screen not separating the colours (F65, F66), and nothing the person can
+                // do with THIS phone fixes it; the sending phone's setting can: from eight colours
+                // to four, and from four to black and white.
                 s.colorSpread > 0.0 && s.recentReadFraction >= 0.5 &&
                     now - maxOf(lastPayloadMs, coachStartMs) > COLOUR_STALL_MS ->
                     "colour-stall" to Shown(
                         "Reading the screen, but not its colours. On the sending phone, set " +
-                            "Speed to Steady (black and white).$progress",
+                            (if (s.bitsPerCell >= 3) "Speed to Fast (four colours)."
+                             else "Speed to Steady (black and white).") + progress,
                         LIVE_WARN,
                     )
                 // "Too close" is now only the lens's own limit. It also used to fire under 15 cm

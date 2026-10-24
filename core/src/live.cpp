@@ -117,6 +117,7 @@ LiveStatus LiveReceiver::Ingest(const ImageView8& img, std::int64_t timestamp_ns
         status_.distinct_states = session_->stats().distinct_sequences;
         status_.color_spread = session_->last_color().centroid_spread;
         status_.color_noise = session_->last_color().noise_sigma;
+        status_.bits_per_cell = static_cast<std::uint32_t>(session_->last_bits_per_cell());
         read = o != FrameOutcome::kUnreadable && o != FrameOutcome::kHeaderFailed;
         switch (o) {
             case FrameOutcome::kSymbol:
@@ -126,6 +127,7 @@ LiveStatus LiveReceiver::Ingest(const ImageView8& img, std::int64_t timestamp_ns
             case FrameOutcome::kManifestRejected:
                 ++status_.payload_frames;  // passed intra-frame FEC and its CRC
                 if (first_payload_ns_ == 0) first_payload_ns_ = timestamp_ns;
+                last_payload_ns_ = std::max(last_payload_ns_, timestamp_ns);
                 foreign_run_ = 0;
                 break;
             case FrameOutcome::kForeignSession:
@@ -152,6 +154,7 @@ LiveStatus LiveReceiver::Ingest(const ImageView8& img, std::int64_t timestamp_ns
                 ++status_.sender_switches;
                 rate_.Reset();
                 first_payload_ns_ = 0;
+                last_payload_ns_ = 0;
             }
             foreign_run_ = 0;
         }
@@ -251,9 +254,14 @@ void LiveReceiver::Decide(std::int64_t timestamp_ns, const FramePipeline& lane) 
     // Paused when nothing is arriving: showing "3 s left" while the camera points at the floor
     // would be a promise the receiver cannot keep.
     if (session_->has_manifest()) {
+        // A pause is also data that has stopped while headers go on reading: the Pixel reading the
+        // S26 showed "6845 min left" for a minute of exactly that (F66).
+        const bool stalled =
+            last_payload_ns_ > 0 && static_cast<double>(timestamp_ns - last_payload_ns_) * 1e-9 >
+                                        cfg_.stalled_after_s;
         rate_.Update(timestamp_ns, s.progress,
                      frames_without_screen_ >= cfg_.lost_after_frames ||
-                         s.recent_read_fraction == 0.0,
+                         s.recent_read_fraction == 0.0 || stalled,
                      first_payload_ns_);
         s.bytes_per_second = rate_.rate() * static_cast<double>(s.file_size);
         s.seconds_remaining = rate_.seconds_remaining();

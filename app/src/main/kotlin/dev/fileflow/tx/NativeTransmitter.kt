@@ -18,8 +18,8 @@ class Transmitter private constructor(
     val rows: Int,
     /** The name the receiver is told — a display hint, which it sanitises. */
     val fileName: String,
-    /** Eight colours, three bits a cell (M5), rather than black and white (F62). */
-    val colour: Boolean = false,
+    /** Colours per cell: 8 (M5, F62), 4 (M3, F66) or 0 for black and white. */
+    val colours: Int = 0,
 ) : AutoCloseable {
 
     /** Size of the file being sent, in bytes. */
@@ -54,22 +54,22 @@ class Transmitter private constructor(
             payloadBytes: Int = 128 * 1024,
             seed: Long = 5,
             name: String = TEST_FILE_NAME,
-            colour: Boolean = false,
+            colours: Int = 0,
         ): Transmitter = Transmitter(
             NativeTransmitter.open(
-                cols, rows, nsym, payloadBytes, seed, name.toByteArray(Charsets.UTF_8), colour,
+                cols, rows, nsym, payloadBytes, seed, name.toByteArray(Charsets.UTF_8), colours,
             ),
-            cols, rows, name, colour,
+            cols, rows, name, colours,
         )
 
         /** Sends a real file: its bytes, and the name the receiver will save it under. */
         fun openFile(
-            cols: Int, rows: Int, nsym: Int, data: ByteArray, name: String, colour: Boolean = false,
+            cols: Int, rows: Int, nsym: Int, data: ByteArray, name: String, colours: Int = 0,
         ): Transmitter = Transmitter(
             NativeTransmitter.openFile(
-                cols, rows, nsym, data, name.toByteArray(Charsets.UTF_8), colour,
+                cols, rows, nsym, data, name.toByteArray(Charsets.UTF_8), colours,
             ),
-            cols, rows, name, colour,
+            cols, rows, name, colours,
         )
 
         /** What the receiver saves the generated test file as. */
@@ -122,10 +122,10 @@ class Transmitter private constructor(
 internal object NativeTransmitter {
     @JvmStatic external fun open(
         cols: Int, rows: Int, nsym: Int, payloadBytes: Int, seed: Long, nameUtf8: ByteArray,
-        colour: Boolean,
+        colours: Int,
     ): Long
     @JvmStatic external fun openFile(
-        cols: Int, rows: Int, nsym: Int, data: ByteArray, nameUtf8: ByteArray, colour: Boolean,
+        cols: Int, rows: Int, nsym: Int, data: ByteArray, nameUtf8: ByteArray, colours: Int,
     ): Long
     @JvmStatic external fun symbolBytes(handle: Long): Int
     @JvmStatic external fun fileSize(handle: Long): Long

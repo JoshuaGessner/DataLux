@@ -6,9 +6,10 @@ package dev.fileflow
  * must be). The receiver needs to know none of it -- it detects the grid (F58), reads the
  * profile from every header (F62) and takes whatever state rate arrives.
  *
- * Colour carries three bits a cell where black and white carries one: the same frames, three times
- * the data. Black and white stays as Steady, the setting for a camera or a light that colour does
- * not survive.
+ * Eight colours carry three bits a cell where black and white carries one: the same frames, three
+ * times the data. Four colours carry two, and are far easier to tell apart -- any two differ in two
+ * channels -- for cameras that blur colour too much for eight (the Pixel 8, F66). Black and white
+ * stays as Steady, for a camera or light that colour does not survive at all.
  *
  * The rates come from the unsynchronised-capture sweep (F60, simulated `[HYP]`): with a 30 fps
  * camera goodput peaks at a display rate of about 20 and FALLS beyond it, as captures tear; with a
@@ -20,15 +21,18 @@ enum class Speed(
     val cols: Int,
     val rows: Int,
     val statesPerSecond: Double,
-    val colour: Boolean,
+    /** Colours per cell: 8 (three bits), 4 (two bits, F66), or 0 for black and white (one). */
+    val colours: Int,
 ) {
-    Steady("Steady", 120, 260, 20.0, colour = false),
-    Fast("Fast", 120, 260, 20.0, colour = true),
-    Fastest("Fastest", 120, 260, 30.0, colour = true);
+    Steady("Steady", 120, 260, 20.0, colours = 0),
+    Fast("Fast", 120, 260, 30.0, colours = 4),
+    Fastest("Fastest", 120, 260, 30.0, colours = 8);
 
     companion object {
-        // Colour at 30/s: 263 KB/s Pixel 8 -> S26 Ultra, against 178 at 20/s (F63).
-        val DEFAULT = Fastest
+        // Four colours: the setting that works on the most receivers. Eight colours ran at 265 KB/s
+        // into the S26 Ultra (F63) but the Pixel 8 could not separate them (F66); Fastest stays
+        // a tap away for receivers that can.
+        val DEFAULT = Fast
         fun named(name: String?): Speed = entries.firstOrNull { it.name == name } ?: DEFAULT
     }
 }

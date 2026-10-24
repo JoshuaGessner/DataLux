@@ -203,7 +203,8 @@ TEST(ColorTransfer, DISABLED_MarginTable) {
                         Arm{"chroma blur 1", 1, 1.0, 0.0, 0.0, 1},
                         Arm{"chroma blur 2", 1, 1.0, 0.0, 0.0, 2},
                         Arm{"pixel-like", 2, 2.0, 30.0, 0.15, 1},
-                        Arm{"pixel-like, worse", 2, 2.0, 30.0, 0.15, 2}}) {
+                        Arm{"pixel-like, worse", 2, 2.0, 30.0, 0.15, 2},
+                        Arm{"chroma blur 3", 1, 1.0, 0.0, 0.0, 3}}) {
         sim::ColorChannelConfig cam;
         for (std::size_t i = 0; i < 3; ++i) {
             for (std::size_t j = 0; j < 3; ++j) {
@@ -216,8 +217,10 @@ TEST(ColorTransfer, DISABLED_MarginTable) {
         g_blur = a.blur;
         const Outcome c = Transfer(file, ModulationProfile::kM5EightColor, cam, 300);
         const Outcome m = Transfer(file, ModulationProfile::kM0BinaryLuminance, cam, 300);
-        std::printf("   %-18s M0 %3d frames%s   M5 %3d frames%s   spread %.0f noise %.1f\n", a.name,
-                    m.frames, m.verified ? "" : " (failed)", c.frames, c.verified ? "" : " (failed)",
+        const Outcome f = Transfer(file, ModulationProfile::kM3FourColor, cam, 300);
+        std::printf("   %-18s M0 %3d%s   M3 %3d%s   M5 %3d%s frames   M5 spread %.0f noise %.1f\n",
+                    a.name, m.frames, m.verified ? "" : "(failed)", f.frames,
+                    f.verified ? "" : "(failed)", c.frames, c.verified ? "" : "(failed)",
                     c.color.centroid_spread, c.color.noise_sigma);
     }
     g_blur = 1;

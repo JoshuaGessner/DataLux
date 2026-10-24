@@ -13,13 +13,16 @@ them.
 Measured between two phones held about 10 cm apart (Pixel 8 sending, Galaxy S26 Ultra receiving),
 with the sending screen filling the receiving camera's view:
 
-| Speed setting | What it sends | Measured |
+| Speed setting | What it sends | Speed |
 | --- | --- | --- |
-| **Fastest** (default) | 8 colours, 30 frames a second | **≈ 265 KB/s** (2.1 Mbit/s) |
-| **Fast** | 8 colours, 20 frames a second | ≈ 175 KB/s |
-| **Steady** | black and white, 20 frames a second | ≈ 35–45 KB/s |
+| **Fastest** | 8 colours, 30 frames a second | **≈ 265 KB/s** (2.1 Mbit/s), measured |
+| **Fast** (default) | 4 colours, 30 frames a second | ≈ 175 KB/s, expected |
+| **Steady** | black and white, 20 frames a second | ≈ 35–45 KB/s, measured |
 
-A 2 MB photo takes about 8 seconds on Fastest. Text, documents and other compressible files go
+A 2 MB photo takes about 8 seconds on Fastest and 12 on Fast. Eight colours need a receiving
+camera that sees colour sharply; four colours are much easier to tell apart, so **Fast** is the
+default and works with more phones. If the receiver says it can read the screen but not its
+colours, step the sender down a setting. Text, documents and other compressible files go
 faster still: FileFlow compresses them automatically when that helps, so a 1 MB text file may only
 need a few hundred kilobytes on the link. Photos and videos are already compressed, so they travel
 at the link speed.

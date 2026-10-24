@@ -63,6 +63,8 @@ data class LiveStatus(
     val colorNoise: Double,
     /** Once verified: seconds from the file's first data to verification (the link's own time). */
     val transferSeconds: Double,
+    /** Bits per cell the sender uses, from its headers: 1, 2 (four colours) or 3; 0 before. */
+    val bitsPerCell: Int,
     /** The grid this status was decoded against: the detected one once [gridKnown]. */
     val cols: Int,
     val rows: Int,
@@ -117,6 +119,8 @@ class LiveDecoder(
     /** Per candidate: payload count last seen, and the capture time it last went up. */
     private val lastPayloads = java.util.concurrent.ConcurrentHashMap<Candidate, Long>()
     private val lastPayloadNs = java.util.concurrent.ConcurrentHashMap<Candidate, Long>()
+    /** When each candidate last read headers on most frames: the grid is right, whatever the data. */
+    private val lastHeaderNs = java.util.concurrent.ConcurrentHashMap<Candidate, Long>()
     /** Non-null once the grid is proven. */
     @Volatile private var committed: Candidate? = null
     private val handle: Long get() = (committed ?: candidates.first()).handle
@@ -277,12 +281,20 @@ class LiveDecoder(
             lastPayloads[c] = payloads
             lastPayloadNs[c] = ts
         }
+        if (s.recentReadFraction >= 0.3) lastHeaderNs[c] = ts
         if (committed != null) {
             // The sender may have changed its speed setting -- a different grid -- and nothing on
-            // this one will ever decode again. After a while with no payload, search all grids
-            // again; the committed one is among them, so a person who merely looked away is back
-            // on it within a few frames of looking back.
-            if (committed === c && ts - (lastPayloadNs[c] ?: ts) > RESEARCH_AFTER_NS) {
+            // this one will ever decode again. After a while with neither payload NOR headers,
+            // search all grids again; the committed one is among them, so a person who merely
+            // looked away is back on it within a few frames of looking back.
+            //
+            // Headers count. They used to not: on the Pixel reading the S26 the committed grid's
+            // headers read on every frame while its colour payloads failed, the re-search split
+            // the frames three ways across grids that could never read, and a transfer at 39%
+            // never picked back up (F66). Our grids differ enough that one never reads another's
+            // headers, so headers reading means the grid is right and only the data is struggling.
+            val lastSign = maxOf(lastPayloadNs[c] ?: ts, lastHeaderNs[c] ?: Long.MIN_VALUE)
+            if (committed === c && ts - lastSign > RESEARCH_AFTER_NS) {
                 synchronized(nativeLock) { committed = null }
                 lastByCandidate.clear()
                 SessionLog.i(TAG, "no payload on ${c.cols}x${c.rows} for ${RESEARCH_AFTER_NS / 1_000_000_000} s: " +
@@ -337,6 +349,7 @@ class LiveDecoder(
             colorSpread = slots[Slot.ColorSpread.ordinal],
             colorNoise = slots[Slot.ColorNoise.ordinal],
             transferSeconds = slots[Slot.TransferSeconds.ordinal],
+            bitsPerCell = slots[Slot.BitsPerCell.ordinal].toInt(),
             cols = c.cols,
             rows = c.rows,
             gridKnown = committed === c,
@@ -476,7 +489,7 @@ class LiveDecoder(
     private enum class Slot {
         Phase, Hint, Progress, SecondsRemaining, MotionBlurCells, RecentReadFraction,
         ScreenInView, Frames, FileSize, PayloadFrames, BytesPerSecond, DistinctStates,
-        ColorSpread, ColorNoise, TransferSeconds,
+        ColorSpread, ColorNoise, TransferSeconds, BitsPerCell,
     }
 
     companion object {

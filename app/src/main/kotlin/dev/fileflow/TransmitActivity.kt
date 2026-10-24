@@ -51,8 +51,8 @@ class TransmitActivity : AppCompatActivity() {
     private var stateRate = 0.0
     /** The Speed setting's display states per second. */
     private var targetStateRate = Speed.DEFAULT.statesPerSecond
-    /** Eight colours (M5) rather than black and white (F62). */
-    private var colour = Speed.DEFAULT.colour
+    /** Colours per cell: 8 (M5, F62), 4 (M3, F66), 0 black and white. */
+    private var colours = Speed.DEFAULT.colours
     private var reported = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -141,7 +141,7 @@ class TransmitActivity : AppCompatActivity() {
         // (F59). An explicit `divisor` extra still wins, for scripted sweeps.
         targetStateRate = intent.getDoubleExtra("stateRate", Speed.DEFAULT.statesPerSecond)
             .coerceIn(1.0, 120.0)
-        colour = intent.getBooleanExtra("colour", Speed.DEFAULT.colour)
+        colours = intent.getIntExtra("colours", Speed.DEFAULT.colours)
         val panelHz = if (requestedHz > 0.0) requestedHz else (display?.refreshRate ?: 60f).toDouble()
         val divisor = if (intent.hasExtra("divisor")) {
             intent.getIntExtra("divisor", 1).coerceAtLeast(1)
@@ -185,7 +185,7 @@ class TransmitActivity : AppCompatActivity() {
                 packed = p
                 displayName = name
                 // Under encryption the link itself carries no name: it is inside the envelope.
-                Transmitter.openFile(cols, rows, nsym, p.bytes, if (key != null) SEALED_NAME else name, colour)
+                Transmitter.openFile(cols, rows, nsym, p.bytes, if (key != null) SEALED_NAME else name, colours)
             }
             runOnUiThread {
                 if (isFinishing || isDestroyed) {
@@ -265,7 +265,7 @@ class TransmitActivity : AppCompatActivity() {
             "${formatBytes(p?.originalSize ?: t.fileBytes)} as ${formatBytes(t.fileBytes)}" +
             "${if (p?.compressed == true) " compressed" else ""}" +
             "${if (p?.encrypted == true) " encrypted" else ""}, " +
-            "${t.cols}x${t.rows} ${if (colour) "colour" else "black and white"} at " +
+            "${t.cols}x${t.rows} ${if (colours > 0) "$colours colours" else "black and white"} at " +
             "${"%.0f".format(targetStateRate)} states/s")
         // An explicit divisor is a scripted sweep and is held fixed; otherwise the renderer
         // re-derives it from the vsync rate the panel actually runs at (F59).

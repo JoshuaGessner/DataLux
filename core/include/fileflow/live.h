@@ -64,6 +64,9 @@ struct LiveConfig {
     double eta_window_s = 4.0;
     double rate_smoothing_s = 2.0;
     double eta_smoothing_s = 2.0;
+    // No payload for this long counts as a pause for the speed and time left, even while headers
+    // still read: a screen whose headers read but whose data does not is not transferring.
+    double stalled_after_s = 3.0;
 
     // Decode LANES: independent pipelines (tracker, alignment, sampler) that may run on separate
     // threads at once, feeding one session. One phone core decodes 20-50 ms of a 4080-wide frame
@@ -133,6 +136,8 @@ struct LiveStatus {
     // how noisy, 0..255 units. Both 0 until an M5 frame arrives.
     double color_spread = 0.0;
     double color_noise = 0.0;
+    // Bits per cell the sender is using (1, 2 or 3), from its headers; 0 before any has read.
+    std::uint32_t bits_per_cell = 0;
 
     std::string file_name;            // a display hint (sanitised), once the manifest is in
     std::uint64_t file_size = 0;
@@ -240,6 +245,7 @@ class LiveReceiver {
     int foreign_run_ = 0;
     TransferRate rate_;
     std::int64_t first_payload_ns_ = 0;  // when this session's first payload frame arrived
+    std::int64_t last_payload_ns_ = 0;   // and its latest
     std::optional<Result<std::vector<std::uint8_t>>> result_;
 };
 

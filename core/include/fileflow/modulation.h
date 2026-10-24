@@ -128,7 +128,10 @@ struct ColorDiagnostics {
     double noise_sigma = 0.0;       // per-channel spread of cells round their centroid
 };
 
-// M5: three bits a cell, one each on red, green and blue (kM5EightColor).
+// M5: three bits a cell, one each on red, green and blue (kM5EightColor). And M3: two bits a
+// cell in four colours (kM3FourColor) -- black, cyan, magenta and yellow, any two of which differ
+// in TWO channels where the nearest of the eight differ in one. Two-thirds the data, for cameras
+// that cannot tell eight apart at a practical distance (F66).
 //
 // The header and every structural cell are drawn exactly as M0 draws them -- the header must be
 // readable before the receiver knows the profile, and markers, pilots and the boundary are what it
@@ -143,29 +146,33 @@ struct ColorDiagnostics {
 // the nearest without -- a soft symbol, like M0's, for the same erasure discipline downstream.
 class ColorModulator {
   public:
-    explicit ColorModulator(const FrameLayout& layout) : layout_(&layout) {}
+    explicit ColorModulator(const FrameLayout& layout,
+                            ModulationProfile profile = ModulationProfile::kM5EightColor);
 
     [[nodiscard]] Status Render(std::span<const std::uint8_t> header_coded,
                                 std::span<const std::uint8_t> payload_coded,
                                 CellMatrix* out) const;
 
     [[nodiscard]] std::size_t payload_capacity_bytes() const noexcept {
-        return layout_->payload_cells().size() * 3 / 8;
+        return layout_->payload_cells().size() * bits_ / 8;
     }
+    [[nodiscard]] std::size_t bits_per_cell() const noexcept { return bits_; }
 
     // `rgb` is three values per grid cell, interleaved r,g,b, flat row-major, each normalised so the
     // white pilots read 255 and the black ones 0 in that channel (FramePipeline). NaN = erased.
-    // `out` receives three soft bits per payload cell, in payload-bit order.
+    // `out` receives bits_per_cell() soft bits per payload cell, in payload-bit order.
     void DemodulatePayload(std::span<const double> rgb, SoftSymbolBuffer* out,
                            ColorDiagnostics* diag = nullptr) const;
 
-    // The colour colour-pilot `i` (raster order among them) shows: the eight in turn.
-    [[nodiscard]] static unsigned PilotColor(std::size_t i) noexcept {
-        return static_cast<unsigned>(i % 8);
+    // The palette index colour-pilot `i` (raster order among them) shows: each colour in turn.
+    [[nodiscard]] unsigned PilotColor(std::size_t i) const noexcept {
+        return static_cast<unsigned>(i % palette_.size());
     }
 
   private:
     const FrameLayout* layout_;
+    std::vector<unsigned> palette_;  // palette index -> the colour's red/green/blue bits
+    std::size_t bits_;
 };
 
 // Pack/unpack helpers. Bit order is MSB-first within each byte, fixed by the wire format.

@@ -60,7 +60,7 @@ Result<FrameHeader> TransmitSession::Next(CellMatrix* out) {
     } else {
         payload_coded = std::move(fp.data);
     }
-    if (profile_ == ModulationProfile::kM5EightColor) {
+    if (profile_ == ModulationProfile::kM5EightColor || profile_ == ModulationProfile::kM3FourColor) {
         FF_TRY(color_.Render(hdr_coded, payload_coded, out));
     } else {
         FF_TRY(mod_.Render(hdr_coded, payload_coded, out));
@@ -114,9 +114,10 @@ const IntraFec* ReceiveSession::FecFor(std::size_t nsym, std::size_t bits_per_ce
     if (it == fec_.end()) {
         IntraFecParams fp;
         fp.nsym = nsym;
-        auto f = IntraFec::Create(bits_per_cell == 3 ? color_.payload_capacity_bytes()
-                                                     : mod_.payload_capacity_bytes(),
-                                  fp);
+        const std::size_t capacity = bits_per_cell == 3   ? color8_.payload_capacity_bytes()
+                                     : bits_per_cell == 2 ? color4_.payload_capacity_bytes()
+                                                          : mod_.payload_capacity_bytes();
+        auto f = IntraFec::Create(capacity, fp);
         std::optional<IntraFec> entry;
         if (f.ok()) entry.emplace(std::move(f).value());
         it = fec_.emplace(key, std::move(entry)).first;
@@ -218,8 +219,11 @@ FrameOutcome ReceiveSession::Ingest(std::span<const double> cell_samples,
 
     // --- Payload ---
     const std::size_t bits = BitsPerCell(h.profile);
-    const bool color = h.profile == ModulationProfile::kM5EightColor;
-    if (bits == 0 || (color && cell_rgb.size() != cell_samples.size() * 3)) {
+    last_bits_ = bits;
+    const ColorModulator* color = h.profile == ModulationProfile::kM5EightColor   ? &color8_
+                                  : h.profile == ModulationProfile::kM3FourColor ? &color4_
+                                                                                 : nullptr;
+    if (bits == 0 || (color != nullptr && cell_rgb.size() != cell_samples.size() * 3)) {
         return FrameOutcome::kPayloadUnsupported;
     }
     const IntraFec* fec = nullptr;
@@ -229,13 +233,13 @@ FrameOutcome ReceiveSession::Ingest(std::span<const double> cell_samples,
     }
 
     SoftSymbolBuffer soft;
-    if (color) {
-        color_.DemodulatePayload(cell_rgb, &soft, &last_color_);
+    if (color != nullptr) {
+        color->DemodulatePayload(cell_rgb, &soft, &last_color_);
     } else {
         mod_.DemodulatePayload(cell_samples, ref, &soft);
     }
     const std::size_t capacity =
-        color ? color_.payload_capacity_bytes() : mod_.payload_capacity_bytes();
+        color != nullptr ? color->payload_capacity_bytes() : mod_.payload_capacity_bytes();
     const std::size_t coded_len = fec ? fec->coded_bytes() : capacity;
     HardDecision hd = HardDecide(soft, coded_len, cfg_.erase_below);
     stats_.payload_cells += soft.size();

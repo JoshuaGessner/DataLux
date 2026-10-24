@@ -62,11 +62,11 @@ class TransmitSession {
   private:
     TransmitSession(const FrameLayout& layout, std::optional<IntraFec> fec, FileTransmitter tx,
                     std::size_t nsym, ModulationProfile profile)
-        : mod_(layout), color_(layout), fec_(std::move(fec)), tx_(std::move(tx)), nsym_(nsym),
-          profile_(profile) {}
+        : mod_(layout), color_(layout, profile), fec_(std::move(fec)), tx_(std::move(tx)),
+          nsym_(nsym), profile_(profile) {}
 
     M0Modulator mod_;
-    ColorModulator color_;
+    ColorModulator color_;  // the profile's own palette when it is a colour one
     HeaderCodec hdr_;
     std::optional<IntraFec> fec_;
     FileTransmitter tx_;
@@ -163,7 +163,8 @@ class ReceiveSession {
     // erased). `timestamp_ns` is the capture time, used only for rate accounting.
     //
     // `cell_rgb` is the frame's colour samples (CapturedFrame::cell_rgb), needed only for a frame
-    // whose header names M5; without them such a frame is kPayloadUnsupported.
+    // whose header names a colour profile (M3, M5); without them such a frame is
+    // kPayloadUnsupported.
     FrameOutcome Ingest(std::span<const double> cell_samples, std::int64_t timestamp_ns) {
         return Ingest(cell_samples, {}, timestamp_ns);
     }
@@ -185,13 +186,16 @@ class ReceiveSession {
     [[nodiscard]] const IntraFec::Stats& last_fec_stats() const noexcept { return last_fec_; }
     // The last M5 frame's colour evidence: how far apart the eight colours sat, and how noisy.
     [[nodiscard]] const ColorDiagnostics& last_color() const noexcept { return last_color_; }
+    // Bits per cell the last decoded header named: 1 black and white, 2 four colours, 3 eight.
+    [[nodiscard]] std::size_t last_bits_per_cell() const noexcept { return last_bits_; }
 
     // Reassembles and VERIFIES (G3). kFountainIncomplete without a manifest as well.
     [[nodiscard]] Result<std::vector<std::uint8_t>> Finish();
 
   private:
     ReceiveSession(const FrameLayout& layout, ReceiveConfig cfg)
-        : mod_(layout), color_(layout), cfg_(cfg) {}
+        : mod_(layout), color8_(layout, ModulationProfile::kM5EightColor),
+          color4_(layout, ModulationProfile::kM3FourColor), cfg_(cfg) {}
 
     const IntraFec* FecFor(std::size_t nsym, std::size_t bits_per_cell);
     FrameOutcome AcceptManifest(const FrameHeader& h, std::span<const std::uint8_t> bytes);
@@ -203,12 +207,14 @@ class ReceiveSession {
     };
 
     M0Modulator mod_;
-    ColorModulator color_;
+    ColorModulator color8_;
+    ColorModulator color4_;
     HeaderCodec hdr_;
     ReceiveConfig cfg_;
     // By (nsym, bits per cell); nullopt = unsupported.
     std::map<std::pair<std::size_t, std::size_t>, std::optional<IntraFec>> fec_;
     ColorDiagnostics last_color_{};
+    std::size_t last_bits_ = 0;
     std::optional<FileReceiver> rx_;
     std::vector<Held> held_;
     std::set<std::uint32_t> seen_;

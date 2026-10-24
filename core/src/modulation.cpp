@@ -256,6 +256,7 @@ void M0Modulator::DemodulatePayload(std::span<const double> samples, const Photo
 std::size_t BitsPerCell(ModulationProfile p) noexcept {
     switch (p) {
         case ModulationProfile::kM0BinaryLuminance: return 1;
+        case ModulationProfile::kM3FourColor: return 2;
         case ModulationProfile::kM5EightColor: return 3;
         default: return 0;
     }
@@ -265,28 +266,39 @@ std::size_t PayloadCapacityBytes(const FrameLayout& layout, ModulationProfile p)
     return layout.payload_cells().size() * BitsPerCell(p) / 8;
 }
 
+ColorModulator::ColorModulator(const FrameLayout& layout, ModulationProfile profile)
+    : layout_(&layout) {
+    if (profile == ModulationProfile::kM3FourColor) {
+        palette_ = {0b000, 0b011, 0b101, 0b110};  // black, cyan, magenta, yellow
+        bits_ = 2;
+    } else {
+        palette_ = {0, 1, 2, 3, 4, 5, 6, 7};
+        bits_ = 3;
+    }
+}
+
 Status ColorModulator::Render(std::span<const std::uint8_t> header_coded,
                               std::span<const std::uint8_t> payload_coded,
                               CellMatrix* out) const {
     const auto& pay_cells = layout_->payload_cells();
-    if (payload_coded.size() * 8 > pay_cells.size() * 3) return Error::kValueOutOfRange;
+    if (payload_coded.size() * 8 > pay_cells.size() * bits_) return Error::kValueOutOfRange;
     // Structure and header exactly as M0 draws them; payload filled below.
     FF_TRY(M0Modulator(*layout_).Render(header_coded, {}, out));
 
     const auto& pilots = layout_->color_pilot_cells();
     for (std::size_t i = 0; i < pilots.size(); ++i) {
-        out->set_flat(pilots[i], ColorValue(PilotColor(i)));
+        out->set_flat(pilots[i], ColorValue(palette_[PilotColor(i)]));
     }
 
     std::vector<std::uint8_t> bits;
     PackBits(payload_coded, &bits);
     for (std::size_t i = 0; i < pay_cells.size(); ++i) {
         unsigned v = 0;
-        for (std::size_t k = 0; k < 3; ++k) {
-            const std::size_t j = i * 3 + k;  // first bit red, then green, then blue
+        for (std::size_t k = 0; k < bits_; ++k) {
+            const std::size_t j = i * bits_ + k;  // M5: first bit red, then green, then blue
             v = (v << 1U) | (j < bits.size() ? (bits[j] & 1U) : 0U);
         }
-        out->set_flat(pay_cells[i], ColorValue(v));
+        out->set_flat(pay_cells[i], ColorValue(palette_[v]));
     }
     return Status::Ok();
 }
@@ -295,7 +307,7 @@ void ColorModulator::DemodulatePayload(std::span<const double> rgb, SoftSymbolBu
                                        ColorDiagnostics* diag) const {
     using Vec = std::array<double, 3>;
     const auto& pay_cells = layout_->payload_cells();
-    out->resize(pay_cells.size() * 3);  // every bit an erasure until proven otherwise
+    out->resize(pay_cells.size() * bits_);  // every bit an erasure until proven otherwise
     const auto cells = static_cast<std::size_t>(layout_->geometry().cells());
     if (rgb.size() != cells * 3) return;
 
@@ -315,9 +327,11 @@ void ColorModulator::DemodulatePayload(std::span<const double> rgb, SoftSymbolBu
     // Seeds: the ideal corners of the colour cube, replaced by what the pilots showed wherever a
     // pilot of that colour was read.
     std::array<Vec, 8> mu{};
-    for (unsigned c = 0; c < 8; ++c) {
+    const auto n_colors = static_cast<unsigned>(palette_.size());
+    for (unsigned c = 0; c < n_colors; ++c) {
         for (int k = 0; k < 3; ++k) {
-            mu[c][static_cast<std::size_t>(k)] = ColorChannelOn(ColorValue(c), k) ? 255.0 : 0.0;
+            mu[c][static_cast<std::size_t>(k)] =
+                ColorChannelOn(ColorValue(palette_[c]), k) ? 255.0 : 0.0;
         }
     }
     std::array<Vec, 8> pilot_sum{};
@@ -332,7 +346,7 @@ void ColorModulator::DemodulatePayload(std::span<const double> rgb, SoftSymbolBu
         ++pilot_n[c];
         ++pilots_read;
     }
-    for (unsigned c = 0; c < 8; ++c) {
+    for (unsigned c = 0; c < n_colors; ++c) {
         if (pilot_n[c] == 0) continue;
         for (std::size_t k = 0; k < 3; ++k) {
             mu[c][k] = pilot_sum[c][k] / static_cast<double>(pilot_n[c]);
@@ -351,10 +365,10 @@ void ColorModulator::DemodulatePayload(std::span<const double> rgb, SoftSymbolBu
     }
     if (x.empty()) return;
 
-    auto nearest = [&mu, &dist2](const Vec& v) {
+    auto nearest = [&mu, &dist2, n_colors](const Vec& v) {
         unsigned best = 0;
         double bd = dist2(v, mu[0]);
-        for (unsigned c = 1; c < 8; ++c) {
+        for (unsigned c = 1; c < n_colors; ++c) {
             const double d = dist2(v, mu[c]);
             if (d < bd) {
                 bd = d;
@@ -377,7 +391,7 @@ void ColorModulator::DemodulatePayload(std::span<const double> rgb, SoftSymbolBu
             for (std::size_t k = 0; k < 3; ++k) sum[c][k] += v[k];
             ++n[c];
         }
-        for (unsigned c = 0; c < 8; ++c) {
+        for (unsigned c = 0; c < n_colors; ++c) {
             if (n[c] < kMinMembers) continue;  // too few to move: keep the seed
             for (std::size_t k = 0; k < 3; ++k) mu[c][k] = sum[c][k] / static_cast<double>(n[c]);
         }
@@ -479,9 +493,9 @@ void ColorModulator::DemodulatePayload(std::span<const double> rgb, SoftSymbolBu
     // The prediction mu_c + B4 (n4 - mu_c) + B8 (n8 - mu_c) splits into a part that depends only
     // on the candidate colour, (I - B4 - B8) mu_c, and one that depends only on the neighbours,
     // B4 n4 + B8 n8 -- so each cell costs one product, not one per candidate.
-    auto own_part = [&mu](const Bleed& b) {
+    auto own_part = [&mu, n_colors](const Bleed& b) {
         std::array<Vec, 8> q{};
-        for (unsigned c = 0; c < 8; ++c) {
+        for (unsigned c = 0; c < n_colors; ++c) {
             for (std::size_t i = 0; i < 3; ++i) {
                 double v = mu[c][i];
                 for (std::size_t k = 0; k < 3; ++k) v -= (b[i][k] + b[i][3 + k]) * mu[c][k];
@@ -571,7 +585,7 @@ void ColorModulator::DemodulatePayload(std::span<const double> rgb, SoftSymbolBu
             const Vec o = has_near[s] ? neighbour_part(bleed, near[s]) : Vec{};
             unsigned best = 0;
             double bd = 1e300;
-            for (unsigned c = 0; c < 8; ++c) {
+            for (unsigned c = 0; c < n_colors; ++c) {
                 const Vec& base = has_near[s] ? q[c] : mu[c];
                 const double d = metric(w, Vec{x[s][0] - base[0] - o[0], x[s][1] - base[1] - o[1],
                                                x[s][2] - base[2] - o[2]});
@@ -586,27 +600,27 @@ void ColorModulator::DemodulatePayload(std::span<const double> rgb, SoftSymbolBu
 
     // Each bit's "clean" distance, in the same metric: how far flipping that bit moves a colour.
     std::array<double, 3> clean{};
-    for (std::size_t j = 0; j < 3; ++j) {
-        const unsigned mask = 4U >> j;
+    for (std::size_t j = 0; j < bits_; ++j) {
+        const unsigned mask = 1U << (bits_ - 1 - j);
         double acc = 0.0;
-        for (unsigned c = 0; c < 8; ++c) acc += metric(w, diff(mu[c], mu[c ^ mask]));
-        clean[j] = std::max(acc / 8.0, 1e-6);
+        for (unsigned c = 0; c < n_colors; ++c) acc += metric(w, diff(mu[c], mu[c ^ mask]));
+        clean[j] = std::max(acc / n_colors, 1e-6);
     }
 
     const std::array<Vec, 8> q = own_part(bleed);
     for (std::size_t s = 0; s < x.size(); ++s) {
         const Vec o = has_near[s] ? neighbour_part(bleed, near[s]) : Vec{};
         std::array<double, 8> d{};
-        for (unsigned c = 0; c < 8; ++c) {
+        for (unsigned c = 0; c < n_colors; ++c) {
             const Vec& base = has_near[s] ? q[c] : mu[c];
             d[c] = metric(w, Vec{x[s][0] - base[0] - o[0], x[s][1] - base[1] - o[1],
                                  x[s][2] - base[2] - o[2]});
         }
-        for (std::size_t j = 0; j < 3; ++j) {
-            const unsigned mask = 4U >> j;
+        for (std::size_t j = 0; j < bits_; ++j) {
+            const unsigned mask = 1U << (bits_ - 1 - j);
             double d0 = 1e300;
             double d1 = 1e300;
-            for (unsigned c = 0; c < 8; ++c) {
+            for (unsigned c = 0; c < n_colors; ++c) {
                 double& slot_d = (c & mask) != 0 ? d1 : d0;
                 slot_d = std::min(slot_d, d[c]);
             }
@@ -615,7 +629,7 @@ void ColorModulator::DemodulatePayload(std::span<const double> rgb, SoftSymbolBu
             const double scaled = std::clamp(127.0 * (d1 - d0) / clean[j], -127.0, 127.0);
             auto v = static_cast<Llr>(std::lround(scaled));
             if (v == kLlrErasure) v = 1;
-            out->symbols[slot[s] * 3 + j] = SoftSymbol{v, false};
+            out->symbols[slot[s] * bits_ + j] = SoftSymbol{v, false};
         }
     }
 
@@ -625,8 +639,8 @@ void ColorModulator::DemodulatePayload(std::span<const double> rgb, SoftSymbolBu
         // What remains once the bleed is subtracted: the noise the decisions actually face.
         diag->noise_sigma = std::sqrt(residual_var / 3.0);
         double spread = 1e300;
-        for (unsigned a = 0; a < 8; ++a) {
-            for (unsigned b = a + 1; b < 8; ++b) spread = std::min(spread, dist2(mu[a], mu[b]));
+        for (unsigned a = 0; a < n_colors; ++a) {
+            for (unsigned b = a + 1; b < n_colors; ++b) spread = std::min(spread, dist2(mu[a], mu[b]));
         }
         diag->centroid_spread = std::sqrt(spread);
     }
