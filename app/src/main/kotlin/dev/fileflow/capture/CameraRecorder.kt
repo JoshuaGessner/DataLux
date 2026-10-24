@@ -632,7 +632,13 @@ class CameraRecorder(private val context: Context) {
                 } else {
                     set(CaptureRequest.CONTROL_AF_MODE, CameraMetadata.CONTROL_AF_MODE_OFF)
                 }
-                set(CaptureRequest.CONTROL_AWB_MODE, CameraMetadata.CONTROL_AWB_MODE_OFF)
+                // Auto white balance ON. It was off, for a steady image back when only brightness
+                // was read -- but with no gains set, "off" leaves the sensor's raw balance, which is
+                // green: the colour viewfinder showed a green cast, and red and blue were squeezed
+                // into a fraction of green's range, crowding the eight colours together. The
+                // decoder learns the colours from the pilots on every frame, so white balance
+                // settling or drifting slowly costs it nothing.
+                set(CaptureRequest.CONTROL_AWB_MODE, CameraMetadata.CONTROL_AWB_MODE_AUTO)
                 // OQ-016: vendor sharpening and denoise destroy high-spatial-frequency cell
                 // structure — the exact signal we are trying to read. Requested off; whether the
                 // request is honoured is read back below, not assumed.
