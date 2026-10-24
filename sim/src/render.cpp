@@ -224,6 +224,7 @@ YuvImage RenderColorView(const CellMatrix& cells, const GridGeometry& g,
     const int w = cfg.view.image_width;
     const int h = cfg.view.image_height;
     YuvImage out{Image8(w, h), Image8(w / 2, h / 2), Image8(w / 2, h / 2)};
+    SplitMix64 noise(cfg.seed ^ 0x5E5503ULL);
     std::vector<double> us(static_cast<std::size_t>(w) * static_cast<std::size_t>(h));
     std::vector<double> vs(us.size());
     for (int y = 0; y < h; ++y) {
@@ -234,7 +235,12 @@ YuvImage RenderColorView(const CellMatrix& cells, const GridGeometry& g,
                 for (std::size_t j = 0; j < 3; ++j) {
                     acc += color.mix[i][j] * static_cast<double>(plane[j].at(x, y));
                 }
-                cam[i] = std::clamp(acc * color.gain[i], 0.0, 255.0);
+                const double across = 2.0 * static_cast<double>(x) / static_cast<double>(w) - 1.0;
+                double v = acc * color.gain[i] * (1.0 + color.shading[i] * across);
+                if (color.sensor_noise > 0.0) {
+                    v += (2.0 * noise.NextDouble() - 1.0) * color.sensor_noise;
+                }
+                cam[i] = std::clamp(v, 0.0, 255.0);
             }
             const double yy = 0.299 * cam[0] + 0.587 * cam[1] + 0.114 * cam[2];
             out.y.set(x, y, static_cast<std::uint8_t>(std::lround(std::clamp(yy, 0.0, 255.0))));
@@ -260,6 +266,27 @@ YuvImage RenderColorView(const CellMatrix& cells, const GridGeometry& g,
             }
             out.u.set(x, y, static_cast<std::uint8_t>(std::lround(std::clamp(su / 4.0, 0.0, 255.0))));
             out.v.set(x, y, static_cast<std::uint8_t>(std::lround(std::clamp(sv / 4.0, 0.0, 255.0))));
+        }
+    }
+    if (color.chroma_blur > 0) {
+        const int r = color.chroma_blur;
+        for (Image8* chroma : {&out.u, &out.v}) {
+            const Image8 src = *chroma;
+            for (int y = 0; y < src.height(); ++y) {
+                for (int x = 0; x < src.width(); ++x) {
+                    double sum = 0.0;
+                    int n = 0;
+                    for (int dy = -r; dy <= r; ++dy) {
+                        for (int dx = -r; dx <= r; ++dx) {
+                            const int xx = std::clamp(x + dx, 0, src.width() - 1);
+                            const int yy = std::clamp(y + dy, 0, src.height() - 1);
+                            sum += src.at(xx, yy);
+                            ++n;
+                        }
+                    }
+                    chroma->set(x, y, static_cast<std::uint8_t>(std::lround(sum / n)));
+                }
+            }
         }
     }
     return out;

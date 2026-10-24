@@ -383,20 +383,225 @@ void ColorModulator::DemodulatePayload(std::span<const double> rgb, SoftSymbolBu
         }
     }
 
-    // Each bit's "clean" distance: how far, on average, flipping that bit moves a colour.
+    // ---- What a cell shows is partly its neighbours' ----
+    //
+    // The camera records colour at a quarter of luma's resolution and then demosaics and, with
+    // digital zoom, resamples it, so every cell's colour carries a share of the cells around it.
+    // On the Pixel 8 reading the S26 that cost a third of the colours' separation, and frame after
+    // frame failed while the S26 read the Pixel fine (F65). It is not noise: it is a linear
+    // function of colours this frame already shows. So it is LEARNED, like the colours, and
+    // subtracted -- decision feedback, in two dimensions:
+    //
+    //     x - mu(own) = B4 (n4 - mu(own)) + B8 (n8 - mu(own))
+    //
+    // with n4 the mean colour of the four edge neighbours, n8 of the four corner ones, and B4, B8
+    // 3x3 matrices fitted to this frame by least squares. Then each candidate colour is judged by
+    // where it WOULD appear among those neighbours, not where it would appear alone.
+    const GridGeometry g = layout_->geometry();
+    std::vector<int> label(cells, -1);
+    for (std::uint32_t idx = 0; idx < cells; ++idx) {
+        Vec v{};
+        if (read(idx, &v)) label[idx] = static_cast<int>(nearest(v));
+    }
+    // Neighbour means for one cell: [0] the edge four, [1] the corner four. False if it has none.
+    auto neighbours = [&](std::uint32_t idx, std::array<Vec, 2>* n) {
+        const auto c = static_cast<int>(idx % g.cols);
+        const auto r = static_cast<int>(idx / g.cols);
+        std::array<Vec, 2> sum{};
+        std::array<int, 2> count{};
+        for (int dy = -1; dy <= 1; ++dy) {
+            for (int dx = -1; dx <= 1; ++dx) {
+                if (dx == 0 && dy == 0) continue;
+                const int cc = c + dx;
+                const int rr = r + dy;
+                if (cc < 0 || rr < 0 || cc >= static_cast<int>(g.cols) || rr >= static_cast<int>(g.rows)) {
+                    continue;
+                }
+                const int lab = label[static_cast<std::size_t>(rr) * g.cols + static_cast<std::size_t>(cc)];
+                if (lab < 0) continue;
+                const std::size_t group = (dx == 0 || dy == 0) ? 0 : 1;
+                for (std::size_t k = 0; k < 3; ++k) sum[group][k] += mu[static_cast<std::size_t>(lab)][k];
+                ++count[group];
+            }
+        }
+        if (count[0] == 0 || count[1] == 0) return false;
+        for (std::size_t gi = 0; gi < 2; ++gi) {
+            for (std::size_t k = 0; k < 3; ++k) (*n)[gi][k] = sum[gi][k] / count[gi];
+        }
+        return true;
+    };
+
+    constexpr std::size_t kF = 6;  // features: edge-mean and corner-mean offsets, 3 channels each
+    using Feat = std::array<double, kF>;
+    auto features = [](const std::array<Vec, 2>& n, const Vec& own) {
+        Feat f{};
+        for (std::size_t k = 0; k < 3; ++k) {
+            f[k] = n[0][k] - own[k];
+            f[3 + k] = n[1][k] - own[k];
+        }
+        return f;
+    };
+    using Bleed = std::array<Feat, 3>;
+    auto predict = [](const Bleed& b, const Vec& own, const Feat& f) {
+        Vec p = own;
+        for (std::size_t i = 0; i < 3; ++i) {
+            for (std::size_t k = 0; k < kF; ++k) p[i] += b[i][k] * f[k];
+        }
+        return p;
+    };
+    // Solves A X = B for X (A n x n, here 6x6 or 3x3), Gaussian elimination with partial
+    // pivoting; false when A is singular -- a frame too uniform to fit, which then goes unfitted.
+    auto solve = [](std::vector<std::vector<double>> a, std::vector<std::vector<double>> b,
+                    std::vector<std::vector<double>>* sol) {
+        const std::size_t n = a.size();
+        const std::size_t m = b[0].size();
+        for (std::size_t col = 0; col < n; ++col) {
+            std::size_t piv = col;
+            for (std::size_t r = col + 1; r < n; ++r) {
+                if (std::abs(a[r][col]) > std::abs(a[piv][col])) piv = r;
+            }
+            if (!(std::abs(a[piv][col]) > 1e-9)) return false;
+            std::swap(a[piv], a[col]);
+            std::swap(b[piv], b[col]);
+            for (std::size_t r = 0; r < n; ++r) {
+                if (r == col) continue;
+                const double f = a[r][col] / a[col][col];
+                for (std::size_t k = col; k < n; ++k) a[r][k] -= f * a[col][k];
+                for (std::size_t k = 0; k < m; ++k) b[r][k] -= f * b[col][k];
+            }
+        }
+        sol->assign(n, std::vector<double>(m));
+        for (std::size_t r = 0; r < n; ++r) {
+            for (std::size_t k = 0; k < m; ++k) (*sol)[r][k] = b[r][k] / a[r][r];
+        }
+        return true;
+    };
+    // The prediction mu_c + B4 (n4 - mu_c) + B8 (n8 - mu_c) splits into a part that depends only
+    // on the candidate colour, (I - B4 - B8) mu_c, and one that depends only on the neighbours,
+    // B4 n4 + B8 n8 -- so each cell costs one product, not one per candidate.
+    auto own_part = [&mu](const Bleed& b) {
+        std::array<Vec, 8> q{};
+        for (unsigned c = 0; c < 8; ++c) {
+            for (std::size_t i = 0; i < 3; ++i) {
+                double v = mu[c][i];
+                for (std::size_t k = 0; k < 3; ++k) v -= (b[i][k] + b[i][3 + k]) * mu[c][k];
+                q[c][i] = v;
+            }
+        }
+        return q;
+    };
+    auto neighbour_part = [](const Bleed& b, const std::array<Vec, 2>& n) {
+        Vec o{};
+        for (std::size_t i = 0; i < 3; ++i) {
+            for (std::size_t k = 0; k < 3; ++k) o[i] += b[i][k] * n[0][k] + b[i][3 + k] * n[1][k];
+        }
+        return o;
+    };
+    using Mat = std::array<std::array<double, 3>, 3>;
+    // Squared distance in the metric w: with w the inverse noise covariance, the sharp luma
+    // direction counts for more than the blurred chroma ones, as it should.
+    auto metric = [](const Mat& w, const Vec& d) {
+        double acc = 0.0;
+        for (std::size_t i = 0; i < 3; ++i) {
+            for (std::size_t k = 0; k < 3; ++k) acc += d[i] * w[i][k] * d[k];
+        }
+        return acc;
+    };
+    auto diff = [](const Vec& a, const Vec& b) { return Vec{a[0] - b[0], a[1] - b[1], a[2] - b[2]}; };
+
+    std::vector<std::array<Vec, 2>> near(x.size());
+    std::vector<bool> has_near(x.size(), false);
+    Bleed bleed{};
+    Mat w{};
+    for (std::size_t i = 0; i < 3; ++i) w[i][i] = 1.0;
+    double residual_var = 0.0;
+    constexpr int kPasses = 2;
+    for (int pass = 0; pass < kPasses; ++pass) {
+        // Least squares for the bleed: (F^T F) B^T = F^T R.
+        std::vector<std::vector<double>> ftf(kF, std::vector<double>(kF, 0.0));
+        std::vector<std::vector<double>> ftr(kF, std::vector<double>(3, 0.0));
+        std::size_t fitted = 0;
+        for (std::size_t s = 0; s < x.size(); ++s) {
+            has_near[s] = neighbours(pay_cells[slot[s]], &near[s]);
+            if (!has_near[s]) continue;
+            const Vec& own = mu[static_cast<std::size_t>(label[pay_cells[slot[s]]])];
+            const Feat f = features(near[s], own);
+            const Vec r = diff(x[s], own);
+            for (std::size_t i = 0; i < kF; ++i) {
+                for (std::size_t k = 0; k < kF; ++k) ftf[i][k] += f[i] * f[k];
+                for (std::size_t k = 0; k < 3; ++k) ftr[i][k] += f[i] * r[k];
+            }
+            ++fitted;
+        }
+        bleed = Bleed{};
+        std::vector<std::vector<double>> bt;
+        if (fitted > 64 && solve(ftf, ftr, &bt)) {
+            for (std::size_t i = 0; i < 3; ++i) {
+                for (std::size_t k = 0; k < kF; ++k) bleed[i][k] = bt[k][i];
+            }
+        }
+        // Residual covariance once the bleed is accounted for: the decision metric.
+        Mat cov{};
+        for (std::size_t s = 0; s < x.size(); ++s) {
+            const Vec& own = mu[static_cast<std::size_t>(label[pay_cells[slot[s]]])];
+            const Vec p = has_near[s] ? predict(bleed, own, features(near[s], own)) : own;
+            const Vec e = diff(x[s], p);
+            for (std::size_t i = 0; i < 3; ++i) {
+                for (std::size_t k = 0; k < 3; ++k) cov[i][k] += e[i] * e[k];
+            }
+        }
+        residual_var = 0.0;
+        std::vector<std::vector<double>> cv(3, std::vector<double>(3));
+        std::vector<std::vector<double>> id(3, std::vector<double>(3, 0.0));
+        for (std::size_t i = 0; i < 3; ++i) {
+            for (std::size_t k = 0; k < 3; ++k) cv[i][k] = cov[i][k] / static_cast<double>(x.size());
+            cv[i][i] += 4.0;  // a floor: a perfectly clean frame must not divide by zero
+            residual_var += cv[i][i];
+            id[i][i] = 1.0;
+        }
+        std::vector<std::vector<double>> winv;
+        if (solve(cv, id, &winv)) {
+            for (std::size_t i = 0; i < 3; ++i) {
+                for (std::size_t k = 0; k < 3; ++k) w[i][k] = winv[i][k];
+            }
+        }
+        // Re-decide every payload cell under the fitted model, for the next pass and the bits.
+        const std::array<Vec, 8> q = own_part(bleed);
+        for (std::size_t s = 0; s < x.size(); ++s) {
+            const Vec o = has_near[s] ? neighbour_part(bleed, near[s]) : Vec{};
+            unsigned best = 0;
+            double bd = 1e300;
+            for (unsigned c = 0; c < 8; ++c) {
+                const Vec& base = has_near[s] ? q[c] : mu[c];
+                const double d = metric(w, Vec{x[s][0] - base[0] - o[0], x[s][1] - base[1] - o[1],
+                                               x[s][2] - base[2] - o[2]});
+                if (d < bd) {
+                    bd = d;
+                    best = c;
+                }
+            }
+            label[pay_cells[slot[s]]] = static_cast<int>(best);
+        }
+    }
+
+    // Each bit's "clean" distance, in the same metric: how far flipping that bit moves a colour.
     std::array<double, 3> clean{};
     for (std::size_t j = 0; j < 3; ++j) {
         const unsigned mask = 4U >> j;
         double acc = 0.0;
-        for (unsigned c = 0; c < 8; ++c) acc += dist2(mu[c], mu[c ^ mask]);
-        clean[j] = std::max(acc / 8.0, 1.0);
+        for (unsigned c = 0; c < 8; ++c) acc += metric(w, diff(mu[c], mu[c ^ mask]));
+        clean[j] = std::max(acc / 8.0, 1e-6);
     }
 
-    double noise = 0.0;
+    const std::array<Vec, 8> q = own_part(bleed);
     for (std::size_t s = 0; s < x.size(); ++s) {
+        const Vec o = has_near[s] ? neighbour_part(bleed, near[s]) : Vec{};
         std::array<double, 8> d{};
-        for (unsigned c = 0; c < 8; ++c) d[c] = dist2(x[s], mu[c]);
-        noise += *std::min_element(d.begin(), d.end());
+        for (unsigned c = 0; c < 8; ++c) {
+            const Vec& base = has_near[s] ? q[c] : mu[c];
+            d[c] = metric(w, Vec{x[s][0] - base[0] - o[0], x[s][1] - base[1] - o[1],
+                                 x[s][2] - base[2] - o[2]});
+        }
         for (std::size_t j = 0; j < 3; ++j) {
             const unsigned mask = 4U >> j;
             double d0 = 1e300;
@@ -417,7 +622,8 @@ void ColorModulator::DemodulatePayload(std::span<const double> rgb, SoftSymbolBu
     if (diag != nullptr) {
         diag->cells = x.size();
         diag->pilots = pilots_read;
-        diag->noise_sigma = std::sqrt(noise / (3.0 * static_cast<double>(x.size())));
+        // What remains once the bleed is subtracted: the noise the decisions actually face.
+        diag->noise_sigma = std::sqrt(residual_var / 3.0);
         double spread = 1e300;
         for (unsigned a = 0; a < 8; ++a) {
             for (unsigned b = a + 1; b < 8; ++b) spread = std::min(spread, dist2(mu[a], mu[b]));

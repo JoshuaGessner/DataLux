@@ -181,7 +181,7 @@ Result<FramePipeline> FramePipeline::Create(const FrameLayout& layout, PipelineC
     FF_ASSIGN_OR_RETURN(
         auto chroma_sampler,
         CellSampler::Create(layout.geometry(),
-                            SamplerConfig{.interior_margin = 0.25, .samples_per_axis = 4}));
+                            SamplerConfig{.interior_margin = 0.3, .samples_per_axis = 4}));
     FF_ASSIGN_OR_RETURN(auto tracker, ScreenTracker::Create(layout, cfg.tracker));
 
     // The known cells, levels taken from the modulator's own render of the structure so they can

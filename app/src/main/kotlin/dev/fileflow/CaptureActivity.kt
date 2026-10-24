@@ -847,6 +847,7 @@ class CaptureActivity : AppCompatActivity() {
         private var lastGridKnown = false
         @Volatile private var lastPayloadMs = 0L
         @Volatile private var lastZoomMs = 0L
+        private val coachStartMs = SystemClock.elapsedRealtime()
         private var lastPayloadFrames = 0L
         private var shown: Shown? = null
         private var shownKind = ""
@@ -856,8 +857,20 @@ class CaptureActivity : AppCompatActivity() {
         private fun diagnose(s: LiveStatus): Pair<String, Shown>? {
             val a = aim ?: return null
             val progress = if (s.progress > 0.0) " Nothing received so far is lost." else ""
+            val now = SystemClock.elapsedRealtime()
             return when {
                 a.verdict == AimVerdict.NoScreenFound -> null  // the decoder's "point at" is right
+                // The screen is in view and its headers read -- framing, focus and exposure are all
+                // good enough -- yet no colour frame has decoded for a while. That is this camera
+                // and that screen not separating eight colours (F65), and nothing the person can do
+                // with THIS phone fixes it; the sending phone's setting can.
+                s.colorSpread > 0.0 && s.recentReadFraction >= 0.5 &&
+                    now - maxOf(lastPayloadMs, coachStartMs) > COLOUR_STALL_MS ->
+                    "colour-stall" to Shown(
+                        "Reading the screen, but not its colours. On the sending phone, set " +
+                            "Speed to Steady (black and white).$progress",
+                        LIVE_WARN,
+                    )
                 // "Too close" is now only the lens's own limit. It also used to fire under 15 cm
                 // on the strength of F59, whose 12 cm failure was the exposure servo driving ISO
                 // to the floor, not distance: the 2.2 MB transfer ran fastest at 11 cm, filling
@@ -1220,6 +1233,8 @@ class CaptureActivity : AppCompatActivity() {
          */
         /** Auto-zoom when the lens is pinned: one step this often, this big (MAX_LIVE_ZOOM caps). */
         private const val ZOOM_EVERY_MS = 1500L
+        /** Headers reading but no colour frame decoding for this long: suggest a slower setting. */
+        private const val COLOUR_STALL_MS = 6000L
         private const val ZOOM_STEP = 1.2f
         private const val WHITE_CEILING = 245.0
         private const val WHITE_FLOOR = 170.0

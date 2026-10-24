@@ -102,6 +102,17 @@ struct ColorChannelConfig {
                                                  {0.12, 0.76, 0.12},
                                                  {0.03, 0.17, 0.80}}};
     std::array<double, 3> gain = {1.05, 0.95, 1.15};
+    // Sensor noise, added per pixel and per channel AFTER the colour filters -- so, unlike the
+    // optical noise in OpticalRenderConfig, no blur averages it away. Peak, in 8-bit levels.
+    double sensor_noise = 0.0;
+    // Colour shading: each channel's gain drifts linearly across the picture, by +/- this
+    // fraction from the left edge to the right. Real lenses tint their edges, and OLED primaries
+    // shift with viewing angle, so one set of colour centroids does not fit a whole frame.
+    std::array<double, 3> shading = {0.0, 0.0, 0.0};
+    // Colour resolution lost in the camera beyond 4:2:0 itself -- demosaicing, and the resampling
+    // of a digital zoom -- as a box blur of this radius on the chroma planes, in chroma pixels.
+    // Each cell's colour then bleeds into its neighbours' while its brightness stays sharp.
+    int chroma_blur = 0;
 };
 
 // A YUV 4:2:0 capture: full-resolution luma, half-resolution chroma both ways, as Camera2 delivers.

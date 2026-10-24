@@ -129,6 +129,29 @@ TEST(ColorTransfer, EightColoursThroughACrosstalkingCameraVerify) {
     EXPECT_LT(color.frames * 2, mono.frames) << "the same file in well under half the frames";
 }
 
+TEST(ColorTransfer, ColourThatBleedsBetweenCellsStillVerifies) {
+    // What the Pixel 8 reported reading the S26 Ultra: the eight colours ~165 apart where the S26
+    // reading the Pixel saw ~190, and noise ~38 against ~30 -- and almost no frame decoded (F65).
+    // The cause modelled here is colour resolution: chroma blurred past 4:2:0, so each cell
+    // carries its neighbours' colour, with crosstalk, sensor noise and colour shading on top.
+    // Read as noise, this failed every frame; learned and subtracted, it verifies.
+    sim::ColorChannelConfig camera;
+    for (std::size_t i = 0; i < 3; ++i) {
+        for (std::size_t j = 0; j < 3; ++j) {
+            if (i != j) camera.mix[i][j] *= 2.0;
+        }
+    }
+    camera.sensor_noise = 30.0;
+    camera.shading = {0.15, -0.045, -0.15};
+    camera.chroma_blur = 1;
+    g_blur = 2;
+    const Outcome o = Transfer(File(60000), ModulationProfile::kM5EightColor, camera, 200);
+    g_blur = 1;
+    EXPECT_TRUE(o.verified) << "colours " << o.color.centroid_spread << " apart, noise "
+                            << o.color.noise_sigma;
+    EXPECT_LT(o.frames, 20) << "and in about the frames a clean camera needs";
+}
+
 TEST(ColorTransfer, AnM0ReceiverWithoutColourRefusesM5FramesRatherThanMisreadingThem) {
     // A receiver given no chroma must call an M5 frame unsupported, never decode it as M0.
     const FrameLayout layout = FrameLayout::Create(kGrid, LayoutConfig{}).value();
@@ -161,19 +184,36 @@ namespace fileflow {
 // Not an assertion: where M5 stops working, against M0, as blur, noise and crosstalk grow. Run it
 // with --gtest_also_run_disabled_tests when the colour demodulator changes.
 TEST(ColorTransfer, DISABLED_MarginTable) {
-    struct Arm { const char* name; int blur; double noise; double cross; };
+    struct Arm {
+        const char* name;
+        int blur;
+        double cross;
+        double sensor;   // per-pixel sensor noise after the filters, peak levels
+        double shading;  // colour shading, +/- across the picture (red up, blue down)
+        int chroma_blur = 0;  // chroma pixels
+    };
     const std::vector<std::uint8_t> file = File(60000);
-    for (const Arm a : {Arm{"clean", 1, 3.0, 1.0}, Arm{"blur 2", 2, 3.0, 1.0},
-                        Arm{"blur 3", 3, 3.0, 1.0}, Arm{"crosstalk x3", 1, 3.0, 3.0},
-                        Arm{"crosstalk x2", 1, 3.0, 2.0}, Arm{"blur 2 noise 8 x2", 2, 8.0, 2.0}}) {
+    for (const Arm a : {Arm{"clean", 1, 1.0, 0.0, 0.0}, Arm{"blur 2", 2, 1.0, 0.0, 0.0},
+                        Arm{"crosstalk x3", 1, 3.0, 0.0, 0.0},
+                        Arm{"sensor noise 30", 1, 1.0, 30.0, 0.0},
+                        Arm{"sensor noise 50", 1, 1.0, 50.0, 0.0},
+                        Arm{"shading 15%", 1, 1.0, 0.0, 0.15},
+                        Arm{"shading 25%", 1, 1.0, 0.0, 0.25},
+                        // What the Pixel 8 reported reading the S26: centroids ~165 apart, noise ~38.
+                        Arm{"chroma blur 1", 1, 1.0, 0.0, 0.0, 1},
+                        Arm{"chroma blur 2", 1, 1.0, 0.0, 0.0, 2},
+                        Arm{"pixel-like", 2, 2.0, 30.0, 0.15, 1},
+                        Arm{"pixel-like, worse", 2, 2.0, 30.0, 0.15, 2}}) {
         sim::ColorChannelConfig cam;
         for (std::size_t i = 0; i < 3; ++i) {
             for (std::size_t j = 0; j < 3; ++j) {
                 if (i != j) cam.mix[i][j] *= a.cross;
             }
         }
+        cam.sensor_noise = a.sensor;
+        cam.shading = {a.shading, -0.3 * a.shading, -a.shading};
+        cam.chroma_blur = a.chroma_blur;
         g_blur = a.blur;
-        g_noise = a.noise;
         const Outcome c = Transfer(file, ModulationProfile::kM5EightColor, cam, 300);
         const Outcome m = Transfer(file, ModulationProfile::kM0BinaryLuminance, cam, 300);
         std::printf("   %-18s M0 %3d frames%s   M5 %3d frames%s   spread %.0f noise %.1f\n", a.name,
@@ -181,7 +221,6 @@ TEST(ColorTransfer, DISABLED_MarginTable) {
                     c.color.centroid_spread, c.color.noise_sigma);
     }
     g_blur = 1;
-    g_noise = 3.0;
 }
 
 }  // namespace fileflow
