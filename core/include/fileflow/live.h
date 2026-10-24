@@ -140,6 +140,8 @@ struct LiveStatus {
     std::uint32_t bits_per_cell = 0;
     // Frames whose payload decoded only combined with another capture of the same state.
     std::uint64_t combined_frames = 0;
+    // The lens distortion the last frame's lane has learned (FramePipeline::lens_strength).
+    double lens_strength = 0.0;
 
     std::string file_name;            // a display hint (sanitised), once the manifest is in
     std::uint64_t file_size = 0;

@@ -101,6 +101,26 @@ struct SubcellConfig {
     // so an error cannot outlive a few frames.
     bool warm_start = true;
     int cold_every = 8;
+
+    // The lens's barrel distortion, learned (F72). A homography maps a flat screen through an
+    // IDEAL lens; a phone's wide lens bows straight lines, and once the screen fills the picture
+    // the bow reaches a cell or more between the corners a homography pins. A Pixel 8 held close
+    // to the sender read every header and decoded nothing -- 78% of cells wrong, banded across the
+    // frame -- and the same frame decoded with 1.3% wrong once the bow was modelled. The camera's
+    // own correction (DISTORTION_CORRECTION_MODE) reported on and was not applied to the stream.
+    //
+    // So every lens is measured, not trusted: on each full alignment the strength k1 is tried a
+    // step either way, with the grid's corners held where they are seen, and kept where the pilots
+    // separate better. The score peaks within ~0.005 of the strength that decodes best.
+    bool fit_lens = true;
+    double lens_k1_min = -0.15;
+    double lens_k1_max = 0.10;
+    double lens_step = 0.02;
+    double lens_min_step = 0.0025;
+    double lens_min_gain = 0.002;  // a move must raise pilot contrast by this fraction
+    int lens_corner_evaluations = 48;  // corner refinement each candidate strength gets
+    // Learned only while the grid's corners reach this far out, as a fraction of the half-diagonal.
+    double lens_min_reach = 0.55;
     double warm_range = 0.1;
     int warm_steps = 5;
     double warm_corner_step = 0.075;
@@ -230,6 +250,8 @@ class FramePipeline {
     // Geometry from the most recent Process() call. Only meaningful when the last frame
     // decoded; check last_ok() first.
     [[nodiscard]] const Homography& last_homography() const noexcept { return last_h_; }
+    // The lens distortion this pipeline has learned (SubcellConfig::fit_lens); 0 = none.
+    [[nodiscard]] double lens_strength() const noexcept { return lens_k1_; }
     [[nodiscard]] bool last_ok() const noexcept { return last_ok_; }
     [[nodiscard]] double last_marker_score() const noexcept { return last_score_; }
 
@@ -278,6 +300,9 @@ class FramePipeline {
     // The shift search over steps x steps candidates, `passes` times, coarse to fine.
     [[nodiscard]] Homography SearchShift(const ImageView8& img, const Homography& h, double range,
                                          int steps, int passes);
+    // One step of the lens-strength search (SubcellConfig::fit_lens): returns the homography to
+    // use with the (possibly updated) lens_.
+    [[nodiscard]] Homography TuneLens(const ImageView8& img, const Homography& h);
     // The correction `h` makes to `h0`, as grid-cell offsets of the four corners; and back.
     void RememberCorrection(const Homography& h0, const Homography& h);
     [[nodiscard]] std::optional<Homography> ApplyCorrection(const Homography& h0) const;
@@ -305,6 +330,9 @@ class FramePipeline {
     ScreenTracker tracker_;
 
     Homography last_h_;
+    RadialDistortion lens_{};  // this frame's lens model, in luma pixels
+    double lens_k1_ = 0.0;     // this lane's estimate of the lens's strength
+    double lens_step_ = 0.02;  // and how far its next search reaches
     std::array<double, 8> correction_{};  // AlignTracked's last result, relative to its input
     bool correction_valid_ = false;
     int warm_frames_ = 0;  // since the last full search

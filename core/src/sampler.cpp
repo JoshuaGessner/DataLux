@@ -35,7 +35,8 @@ Result<CellSampler> CellSampler::Create(GridGeometry g, SamplerConfig cfg) {
 }
 
 double CellSampler::SampleCell(const ImageView8& img, const Homography& grid_to_image,
-                               std::uint32_t col, std::uint32_t row) const {
+                               std::uint32_t col, std::uint32_t row,
+                               const RadialDistortion& lens) const {
     if (img.empty()) return std::nan("");
     const auto n = static_cast<std::size_t>(cfg_.samples_per_axis);
 
@@ -59,12 +60,24 @@ double CellSampler::SampleCell(const ImageView8& img, const Homography& grid_to_
         const double dw = (std::fabs(m[6]) + std::fabs(m[7])) * half;
         if (std::fabs(w) > 1e-12 && dw < 1e-3 * std::fabs(w)) {
             const double inv = 1.0 / w;
-            const double x = (m[0] * cx + m[1] * cy + m[2]) * inv;
-            const double y = (m[3] * cx + m[4] * cy + m[5]) * inv;
-            const double xu = (m[0] - x * m[6]) * inv;  // d(image x) / d(grid x)
-            const double xv = (m[1] - x * m[7]) * inv;  // d(image x) / d(grid y)
-            const double yu = (m[3] - y * m[6]) * inv;
-            const double yv = (m[4] - y * m[7]) * inv;
+            double x = (m[0] * cx + m[1] * cy + m[2]) * inv;
+            double y = (m[3] * cx + m[4] * cy + m[5]) * inv;
+            double xu = (m[0] - x * m[6]) * inv;  // d(image x) / d(grid x)
+            double xv = (m[1] - x * m[7]) * inv;  // d(image x) / d(grid y)
+            double yu = (m[3] - y * m[6]) * inv;
+            double yv = (m[4] - y * m[7]) * inv;
+            if (lens.active()) {
+                // Distortion changes over hundreds of pixels, a cell over a dozen: scaling the
+                // centre and the local derivative by the centre's factor is exact to well under a
+                // hundredth of a pixel.
+                const double s = lens.Scale({x, y});
+                x = lens.cx + (x - lens.cx) * s;
+                y = lens.cy + (y - lens.cy) * s;
+                xu *= s;
+                xv *= s;
+                yu *= s;
+                yv *= s;
+            }
             // Affine, so the window's extremes are at its corners.
             const double ex = (std::fabs(xu) + std::fabs(xv)) * half;
             const double ey = (std::fabs(yu) + std::fabs(yv)) * half;
@@ -91,7 +104,8 @@ double CellSampler::SampleCell(const ImageView8& img, const Homography& grid_to_
         const double gy = static_cast<double>(row) + offsets_[oy];
         for (std::size_t ox = 0; ox < n; ++ox) {
             const double gx = static_cast<double>(col) + offsets_[ox];
-            const Point2 p = grid_to_image.Apply({gx, gy});
+            const Point2 p = lens.active() ? lens.Apply(grid_to_image.Apply({gx, gy}))
+                                           : grid_to_image.Apply({gx, gy});
             const double v = img.SampleBilinear(p.x, p.y);
             if (std::isnan(v)) continue;  // outside the frame: not a sample
             sum += v;
@@ -104,14 +118,14 @@ double CellSampler::SampleCell(const ImageView8& img, const Homography& grid_to_
     return hits > 0 ? sum / static_cast<double>(hits) : std::nan("");
 }
 
-std::vector<double> CellSampler::Sample(const ImageView8& img,
-                                        const Homography& grid_to_image) const {
+std::vector<double> CellSampler::Sample(const ImageView8& img, const Homography& grid_to_image,
+                                        const RadialDistortion& lens) const {
     std::vector<double> out(static_cast<std::size_t>(g_.cells()), std::nan(""));
     if (img.empty()) return out;
 
     for (std::uint32_t r = 0; r < g_.rows; ++r) {
         for (std::uint32_t c = 0; c < g_.cols; ++c) {
-            const double v = SampleCell(img, grid_to_image, c, r);
+            const double v = SampleCell(img, grid_to_image, c, r, lens);
             if (!std::isnan(v)) out[static_cast<std::size_t>(r) * g_.cols + c] = v;
         }
     }

@@ -182,6 +182,72 @@ std::optional<Homography> FramePipeline::ApplyCorrection(const Homography& h0) c
     return r.value();
 }
 
+Homography FramePipeline::TuneLens(const ImageView8& img, const Homography& h) {
+    const GridGeometry g = layout_->geometry();
+    const std::array<Point2, 4> grid{Point2{0, 0}, Point2{static_cast<double>(g.cols), 0},
+                                     Point2{static_cast<double>(g.cols), static_cast<double>(g.rows)},
+                                     Point2{0, static_cast<double>(g.rows)}};
+    // Where the grid's corners ARE in the image under the current model; a candidate strength
+    // keeps them there and re-bends only what lies between.
+    std::array<Point2, 4> at{};
+    for (std::size_t i = 0; i < 4; ++i) at[i] = lens_.Apply(h.Apply(grid[i]));
+    const SubcellConfig& sc = cfg_.subcell;
+
+    // Only where the bow matters. It grows with the cube of the distance from the centre: a screen
+    // whose corners stay well inside the picture is barely bent, the score is flat there, and
+    // steering on it moved the strength the wrong way and cost a far frame its decode.
+    double reach = 0.0;
+    for (const Point2& p : at) {
+        const double dx = p.x - lens_.cx;
+        const double dy = p.y - lens_.cy;
+        reach = std::max(reach, std::sqrt((dx * dx + dy * dy) * lens_.inv_norm2));
+    }
+    if (reach < sc.lens_min_reach) return h;
+
+    const double base = PilotContrast(img, h);
+    if (!(base > 0.0)) return h;
+
+    double best = base;
+    double best_k = lens_k1_;
+    Homography best_h = h;
+    const RadialDistortion current = lens_;
+    for (const double sign : {-1.0, 1.0}) {
+        const double k = std::clamp(lens_k1_ + sign * lens_step_, sc.lens_k1_min, sc.lens_k1_max);
+        if (k == lens_k1_) continue;
+        RadialDistortion trial = current;
+        trial.k1 = k;
+        std::array<Point2, 4> ideal{};
+        for (std::size_t i = 0; i < 4; ++i) ideal[i] = trial.Invert(at[i]);
+        auto r = Homography::FromCorrespondences(grid, ideal);
+        if (!r.ok()) continue;
+        // Scored after its own short corner refinement: the right strength also wants the
+        // corners re-fitted, and scoring it on the old corners favours not moving at all.
+        lens_ = trial;
+        double gain = 1.0;
+        const Homography refined =
+            RefineCorners(img, r.value(), &gain, sc.warm_corner_step, sc.lens_corner_evaluations);
+        const double c = PilotContrast(img, refined);
+        lens_ = current;
+        if (c > best) {
+            best = c;
+            best_k = k;
+            best_h = refined;
+        }
+    }
+    // Move only on a real gain: where the screen sits in the middle of the picture distortion
+    // barely changes the score, and the estimate must not wander there.
+    if (best > base * (1.0 + sc.lens_min_gain) && best_k != lens_k1_) {
+        lens_k1_ = best_k;
+        lens_.k1 = best_k;
+        lens_step_ = std::min(lens_step_ * 1.5, sc.lens_step);
+        RememberCorrection(best_h, best_h);  // the carried correction was relative to the old model
+        correction_valid_ = false;
+        return best_h;
+    }
+    lens_step_ = std::max(lens_step_ * 0.5, sc.lens_min_step);
+    return h;
+}
+
 Homography FramePipeline::AlignTracked(const ImageView8& img, const Homography& h0,
                                        bool reacquired) {
     if (!cfg_.subcell.enabled) return h0;
@@ -215,7 +281,7 @@ double FramePipeline::PilotContrast(const ImageView8& img, const Homography& shi
     int nb = 0;
     int nd = 0;
     for (const Anchor& a : anchors_) {
-        const double v = align_sampler_.SampleCell(img, shifted, a.col, a.row);
+        const double v = align_sampler_.SampleCell(img, shifted, a.col, a.row, lens_);
         if (std::isnan(v)) continue;
         if (a.bright) {
             sb += v;
@@ -304,8 +370,13 @@ std::vector<double> FramePipeline::SampleColor(const ChromaPlanes& chroma, const
         cm[6 + k] = m[6 + k];
     }
     const Homography hc(cm);
-    const std::vector<double> u = chroma_sampler_.Sample(chroma.u, hc);
-    const std::vector<double> v = chroma_sampler_.Sample(chroma.v, hc);
+    // The lens model in chroma pixels: the same distortion, about the same point.
+    RadialDistortion lens_c = lens_;
+    lens_c.cx = (lens_.cx - 0.5) / 2.0;
+    lens_c.cy = (lens_.cy - 0.5) / 2.0;
+    lens_c.inv_norm2 = lens_.inv_norm2 * 4.0;
+    const std::vector<double> u = chroma_sampler_.Sample(chroma.u, hc, lens_c);
+    const std::vector<double> v = chroma_sampler_.Sample(chroma.v, hc, lens_c);
     if (u.size() != n || v.size() != n) return rgb;
 
     // Camera RGB, BT.601 full range -- what Camera2's YUV_420_888 carries. Exactness does not
@@ -383,13 +454,34 @@ CapturedFrame FramePipeline::Process(const ImageView8& img, std::uint64_t index,
         return out;
     }
     // --- Sub-cell alignment: global shift, then the corners independently ---
-    const Homography h = AlignTracked(img, tr.grid_to_image, tr.reacquired);
+    // This frame's lens model: distortion about the image centre, normalised to the half-diagonal,
+    // with this lane's current estimate of its strength (TuneLens).
+    {
+        const double hw = img.width() / 2.0;
+        const double hh = img.height() / 2.0;
+        lens_ = RadialDistortion{hw, hh, 1.0 / (hw * hw + hh * hh), lens_k1_};
+    }
+    // The tracker fits its homography to where the markers ARE, in the distorted image. Re-fit it
+    // to where they would be through an ideal lens, so homography-then-distortion lands back on
+    // them; otherwise the distortion moves the corners further than alignment searches.
+    Homography h0 = tr.grid_to_image;
+    if (lens_.active()) {
+        const GridGeometry gg = layout_->geometry();
+        const std::array<Point2, 4> grid{Point2{0, 0}, Point2{static_cast<double>(gg.cols), 0},
+                                         Point2{static_cast<double>(gg.cols), static_cast<double>(gg.rows)},
+                                         Point2{0, static_cast<double>(gg.rows)}};
+        std::array<Point2, 4> ideal{};
+        for (std::size_t i = 0; i < 4; ++i) ideal[i] = lens_.Invert(h0.Apply(grid[i]));
+        if (auto r = Homography::FromCorrespondences(grid, ideal); r.ok()) h0 = r.value();
+    }
+    Homography h = AlignTracked(img, h0, tr.reacquired);
+    if (warm_frames_ == 0 && cfg_.subcell.fit_lens) h = TuneLens(img, h);
 
     last_h_ = h;
     last_score_ = tr.marker_score;
 
     // --- Rectify and sample ---
-    const auto raw = sampler_.Sample(img, h);
+    const auto raw = sampler_.Sample(img, h, lens_);
 
     // --- Photometry ---
     auto field = PhotometricField::Estimate(*layout_, raw, cfg_.photometric);

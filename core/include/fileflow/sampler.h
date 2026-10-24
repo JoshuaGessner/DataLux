@@ -35,6 +35,38 @@ struct SamplerConfig {
     int samples_per_axis = 2;
 };
 
+// Radial lens distortion, applied AFTER the homography: a point at distance r from the centre
+// moves to distance r (1 + k1 (r/norm)^2). A homography maps a flat screen through an IDEAL lens;
+// a phone's wide lens bows straight lines, and once the screen fills the picture the bow reaches
+// a whole cell between the corners a homography pins. k1 = 0 is no distortion.
+struct RadialDistortion {
+    double cx = 0.0;
+    double cy = 0.0;
+    double inv_norm2 = 0.0;  // 1 / norm^2
+    double k1 = 0.0;
+
+    [[nodiscard]] bool active() const noexcept { return k1 != 0.0 && inv_norm2 > 0.0; }
+    [[nodiscard]] double Scale(Point2 p) const noexcept {
+        const double dx = p.x - cx;
+        const double dy = p.y - cy;
+        return 1.0 + k1 * (dx * dx + dy * dy) * inv_norm2;
+    }
+    [[nodiscard]] Point2 Apply(Point2 p) const noexcept {
+        const double s = Scale(p);
+        return {cx + (p.x - cx) * s, cy + (p.y - cy) * s};
+    }
+    // The undistorted point that Apply() maps to `q`: fixed-point iteration, which converges in
+    // a few steps for any distortion a camera lens has.
+    [[nodiscard]] Point2 Invert(Point2 q) const noexcept {
+        Point2 p = q;
+        for (int i = 0; i < 8; ++i) {
+            const double s = Scale(p);
+            p = {cx + (q.x - cx) / s, cy + (q.y - cy) / s};
+        }
+        return p;
+    }
+};
+
 // Maps grid space -> image space and reduces the image to one sample per cell.
 class CellSampler {
   public:
@@ -48,7 +80,8 @@ class CellSampler {
     // sample point, so a frame half out of view still yields usable cells for the half that
     // is visible rather than being discarded wholesale.
     [[nodiscard]] std::vector<double> Sample(const ImageView8& img,
-                                             const Homography& grid_to_image) const;
+                                             const Homography& grid_to_image,
+                                             const RadialDistortion& lens = {}) const;
 
     // One cell, same rule as [Sample]: NaN when no sub-sample lands inside the frame.
     //
@@ -56,7 +89,8 @@ class CellSampler {
     // score a candidate geometry against the ~80 pilots, and sampling all 31,200 cells to look
     // at 80 of them would make the search cost more than the decode it is helping.
     [[nodiscard]] double SampleCell(const ImageView8& img, const Homography& grid_to_image,
-                                    std::uint32_t col, std::uint32_t row) const;
+                                    std::uint32_t col, std::uint32_t row,
+                                    const RadialDistortion& lens = {}) const;
 
     [[nodiscard]] const GridGeometry& geometry() const noexcept { return g_; }
     [[nodiscard]] const SamplerConfig& config() const noexcept { return cfg_; }

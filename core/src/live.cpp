@@ -140,6 +140,7 @@ LiveStatus LiveReceiver::Ingest(const ImageView8& img, std::int64_t timestamp_ns
         return status_;  // another lane finished it while this one was sampling
     }
     status_.screen_in_view = in_view;
+    status_.lens_strength = p.lens_strength();
     frames_without_screen_ = in_view ? 0 : frames_without_screen_ + 1;
 
     bool read = false;

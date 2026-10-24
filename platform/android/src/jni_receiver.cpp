@@ -51,6 +51,7 @@ enum Slot : int {
     kCodec,
     kCompressMs,
     kCombinedFrames,
+    kLensStrength,
     kSlotCount,
 };
 
@@ -243,6 +244,7 @@ Java_dev_fileflow_rx_NativeReceiver_ingest(JNIEnv* env, jclass /*unused*/, jlong
     v[kCodec] = static_cast<jdouble>(s.content.codec);
     v[kCompressMs] = static_cast<jdouble>(s.content.compress_ms);
     v[kCombinedFrames] = static_cast<jdouble>(s.combined_frames);
+    v[kLensStrength] = s.lens_strength;
     env->SetDoubleArrayRegion(out, 0, static_cast<jsize>(kSlotCount), v);
     return env->NewStringUTF(s.message.c_str());
 }

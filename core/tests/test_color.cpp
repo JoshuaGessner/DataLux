@@ -16,6 +16,8 @@ namespace {
 constexpr GridGeometry kGrid{120, 200};
 int g_blur = 1;          // the margin table varies these
 double g_noise = 3.0;
+double g_lens_k1 = 0.0;  // the lens test varies these
+double g_distance = 1.0;
 
 std::vector<std::uint8_t> File(std::size_t n) {
     std::vector<std::uint8_t> f(n);
@@ -33,6 +35,8 @@ sim::OpticalRenderConfig Optics(std::uint64_t seed) {
     sim::OpticalRenderConfig rc;
     rc.view.image_width = 800;
     rc.view.image_height = 1300;
+    rc.view.distance = g_distance;
+    rc.lens_k1 = g_lens_k1;
     rc.blur_radius = g_blur;
     rc.noise_amplitude = g_noise;
     rc.seed = seed;
@@ -45,20 +49,24 @@ struct Outcome {
     std::size_t symbol_bytes = 0;
     ColorDiagnostics color;
     ReceiveStats stats;
+    double lens = 0.0;  // the distortion the receiver learned
 };
 
 // Sends `file` until it verifies, through the simulated camera, and counts the display states it
 // took. The receiver is told nothing about the profile: it reads it from each header. Each state
 // is photographed `captures` times, each with its own noise -- a camera at twice the state rate.
 Outcome Transfer(const std::vector<std::uint8_t>& file, ModulationProfile profile,
-                 const sim::ColorChannelConfig& camera, int max_frames = 400, int captures = 1) {
+                 const sim::ColorChannelConfig& camera, int max_frames = 400, int captures = 1,
+                 bool fit_lens = true) {
     const FrameLayout layout = FrameLayout::Create(kGrid, LayoutConfig{}).value();
     TransmitConfig tc;
     tc.profile = profile;
     tc.manifest_interval = 8;
     auto tx = TransmitSession::Create(layout, file, "photo.jpg", 0xC010, tc);
     EXPECT_TRUE(tx.ok());
-    auto rx = LiveReceiver::Create(kGrid);
+    LiveConfig lc;
+    lc.pipeline.subcell.fit_lens = fit_lens;
+    auto rx = LiveReceiver::Create(kGrid, lc);
     EXPECT_TRUE(rx.ok());
 
     Outcome out;
@@ -83,6 +91,7 @@ Outcome Transfer(const std::vector<std::uint8_t>& file, ModulationProfile profil
     }
     out.color = rx.value().session().last_color();
     out.stats = rx.value().session().stats();
+    out.lens = rx.value().pipeline().lens_strength();
     return out;
 }
 
@@ -273,6 +282,34 @@ TEST(ColorTransfer, TwoCapturesOfAStateDecodeWhereOneAloneCannot) {
     EXPECT_TRUE(two.verified) << "two captures, combined, should be";
     EXPECT_LT(two.frames, 20);
     EXPECT_GT(two.stats.fec_ok_combined, two.stats.fec_ok / 2) << "and mostly because of combining";
+}
+
+TEST(ColorTransfer, LensDistortionIsLearnedNotTrusted) {
+    // F72. A Pixel 8 held close to the sender read every header and decoded nothing: its lens bowed
+    // the screen by a cell or more between the corners a homography pins, though the camera
+    // reported its own distortion correction on. The receiver now learns the bow from the frames.
+    // Here: barrel distortion of the strength measured on that phone, the screen filling the view.
+    g_lens_k1 = -0.045;
+    g_distance = 0.8;
+    const std::vector<std::uint8_t> file = File(60000);
+    const Outcome learned = Transfer(file, ModulationProfile::kM5EightColor, {}, 120, 1, true);
+    const Outcome trusting = Transfer(file, ModulationProfile::kM5EightColor, {}, 120, 1, false);
+    g_lens_k1 = 0.0;
+    g_distance = 1.0;
+    EXPECT_TRUE(learned.verified) << "learned k1 " << learned.lens;
+    EXPECT_NEAR(learned.lens, -0.045, 0.015);
+    EXPECT_TRUE(!trusting.verified || trusting.frames > 2 * learned.frames)
+        << "without the lens model: " << trusting.frames << " frames, with: " << learned.frames;
+}
+
+TEST(ColorTransfer, AnUndistortedLensIsLeftAlone) {
+    // The lens is learned only while the screen reaches far enough out for it to matter; an ideal
+    // lens must come out at (about) zero, never pushed somewhere by noise.
+    g_distance = 0.8;
+    const Outcome o = Transfer(File(60000), ModulationProfile::kM5EightColor, {}, 120, 1, true);
+    g_distance = 1.0;
+    EXPECT_TRUE(o.verified);
+    EXPECT_NEAR(o.lens, 0.0, 0.01);
 }
 
 }  // namespace fileflow

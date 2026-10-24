@@ -8,8 +8,19 @@
 // depend on a cell's neighbours, and whether the frame's error correction would have survived.
 //
 //   ffframe FRAME.yuv WIDTH HEIGHT [--grid 120x260] [--test-bytes 614400]
+//           [--file PATH [--name NAME]] [--compress-ms N] [--settle N]
+//
+// A real file works too, given the file the sender sent: its envelope is rebuilt (version 2,
+// zstd as the app's Auto mode does it) for each compress time the sender could have recorded,
+// until one gives the session id in the frame's header. --compress-ms skips the search (the
+// sender's log says "compressed in N ms").
+//
+// --settle N runs the frame through the pipeline N times first (default 40), as a phone held
+// steady would see it, so what the receiver learns over frames -- the lens's distortion above
+// all -- has converged before the frame is judged.
 //   ffframe --make OUT.yuv COLOURS SEQUENCE [CHROMA_BLUR]   (a simulated 800x1300 frame, to check
 //                                                            the tool against known truth)
+#include <fileflow/compress.h>
 #include <fileflow/frame.h>
 #include <fileflow/hash.h>
 #include <fileflow/modulation.h>
@@ -25,6 +36,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <iterator>
 #include <string>
 #include <vector>
 
@@ -66,6 +78,22 @@ std::vector<std::uint8_t> Envelope(const std::vector<std::uint8_t>& data, const 
     const auto size = static_cast<std::uint64_t>(data.size());
     for (int i = 7; i >= 0; --i) out.push_back(static_cast<std::uint8_t>(size >> (8 * i)));
     out.insert(out.end(), data.begin(), data.end());
+    return out;
+}
+
+// Version 2 (app/.../secure/Envelope.kt): codec 0 none, 2 zstd; the compress time is recorded.
+std::vector<std::uint8_t> Envelope2(const std::vector<std::uint8_t>& data, const std::string& name,
+                                    const std::vector<std::uint8_t>& body, std::uint8_t codec,
+                                    std::uint32_t compress_ms) {
+    std::vector<std::uint8_t> out = {'F', 'F', 'E', '2', 0};
+    out.push_back(static_cast<std::uint8_t>(name.size() >> 8));
+    out.push_back(static_cast<std::uint8_t>(name.size() & 0xFF));
+    out.insert(out.end(), name.begin(), name.end());
+    const auto size = static_cast<std::uint64_t>(data.size());
+    for (int i = 7; i >= 0; --i) out.push_back(static_cast<std::uint8_t>(size >> (8 * i)));
+    out.push_back(codec);
+    for (int i = 3; i >= 0; --i) out.push_back(static_cast<std::uint8_t>(compress_ms >> (8 * i)));
+    out.insert(out.end(), body.begin(), body.end());
     return out;
 }
 
@@ -136,11 +164,23 @@ int main(int argc, char** argv) {
     std::uint32_t cols = 120;
     std::uint32_t rows = 260;
     std::size_t test_bytes = 600 * 1024;
+    std::string file_path;
+    std::string file_name;
+    long compress_ms = -1;
+    int settle = 40;
     for (int i = 4; i + 1 < argc; i += 2) {
         if (std::strcmp(argv[i], "--grid") == 0) {
             std::sscanf(argv[i + 1], "%ux%u", &cols, &rows);
         } else if (std::strcmp(argv[i], "--test-bytes") == 0) {
             test_bytes = static_cast<std::size_t>(std::atol(argv[i + 1]));
+        } else if (std::strcmp(argv[i], "--file") == 0) {
+            file_path = argv[i + 1];
+        } else if (std::strcmp(argv[i], "--name") == 0) {
+            file_name = argv[i + 1];
+        } else if (std::strcmp(argv[i], "--compress-ms") == 0) {
+            compress_ms = std::atol(argv[i + 1]);
+        } else if (std::strcmp(argv[i], "--settle") == 0) {
+            settle = std::atoi(argv[i + 1]);
         }
     }
 
@@ -167,16 +207,21 @@ int main(int argc, char** argv) {
     auto ms = [](Clock::time_point a, Clock::time_point b) {
         return std::chrono::duration<double, std::milli>(b - a).count();
     };
-    // Timed twice: the first Process acquires the screen from scratch, the second tracks it,
+    // Settled first (--settle), then timed twice: luma only, then with colour -- each tracking,
     // which is what a phone does on all but its first frame.
-    (void)pipeline.Process(y, 0, 1, &chroma);
+    std::uint64_t n = 0;
+    for (int i = 0; i < std::max(1, settle); ++i, ++n) {
+        (void)pipeline.Process(y, n, static_cast<std::int64_t>(n + 1) * 33'333'333, &chroma);
+    }
     const auto t0 = Clock::now();
-    (void)pipeline.Process(y, 1, 2, nullptr);
+    (void)pipeline.Process(y, n, static_cast<std::int64_t>(n + 1) * 33'333'333, nullptr);
+    ++n;
     const auto t1 = Clock::now();
-    const CapturedFrame cf = pipeline.Process(y, 2, 3, &chroma);
+    const CapturedFrame cf = pipeline.Process(y, n, static_cast<std::int64_t>(n + 1) * 33'333'333, &chroma);
     const auto t2 = Clock::now();
     std::printf("timing (this host): pipeline %.1f ms luma only, %.1f ms with colour\n", ms(t0, t1),
                 ms(t1, t2));
+    std::printf("lens: learned distortion k1 %.4f after %d frames\n", pipeline.lens_strength(), settle);
     if (!pipeline.last_ok()) {
         std::printf("screen not found / not readable in this frame\n");
         return 1;
@@ -225,23 +270,60 @@ int main(int argc, char** argv) {
     std::printf("\n");
 
     // ---- what the sender drew ----
-    std::vector<std::uint8_t> file(test_bytes);
-    JavaRandom(5).NextBytes(&file);
-    const std::string name = "fileflow-test.bin";
-    const std::vector<std::uint8_t> env = Envelope(file, name);
-    const std::uint32_t sid = SessionIdFor(env, name);
+    std::vector<std::uint8_t> file;
+    std::string name;
+    if (file_path.empty()) {
+        file.resize(test_bytes);
+        JavaRandom(5).NextBytes(&file);
+        name = "fileflow-test.bin";
+    } else {
+        std::ifstream fin(file_path, std::ios::binary);
+        file.assign(std::istreambuf_iterator<char>(fin), std::istreambuf_iterator<char>());
+        name = file_name.empty() ? file_path.substr(file_path.find_last_of('/') + 1) : file_name;
+    }
+    // The envelope: version 1 (older senders), or version 2 as sent as-is or zstd-compressed,
+    // over every compress time it could have recorded.
+    std::vector<std::uint8_t> env = Envelope(file, name);
+    std::uint32_t sid = SessionIdFor(env, name);
+    std::uint8_t env_codec = 0;
+    long env_ms = 0;
     if (sid != hd.session_id) {
-        std::printf("session %08x is not the %zu-byte test file's (%08x): cannot regenerate truth\n",
-                    hd.session_id, test_bytes, sid);
+        std::vector<std::uint8_t> zstd;
+        if (auto z = Compress(file, {.level = 19, .long_window = file.size() > 8U * 1024 * 1024}); z.ok()) {
+            zstd = std::move(z).value();
+        }
+        const long lo = compress_ms >= 0 ? compress_ms : 0;
+        const long hi = compress_ms >= 0 ? compress_ms : 3000;
+        for (std::uint8_t codec : {std::uint8_t{0}, std::uint8_t{2}}) {
+            if (codec == 2 && zstd.empty()) continue;
+            const std::vector<std::uint8_t>& body = codec == 2 ? zstd : file;
+            for (long t = lo; t <= hi && sid != hd.session_id; ++t) {
+                env = Envelope2(file, name, body, codec, static_cast<std::uint32_t>(t));
+                sid = SessionIdFor(env, name);
+                env_codec = codec;
+                env_ms = t;
+            }
+            if (sid == hd.session_id) break;
+        }
+    }
+    if (sid != hd.session_id) {
+        std::printf("session %08x is not %s's (as sent): cannot regenerate truth\n", hd.session_id,
+                    name.c_str());
         return 1;
     }
+    std::printf("truth: %s, %zu bytes, envelope codec %u, compress %ld ms\n", name.c_str(), file.size(),
+                static_cast<unsigned>(env_codec), env_ms);
     TransmitConfig tc;
     tc.fec_nsym = hd.fec_nsym;
     tc.profile = hd.profile;
+    if (env.size() > 4 && env[3] == '2') {
+        tc.content = ContentHint{.original_size = file.size(), .codec = env_codec,
+                                 .compress_ms = static_cast<std::uint32_t>(env_ms)};
+    }
     auto tx = TransmitSession::Create(layout, env, name, sid, tc).value();
     CellMatrix truth(cols, rows);
     bool found = false;
-    for (std::uint32_t n = 0; n <= hd.sequence + 1 && n < 1000000; ++n) {
+    for (std::uint32_t k = 0; k <= hd.sequence + 1 && k < 1000000; ++k) {
         auto r = tx.Next(&truth);
         if (r.ok() && r.value().sequence == hd.sequence) {
             found = true;

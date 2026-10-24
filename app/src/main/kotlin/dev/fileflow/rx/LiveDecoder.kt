@@ -74,6 +74,8 @@ data class LiveStatus(
     val compressMs: Long,
     /** Frames that decoded only combined with another capture of the same state. */
     val combinedFrames: Long,
+    /** The lens distortion the decoder has learned (negative = barrel); 0 = none yet. */
+    val lensStrength: Double,
     /** The grid this status was decoded against: the detected one once [gridKnown]. */
     val cols: Int,
     val rows: Int,
@@ -303,7 +305,7 @@ class LiveDecoder(
                 "${width}x$height, grid ${c.cols}x${c.rows}" +
                 "${if (committed == null) " (searching)" else ""}, phase ${s.phase}, " +
                 "read ${"%.2f".format(s.recentReadFraction)}, payloads ${s.payloadFrames} " +
-                "(${s.combinedFrames} combined), " +
+                "(${s.combinedFrames} combined), lens ${"%.3f".format(s.lensStrength)}, " +
                 "blur ${"%.2f".format(s.motionBlurCells)} cells, " +
                 "${"%.1f".format((s.distinctStates - lastDistinct).coerceAtLeast(0) / wall)} " +
                 "states/s seen, ${"%.0f".format(s.bytesPerSecond / 1024)} KB/s" +
@@ -389,6 +391,7 @@ class LiveDecoder(
             codec = slots[Slot.Codec.ordinal].toInt(),
             compressMs = slots[Slot.CompressMs.ordinal].toLong(),
             combinedFrames = slots[Slot.CombinedFrames.ordinal].toLong(),
+            lensStrength = slots[Slot.LensStrength.ordinal],
             cols = c.cols,
             rows = c.rows,
             gridKnown = committed === c,
@@ -537,7 +540,7 @@ class LiveDecoder(
         Phase, Hint, Progress, SecondsRemaining, MotionBlurCells, RecentReadFraction,
         ScreenInView, Frames, FileSize, PayloadFrames, BytesPerSecond, DistinctStates,
         ColorSpread, ColorNoise, TransferSeconds, BitsPerCell, OriginalSize, Codec, CompressMs,
-        CombinedFrames,
+        CombinedFrames, LensStrength,
     }
 
     companion object {
