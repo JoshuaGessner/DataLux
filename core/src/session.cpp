@@ -107,7 +107,7 @@ Result<ReceiveSession> ReceiveSession::Create(const FrameLayout& layout, Receive
     return ReceiveSession(layout, cfg);
 }
 
-const IntraFec* ReceiveSession::FecFor(std::size_t nsym, std::size_t bits_per_cell) {
+const IntraFec* FrameDecoder::FecFor(std::size_t nsym, std::size_t bits_per_cell) {
     // Built lazily per code rate and profile seen, from the header, so the receiver needs no
     // configuration for either -- and a transmitter that changes them between sessions just works.
     const auto key = std::make_pair(nsym, bits_per_cell);
@@ -177,40 +177,94 @@ FrameOutcome ReceiveSession::AcceptManifest(const FrameHeader& h,
     return FrameOutcome::kManifest;
 }
 
-FrameOutcome ReceiveSession::Ingest(std::span<const double> cell_samples,
-                                    std::span<const double> cell_rgb, std::int64_t timestamp_ns) {
-    ++stats_.frames;
-    last_reached_fec_ = false;
-
-    if (std::none_of(cell_samples.begin(), cell_samples.end(),
-                     [](double v) { return !std::isnan(v); })) {
-        ++stats_.unreadable;
-        return FrameOutcome::kUnreadable;
-    }
+DecodedFrame FrameDecoder::Decode(std::span<const double> cell_samples,
+                                  std::span<const double> cell_rgb) {
+    DecodedFrame f;
+    f.readable = std::any_of(cell_samples.begin(), cell_samples.end(),
+                             [](double v) { return !std::isnan(v); });
+    if (!f.readable) return f;
 
     // --- Header ---
     const PhotometricRef ref = mod_.EstimateReference(cell_samples);
     std::vector<std::size_t> erased;
     auto hbytes = mod_.DemodulateHeader(cell_samples, ref, hdr_.coded_size(), &erased);
-    if (!hbytes.ok()) {
-        ++stats_.header_fail;
-        return FrameOutcome::kHeaderFailed;
-    }
+    if (!hbytes.ok()) return f;
     std::vector<std::uint8_t> hbuf = std::move(hbytes).value();
     auto hdr_r = hdr_.Decode(hbuf, erased);
-    if (!hdr_r.ok()) {
-        ++stats_.header_fail;
-        return FrameOutcome::kHeaderFailed;
-    }
-    ++stats_.header_ok;
+    if (!hdr_r.ok()) return f;
+    f.header_ok = true;
     if (!erased.empty()) {
         // Would it have decoded blind? Only asked on success, so the cost lands on the frames
         // that are worth counting.
         std::vector<std::uint8_t> blind = mod_.DemodulateHeader(cell_samples, ref,
                                                                 hdr_.coded_size()).value();
-        if (!hdr_.Decode(blind).ok()) ++stats_.header_rescued_by_erasures;
+        f.header_rescued_by_erasures = !hdr_.Decode(blind).ok();
     }
-    const FrameHeader h = hdr_r.value();
+    f.header = hdr_r.value();
+    const FrameHeader& h = f.header;
+
+    // --- Payload ---
+    f.bits = BitsPerCell(h.profile);
+    const ColorModulator* color = h.profile == ModulationProfile::kM5EightColor   ? &color8_
+                                  : h.profile == ModulationProfile::kM3FourColor ? &color4_
+                                                                                 : nullptr;
+    if (f.bits == 0 || (color != nullptr && cell_rgb.size() != cell_samples.size() * 3)) return f;
+    const IntraFec* fec = nullptr;
+    if (h.fec_nsym > 0) {
+        fec = FecFor(h.fec_nsym, f.bits);
+        if (fec == nullptr) return f;
+    }
+    f.supported = true;
+
+    SoftSymbolBuffer soft;
+    if (color != nullptr) {
+        color->DemodulatePayload(cell_rgb, &soft, &f.color);
+        f.has_color = true;
+    } else {
+        mod_.DemodulatePayload(cell_samples, ref, &soft);
+    }
+    const std::size_t capacity =
+        color != nullptr ? color->payload_capacity_bytes() : mod_.payload_capacity_bytes();
+    f.coded_len = fec ? fec->coded_bytes() : capacity;
+    HardDecision hd = HardDecide(soft, f.coded_len, cfg_.erase_below);
+    f.payload_cells = soft.size();
+    f.erased_cells = hd.erasures;
+
+    if (fec == nullptr) {
+        f.message = std::move(hd.bytes);
+        return f;
+    }
+    f.reached_fec = true;
+    auto dec = fec->Decode(hd.bytes, hd.erased_bytes, &f.fec);
+    if (dec.ok()) {
+        f.fec_ok = true;
+        f.message = std::move(dec).value();
+    } else {
+        f.soft = std::move(soft);
+    }
+    return f;
+}
+
+FrameOutcome ReceiveSession::Ingest(std::span<const double> cell_samples,
+                                    std::span<const double> cell_rgb, std::int64_t timestamp_ns) {
+    return Commit(decoder_.Decode(cell_samples, cell_rgb), timestamp_ns);
+}
+
+FrameOutcome ReceiveSession::Commit(DecodedFrame f, std::int64_t timestamp_ns) {
+    ++stats_.frames;
+    last_reached_fec_ = false;
+
+    if (!f.readable) {
+        ++stats_.unreadable;
+        return FrameOutcome::kUnreadable;
+    }
+    if (!f.header_ok) {
+        ++stats_.header_fail;
+        return FrameOutcome::kHeaderFailed;
+    }
+    ++stats_.header_ok;
+    if (f.header_rescued_by_erasures) ++stats_.header_rescued_by_erasures;
+    const FrameHeader h = f.header;
     NoteSequence(h.sequence, timestamp_ns);
 
     if (rx_.has_value() && h.session_id != rx_->manifest().session_id) {
@@ -219,41 +273,24 @@ FrameOutcome ReceiveSession::Ingest(std::span<const double> cell_samples,
     }
 
     // --- Payload ---
-    const std::size_t bits = BitsPerCell(h.profile);
-    last_bits_ = bits;
-    const ColorModulator* color = h.profile == ModulationProfile::kM5EightColor   ? &color8_
-                                  : h.profile == ModulationProfile::kM3FourColor ? &color4_
-                                                                                 : nullptr;
-    if (bits == 0 || (color != nullptr && cell_rgb.size() != cell_samples.size() * 3)) {
-        return FrameOutcome::kPayloadUnsupported;
-    }
-    const IntraFec* fec = nullptr;
-    if (h.fec_nsym > 0) {
-        fec = FecFor(h.fec_nsym, bits);
-        if (fec == nullptr) return FrameOutcome::kPayloadUnsupported;
-    }
-
-    SoftSymbolBuffer soft;
-    if (color != nullptr) {
-        color->DemodulatePayload(cell_rgb, &soft, &last_color_);
-    } else {
-        mod_.DemodulatePayload(cell_samples, ref, &soft);
-    }
-    const std::size_t capacity =
-        color != nullptr ? color->payload_capacity_bytes() : mod_.payload_capacity_bytes();
-    const std::size_t coded_len = fec ? fec->coded_bytes() : capacity;
-    HardDecision hd = HardDecide(soft, coded_len, cfg_.erase_below);
-    stats_.payload_cells += soft.size();
-    stats_.erased_cells += hd.erasures;
+    last_bits_ = f.bits;
+    if (!f.supported) return FrameOutcome::kPayloadUnsupported;
+    if (f.has_color) last_color_ = f.color;
+    stats_.payload_cells += f.payload_cells;
+    stats_.erased_cells += f.erased_cells;
 
     std::vector<std::uint8_t> message;
-    if (fec != nullptr) {
+    if (f.reached_fec) {
         last_reached_fec_ = true;
-        auto dec = fec->Decode(hd.bytes, hd.erased_bytes, &last_fec_);
+        last_fec_ = f.fec;
         stats_.worst_codeword_erasures =
             std::max(stats_.worst_codeword_erasures, last_fec_.worst_erasures_in_codeword);
-        if (!dec.ok()) {
-            dec = CombineWithEarlier(h, soft, *fec, coded_len);
+        if (f.fec_ok) {
+            message = std::move(f.message);
+        } else {
+            const IntraFec* fec = decoder_.FecFor(h.fec_nsym, f.bits);
+            auto dec = fec != nullptr ? CombineWithEarlier(h, f.soft, *fec, f.coded_len)
+                                      : Result<std::vector<std::uint8_t>>(Error::kUncorrectable);
             if (!dec.ok()) {
                 // Never ingest partially-corrected data: the fountain layer absorbs a lost frame
                 // and would be poisoned by a half-corrected one.
@@ -261,11 +298,11 @@ FrameOutcome ReceiveSession::Ingest(std::span<const double> cell_samples,
                 return FrameOutcome::kPayloadUncorrectable;
             }
             ++stats_.fec_ok_combined;
+            message = std::move(dec).value();
         }
         ++stats_.fec_ok;
-        message = std::move(dec).value();
     } else {
-        message = std::move(hd.bytes);
+        message = std::move(f.message);
     }
 
     if (h.payload_bytes > message.size()) {

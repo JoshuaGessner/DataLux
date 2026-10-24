@@ -76,12 +76,14 @@ Result<LiveReceiver> LiveReceiver::Create(GridGeometry grid, LiveConfig cfg) {
     FF_ASSIGN_OR_RETURN(auto layout, FrameLayout::Create(grid, LayoutConfig{}));
     auto owned = std::make_unique<FrameLayout>(std::move(layout));
     std::vector<std::unique_ptr<FramePipeline>> pipelines;
+    std::vector<std::unique_ptr<FrameDecoder>> decoders;
     for (std::size_t i = 0; i < cfg.lanes; ++i) {
         FF_ASSIGN_OR_RETURN(auto pipeline, FramePipeline::Create(*owned, cfg.pipeline));
         pipelines.push_back(std::make_unique<FramePipeline>(std::move(pipeline)));
+        decoders.push_back(std::make_unique<FrameDecoder>(*owned, cfg.receive));
     }
     FF_ASSIGN_OR_RETURN(auto session, ReceiveSession::Create(*owned, cfg.receive));
-    return LiveReceiver(std::move(owned), std::move(pipelines),
+    return LiveReceiver(std::move(owned), std::move(pipelines), std::move(decoders),
                         std::make_unique<ReceiveSession>(std::move(session)), cfg);
 }
 
@@ -97,12 +99,15 @@ LiveStatus LiveReceiver::Ingest(const ImageView8& img, std::int64_t timestamp_ns
         }
     }
 
-    // The expensive part -- finding, aligning and sampling the screen -- runs in this lane alone,
-    // with nothing held. A lane is only ever driven by one thread at a time (the caller's promise).
+    // The expensive part -- finding, aligning and sampling the screen, then reading its header,
+    // demodulating and correcting its payload -- runs in this lane alone, with nothing held. A
+    // lane is only ever driven by one thread at a time (the caller's promise).
     FramePipeline& p = *pipelines_[lane % pipelines_.size()];
     const std::uint64_t geo_fail_before = p.diagnostics().geometry_failures;
     CapturedFrame cf = p.Process(img, frame_no, timestamp_ns, chroma);
     const bool in_view = p.diagnostics().geometry_failures == geo_fail_before;
+    DecodedFrame decoded;
+    if (p.last_ok()) decoded = decoders_[lane % decoders_.size()]->Decode(cf.cell_samples, cf.cell_rgb);
 
     const std::lock_guard<std::mutex> lock(*mu_);
     if (status_.phase == LivePhase::kVerified || status_.phase == LivePhase::kFailed) {
@@ -113,7 +118,7 @@ LiveStatus LiveReceiver::Ingest(const ImageView8& img, std::int64_t timestamp_ns
 
     bool read = false;
     if (p.last_ok()) {
-        const FrameOutcome o = session_->Ingest(cf.cell_samples, cf.cell_rgb, timestamp_ns);
+        const FrameOutcome o = session_->Commit(std::move(decoded), timestamp_ns);
         status_.distinct_states = session_->stats().distinct_sequences;
         status_.color_spread = session_->last_color().centroid_spread;
         status_.color_noise = session_->last_color().noise_sigma;

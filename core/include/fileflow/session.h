@@ -160,6 +160,57 @@ struct ReceiveStats {
     [[nodiscard]] double distinct_rate() const noexcept;    // states/s, 0 if not measurable
 };
 
+// What one frame says on its own: its header, its demodulated payload and the FEC attempt on
+// it. Everything here depends on the frame alone, so it is computed outside the session's lock
+// (FrameDecoder) and the session only records it (ReceiveSession::Commit).
+struct DecodedFrame {
+    bool readable = false;      // any usable cell at all
+    bool header_ok = false;
+    bool header_rescued_by_erasures = false;
+    FrameHeader header{};
+    std::size_t bits = 0;       // bits per cell the header names
+    bool supported = false;     // a profile and code rate this grid can carry
+    bool has_color = false;
+    ColorDiagnostics color{};
+    std::size_t payload_cells = 0;
+    std::size_t erased_cells = 0;
+    bool reached_fec = false;
+    bool fec_ok = false;
+    IntraFec::Stats fec{};
+    std::size_t coded_len = 0;
+    SoftSymbolBuffer soft;              // kept only when FEC failed: the session may combine it
+    std::vector<std::uint8_t> message;  // corrected payload (or the raw bytes without FEC)
+};
+
+// The frame-local half of receiving: header, demodulation, FEC. One per decode lane, so several
+// lanes decode at once -- the session's lock then covers only the bookkeeping.
+//
+// That split is the difference on a phone with slower cores. Demodulating eight colours (k-means
+// plus the bleed model) and running FEC took ~17 ms of a Pixel 8 core per frame, all of it under
+// the one lock four lanes share: lanes queued for it, each frame took 85-105 ms end to end, and
+// the receiver decoded 23-33 frames a second -- 15-20 of the sender's 30 states (F69).
+class FrameDecoder {
+  public:
+    FrameDecoder(const FrameLayout& layout, ReceiveConfig cfg = {})
+        : mod_(layout), color8_(layout, ModulationProfile::kM5EightColor),
+          color4_(layout, ModulationProfile::kM3FourColor), cfg_(cfg) {}
+
+    [[nodiscard]] DecodedFrame Decode(std::span<const double> cell_samples,
+                                      std::span<const double> cell_rgb);
+
+    // The FEC for a code rate and profile; nullptr when this grid cannot carry it.
+    const IntraFec* FecFor(std::size_t nsym, std::size_t bits_per_cell);
+
+  private:
+    M0Modulator mod_;
+    ColorModulator color8_;
+    ColorModulator color4_;
+    HeaderCodec hdr_;
+    ReceiveConfig cfg_;
+    // By (nsym, bits per cell); nullopt = unsupported. Built lazily, per decoder.
+    std::map<std::pair<std::size_t, std::size_t>, std::optional<IntraFec>> fec_;
+};
+
 class ReceiveSession {
   public:
     // `layout` must outlive the session. The grid is the ONE thing the receiver must be told:
@@ -177,6 +228,10 @@ class ReceiveSession {
     }
     FrameOutcome Ingest(std::span<const double> cell_samples, std::span<const double> cell_rgb,
                         std::int64_t timestamp_ns);
+
+    // Records a frame some FrameDecoder has already decoded -- the same as Ingest, split so the
+    // expensive half can run outside whatever lock guards this session.
+    FrameOutcome Commit(DecodedFrame frame, std::int64_t timestamp_ns);
 
     [[nodiscard]] bool has_manifest() const noexcept { return rx_.has_value(); }
     [[nodiscard]] const FileManifest* manifest() const noexcept {
@@ -201,10 +256,8 @@ class ReceiveSession {
 
   private:
     ReceiveSession(const FrameLayout& layout, ReceiveConfig cfg)
-        : mod_(layout), color8_(layout, ModulationProfile::kM5EightColor),
-          color4_(layout, ModulationProfile::kM3FourColor), cfg_(cfg) {}
+        : decoder_(layout, cfg), cfg_(cfg) {}
 
-    const IntraFec* FecFor(std::size_t nsym, std::size_t bits_per_cell);
     // A frame whose payload failed FEC alone: tried again summed with the earlier failed captures
     // of the same display state, and kept for later ones if that fails too.
     Result<std::vector<std::uint8_t>> CombineWithEarlier(const FrameHeader& h,
@@ -231,13 +284,8 @@ class ReceiveSession {
     static constexpr std::size_t kFailedStates = 8;
     static constexpr std::size_t kCapturesPerState = 3;
 
-    M0Modulator mod_;
-    ColorModulator color8_;
-    ColorModulator color4_;
-    HeaderCodec hdr_;
+    FrameDecoder decoder_;  // for Ingest, and the FEC that combining decodes with
     ReceiveConfig cfg_;
-    // By (nsym, bits per cell); nullopt = unsupported.
-    std::map<std::pair<std::size_t, std::size_t>, std::optional<IntraFec>> fec_;
     ColorDiagnostics last_color_{};
     std::size_t last_bits_ = 0;
     std::optional<FileReceiver> rx_;

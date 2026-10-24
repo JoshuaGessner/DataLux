@@ -222,9 +222,11 @@ class LiveReceiver {
   private:
     LiveReceiver(std::unique_ptr<FrameLayout> layout,
                  std::vector<std::unique_ptr<FramePipeline>> pipelines,
+                 std::vector<std::unique_ptr<FrameDecoder>> decoders,
                  std::unique_ptr<ReceiveSession> session, LiveConfig cfg)
         : layout_(std::move(layout)),
           pipelines_(std::move(pipelines)),
+          decoders_(std::move(decoders)),
           session_(std::move(session)),
           cfg_(cfg),
           mu_(std::make_unique<std::mutex>()),
@@ -238,6 +240,9 @@ class LiveReceiver {
     // the layout.
     std::unique_ptr<FrameLayout> layout_;
     std::vector<std::unique_ptr<FramePipeline>> pipelines_;
+    // One per lane, beside its pipeline: header, demodulation and FEC run in the lane too, outside
+    // the lock, which then covers only the session's bookkeeping (F69).
+    std::vector<std::unique_ptr<FrameDecoder>> decoders_;
     std::unique_ptr<ReceiveSession> session_;
     LiveConfig cfg_;
     // Guards everything below it and the session. Heap-held so the receiver stays movable.

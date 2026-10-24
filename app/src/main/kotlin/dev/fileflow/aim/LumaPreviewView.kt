@@ -97,6 +97,11 @@ class LumaPreviewView(context: Context) : View(context) {
             val cRow = chroma?.rowStride ?: 0
             val cPix = chroma?.pixelStride ?: 0
             val cLimit = minOf(cu?.capacity() ?: 0, cv?.capacity() ?: 0)
+            var sumR = 0L
+            var sumG = 0L
+            var sumB = 0L
+            val gr = gainR
+            val gb = gainB
             for (y in 0 until dh) {
                 var src = y * step * stride
                 val cy = (y * step / 2) * cRow
@@ -108,9 +113,14 @@ class LumaPreviewView(context: Context) : View(context) {
                         // BT.601 full range, integer: what Camera2's YUV_420_888 carries.
                         val cb = (cu.get(ci).toInt() and 0xFF) - 128
                         val cr = (cv.get(ci).toInt() and 0xFF) - 128
-                        val r = (v + ((359 * cr) shr 8)).coerceIn(0, 255)
+                        val r0 = (v + ((359 * cr) shr 8)).coerceIn(0, 255)
                         val g = (v - ((88 * cb + 183 * cr) shr 8)).coerceIn(0, 255)
-                        val b = (v + ((454 * cb) shr 8)).coerceIn(0, 255)
+                        val b0 = (v + ((454 * cb) shr 8)).coerceIn(0, 255)
+                        sumR += r0
+                        sumG += g
+                        sumB += b0
+                        val r = ((r0 * gr) shr 8).coerceAtMost(255)
+                        val b = ((b0 * gb) shr 8).coerceAtMost(255)
                         -0x1000000 or (r shl 16) or (g shl 8) or b
                     } else {
                         -0x1000000 or (v shl 16) or (v shl 8) or v
@@ -119,8 +129,28 @@ class LumaPreviewView(context: Context) : View(context) {
                 }
             }
             bitmap?.setPixels(px, 0, dw, 0, 0, dw, dh)
+            if (sumR > 0 && sumB > 0 && sumG > 0) {
+                gainR = smoothGain(gainR, sumG, sumR)
+                gainB = smoothGain(gainB, sumG, sumB)
+            }
         }
         postInvalidate()
+    }
+
+    // Display white balance, 8.8 fixed point, applied to red and blue against green.
+    //
+    // The receive camera runs with white balance OFF, deliberately: on, the camera applies its own
+    // colour correction and saturation, which on a Pixel 8 tripled the colour noise the decoder
+    // saw (34 to 120-235) and stopped eight colours decoding at all. Off, the sensor's raw balance
+    // is green -- right for the decoder, which learns the colours itself, but wrong to look at. So
+    // the picture is balanced here, for the eye only: grey world, each channel scaled so the frame
+    // averages neutral, eased over a few repaints so it never flickers.
+    private var gainR = 256
+    private var gainB = 256
+
+    private fun smoothGain(current: Int, sumG: Long, sumC: Long): Int {
+        val target = (256.0 * sumG / sumC).coerceIn(128.0, 1024.0)
+        return (current + (target - current) * 0.25).toInt()
     }
 
     /**
