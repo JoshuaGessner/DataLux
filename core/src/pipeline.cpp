@@ -220,8 +220,7 @@ Result<FramePipeline> FramePipeline::Create(const FrameLayout& layout, PipelineC
 
 
 std::vector<double> FramePipeline::SampleColor(const ChromaPlanes& chroma, const Homography& h,
-                                               const std::vector<double>& raw_y,
-                                               const PhotometricField& field) const {
+                                               const std::vector<double>& raw_y) const {
     const std::size_t n = raw_y.size();
     std::vector<double> rgb(n * 3, std::nan(""));
 
@@ -253,13 +252,19 @@ std::vector<double> FramePipeline::SampleColor(const ChromaPlanes& chroma, const
         ch[2][i] = y + 1.772 * cb;
     }
 
-    // Shading falls on all three channels alike, so each is normalised against the LUMA field's
-    // local references -- the same erasures, the same correction. Then each channel gets its own
-    // black and white from the pilots, because the camera's white balance is wherever it was
-    // locked, and a white cell reads nothing like (255, 255, 255) through it.
+    // Each channel gets its own black and white from the pilots, because the camera's white
+    // balance is wherever it was left, and a white cell reads nothing like (255, 255, 255).
+    //
+    // NOT normalised against the luma field first, as it used to be. That assumed shading falls
+    // on all three channels alike; through an OLED seen at an angle it does not -- its colour
+    // shifts across the screen -- and subtracting luma's local black and dividing by luma's local
+    // contrast then threw each channel's scale around cell by cell. On every saved Pixel 8 frame
+    // the residual colour noise was lower without it (225 to 96, 50 to 28), and a frame that
+    // failed now decodes (F70). Shading that does vary across the screen is the demodulator's
+    // job: it learns the colours per tile.
     const GridGeometry g = layout_->geometry();
     for (std::size_t k = 0; k < 3; ++k) {
-        const std::vector<double> norm = field.Normalise(ch[k]);
+        const std::vector<double>& norm = ch[k];
         std::vector<double> bright;
         std::vector<double> dark;
         for (const std::uint32_t idx : layout_->pilot_cells()) {
@@ -340,7 +345,7 @@ CapturedFrame FramePipeline::Process(const ImageView8& img, std::uint64_t index,
 
     out.cell_samples = pf.Normalise(raw);
     if (chroma != nullptr && !chroma->u.empty() && !chroma->v.empty()) {
-        out.cell_rgb = SampleColor(*chroma, h, raw, pf);
+        out.cell_rgb = SampleColor(*chroma, h, raw);
     }
     out.phase = FramePhase::kClean;  // temporal classification is component C07, not here
     last_ok_ = true;

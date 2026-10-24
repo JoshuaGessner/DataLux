@@ -251,8 +251,7 @@ class FramePipeline {
 
     // Per-cell colour from the chroma planes and the cells' raw luma (CapturedFrame::cell_rgb).
     [[nodiscard]] std::vector<double> SampleColor(const ChromaPlanes& chroma, const Homography& h,
-                                                  const std::vector<double>& raw_y,
-                                                  const PhotometricField& field) const;
+                                                  const std::vector<double>& raw_y) const;
 
     // Coordinate descent over the four corners. Returns `h` unchanged if nothing improves.
     [[nodiscard]] Homography RefineCorners(const ImageView8& img, const Homography& h,

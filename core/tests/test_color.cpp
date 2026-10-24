@@ -262,7 +262,7 @@ TEST(ColorTransfer, TwoCapturesOfAStateDecodeWhereOneAloneCannot) {
             if (i != j) camera.mix[i][j] *= 2.0;
         }
     }
-    camera.sensor_noise = 75.0;
+    camera.sensor_noise = 95.0;
     camera.shading = {0.15, -0.045, -0.15};
     camera.chroma_blur = 1;
     g_blur = 2;

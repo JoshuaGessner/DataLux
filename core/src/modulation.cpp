@@ -397,6 +397,61 @@ void ColorModulator::DemodulatePayload(std::span<const double> rgb, SoftSymbolBu
         }
     }
 
+    // ---- Colours that vary across the screen ----
+    //
+    // One set of eight colours for the whole frame assumes a colour looks the same everywhere on
+    // the screen. It does not, close up: an OLED's colour shifts with viewing angle, and a phone
+    // 13 cm from the sender sees the near edge head-on and the far edge at 30 degrees or more,
+    // with glare washing one side out. A Pixel 8 held there read every header, yet its learned
+    // colours were nonsense and the residual noise 76-225 -- one centroid per colour cannot sit
+    // on both sides at once. From further back the angles even out, which is why it "read best
+    // far away" (F70).
+    //
+    // So each tile of the grid re-centres its own eight colours on its own cells, starting from
+    // the global, pilot-anchored ones and pulled back towards them by a prior worth kTilePrior
+    // cells, so identities cannot swap and a sparse colour in a tile cannot wander.
+    const GridGeometry g = layout_->geometry();
+    constexpr std::uint32_t kTileCols = 4;
+    constexpr std::uint32_t kTileRows = 6;
+    constexpr double kTilePrior = 24.0;
+    const std::uint32_t tw = std::max<std::uint32_t>(1, (g.cols + kTileCols - 1) / kTileCols);
+    const std::uint32_t th = std::max<std::uint32_t>(1, (g.rows + kTileRows - 1) / kTileRows);
+    auto tile_of = [&](std::uint32_t idx) {
+        const std::uint32_t tc = std::min(kTileCols - 1, (idx % g.cols) / tw);
+        const std::uint32_t tr = std::min(kTileRows - 1, (idx / g.cols) / th);
+        return static_cast<std::size_t>(tr * kTileCols + tc);
+    };
+    std::vector<std::array<Vec, 8>> tmu(kTileCols * kTileRows, mu);
+    auto nearest_in = [&dist2, n_colors](const std::array<Vec, 8>& m, const Vec& v) {
+        unsigned best = 0;
+        double bd = dist2(v, m[0]);
+        for (unsigned c = 1; c < n_colors; ++c) {
+            const double d = dist2(v, m[c]);
+            if (d < bd) {
+                bd = d;
+                best = c;
+            }
+        }
+        return best;
+    };
+    for (int round = 0; round < 2; ++round) {
+        std::vector<std::array<Vec, 8>> sum(tmu.size());
+        std::vector<std::array<double, 8>> n(tmu.size());
+        for (std::size_t s = 0; s < x.size(); ++s) {
+            const std::size_t t = tile_of(pay_cells[slot[s]]);
+            const unsigned c = nearest_in(tmu[t], x[s]);
+            for (std::size_t k = 0; k < 3; ++k) sum[t][c][k] += x[s][k];
+            n[t][c] += 1.0;
+        }
+        for (std::size_t t = 0; t < tmu.size(); ++t) {
+            for (unsigned c = 0; c < n_colors; ++c) {
+                for (std::size_t k = 0; k < 3; ++k) {
+                    tmu[t][c][k] = (sum[t][c][k] + kTilePrior * mu[c][k]) / (n[t][c] + kTilePrior);
+                }
+            }
+        }
+    }
+
     // ---- What a cell shows is partly its neighbours' ----
     //
     // The camera records colour at a quarter of luma's resolution and then demosaics and, with
@@ -411,11 +466,10 @@ void ColorModulator::DemodulatePayload(std::span<const double> rgb, SoftSymbolBu
     // with n4 the mean colour of the four edge neighbours, n8 of the four corner ones, and B4, B8
     // 3x3 matrices fitted to this frame by least squares. Then each candidate colour is judged by
     // where it WOULD appear among those neighbours, not where it would appear alone.
-    const GridGeometry g = layout_->geometry();
     std::vector<int> label(cells, -1);
     for (std::uint32_t idx = 0; idx < cells; ++idx) {
         Vec v{};
-        if (read(idx, &v)) label[idx] = static_cast<int>(nearest(v));
+        if (read(idx, &v)) label[idx] = static_cast<int>(nearest_in(tmu[tile_of(idx)], v));
     }
     // Neighbour means for one cell: [0] the edge four, [1] the corner four. False if it has none.
     auto neighbours = [&](std::uint32_t idx, std::array<Vec, 2>* n) {
@@ -431,10 +485,12 @@ void ColorModulator::DemodulatePayload(std::span<const double> rgb, SoftSymbolBu
                 if (cc < 0 || rr < 0 || cc >= static_cast<int>(g.cols) || rr >= static_cast<int>(g.rows)) {
                     continue;
                 }
-                const int lab = label[static_cast<std::size_t>(rr) * g.cols + static_cast<std::size_t>(cc)];
+                const auto nidx = static_cast<std::uint32_t>(rr) * g.cols + static_cast<std::uint32_t>(cc);
+                const int lab = label[nidx];
                 if (lab < 0) continue;
                 const std::size_t group = (dx == 0 || dy == 0) ? 0 : 1;
-                for (std::size_t k = 0; k < 3; ++k) sum[group][k] += mu[static_cast<std::size_t>(lab)][k];
+                const Vec& m = tmu[tile_of(nidx)][static_cast<std::size_t>(lab)];
+                for (std::size_t k = 0; k < 3; ++k) sum[group][k] += m[k];
                 ++count[group];
             }
         }
@@ -493,15 +549,20 @@ void ColorModulator::DemodulatePayload(std::span<const double> rgb, SoftSymbolBu
     // The prediction mu_c + B4 (n4 - mu_c) + B8 (n8 - mu_c) splits into a part that depends only
     // on the candidate colour, (I - B4 - B8) mu_c, and one that depends only on the neighbours,
     // B4 n4 + B8 n8 -- so each cell costs one product, not one per candidate.
-    auto own_part = [&mu, n_colors](const Bleed& b) {
+    auto own_part = [n_colors](const Bleed& b, const std::array<Vec, 8>& m) {
         std::array<Vec, 8> q{};
         for (unsigned c = 0; c < n_colors; ++c) {
             for (std::size_t i = 0; i < 3; ++i) {
-                double v = mu[c][i];
-                for (std::size_t k = 0; k < 3; ++k) v -= (b[i][k] + b[i][3 + k]) * mu[c][k];
+                double v = m[c][i];
+                for (std::size_t k = 0; k < 3; ++k) v -= (b[i][k] + b[i][3 + k]) * m[c][k];
                 q[c][i] = v;
             }
         }
+        return q;
+    };
+    auto own_parts = [&](const Bleed& b) {
+        std::vector<std::array<Vec, 8>> q(tmu.size());
+        for (std::size_t t = 0; t < tmu.size(); ++t) q[t] = own_part(b, tmu[t]);
         return q;
     };
     auto neighbour_part = [](const Bleed& b, const std::array<Vec, 2>& n) {
@@ -540,7 +601,7 @@ void ColorModulator::DemodulatePayload(std::span<const double> rgb, SoftSymbolBu
         for (std::size_t s = 0; s < x.size(); ++s) {
             has_near[s] = neighbours(pay_cells[slot[s]], &near[s]);
             if (!has_near[s]) continue;
-            const Vec& own = mu[static_cast<std::size_t>(label[pay_cells[slot[s]]])];
+            const Vec& own = tmu[tile_of(pay_cells[slot[s]])][static_cast<std::size_t>(label[pay_cells[slot[s]]])];
             const Feat f = features(near[s], own);
             const Vec r = diff(x[s], own);
             for (std::size_t i = 0; i < kF; ++i) {
@@ -559,7 +620,7 @@ void ColorModulator::DemodulatePayload(std::span<const double> rgb, SoftSymbolBu
         // Residual spread once the bleed is accounted for: the noise the decisions face.
         Mat cov{};
         for (std::size_t s = 0; s < x.size(); ++s) {
-            const Vec& own = mu[static_cast<std::size_t>(label[pay_cells[slot[s]]])];
+            const Vec& own = tmu[tile_of(pay_cells[slot[s]])][static_cast<std::size_t>(label[pay_cells[slot[s]]])];
             const Vec p = has_near[s] ? predict(bleed, own, features(near[s], own)) : own;
             const Vec e = diff(x[s], p);
             for (std::size_t i = 0; i < 3; ++i) {
@@ -574,13 +635,14 @@ void ColorModulator::DemodulatePayload(std::span<const double> rgb, SoftSymbolBu
             residual_var += cv[i][i];
         }
         // Re-decide every payload cell under the fitted model, for the next pass and the bits.
-        const std::array<Vec, 8> q = own_part(bleed);
+        const std::vector<std::array<Vec, 8>> q = own_parts(bleed);
         for (std::size_t s = 0; s < x.size(); ++s) {
             const Vec o = has_near[s] ? neighbour_part(bleed, near[s]) : Vec{};
+            const std::size_t t = tile_of(pay_cells[slot[s]]);
             unsigned best = 0;
             double bd = 1e300;
             for (unsigned c = 0; c < n_colors; ++c) {
-                const Vec& base = has_near[s] ? q[c] : mu[c];
+                const Vec& base = has_near[s] ? q[t][c] : tmu[t][c];
                 const double d = metric(w, Vec{x[s][0] - base[0] - o[0], x[s][1] - base[1] - o[1],
                                                x[s][2] - base[2] - o[2]});
                 if (d < bd) {
@@ -601,12 +663,13 @@ void ColorModulator::DemodulatePayload(std::span<const double> rgb, SoftSymbolBu
         clean[j] = std::max(acc / n_colors, 1e-6);
     }
 
-    const std::array<Vec, 8> q = own_part(bleed);
+    const std::vector<std::array<Vec, 8>> q = own_parts(bleed);
     for (std::size_t s = 0; s < x.size(); ++s) {
         const Vec o = has_near[s] ? neighbour_part(bleed, near[s]) : Vec{};
+        const std::size_t t = tile_of(pay_cells[slot[s]]);
         std::array<double, 8> d{};
         for (unsigned c = 0; c < n_colors; ++c) {
-            const Vec& base = has_near[s] ? q[c] : mu[c];
+            const Vec& base = has_near[s] ? q[t][c] : tmu[t][c];
             d[c] = metric(w, Vec{x[s][0] - base[0] - o[0], x[s][1] - base[1] - o[1],
                                  x[s][2] - base[2] - o[2]});
         }
