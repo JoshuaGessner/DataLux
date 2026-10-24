@@ -118,6 +118,7 @@ LiveStatus LiveReceiver::Ingest(const ImageView8& img, std::int64_t timestamp_ns
         status_.color_spread = session_->last_color().centroid_spread;
         status_.color_noise = session_->last_color().noise_sigma;
         status_.bits_per_cell = static_cast<std::uint32_t>(session_->last_bits_per_cell());
+        status_.combined_frames = session_->stats().fec_ok_combined;
         read = o != FrameOutcome::kUnreadable && o != FrameOutcome::kHeaderFailed;
         switch (o) {
             case FrameOutcome::kSymbol:

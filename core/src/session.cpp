@@ -253,10 +253,14 @@ FrameOutcome ReceiveSession::Ingest(std::span<const double> cell_samples,
         stats_.worst_codeword_erasures =
             std::max(stats_.worst_codeword_erasures, last_fec_.worst_erasures_in_codeword);
         if (!dec.ok()) {
-            // Never ingest partially-corrected data: the fountain layer absorbs a lost frame and
-            // would be poisoned by a half-corrected one.
-            ++stats_.fec_fail;
-            return FrameOutcome::kPayloadUncorrectable;
+            dec = CombineWithEarlier(h, soft, *fec, coded_len);
+            if (!dec.ok()) {
+                // Never ingest partially-corrected data: the fountain layer absorbs a lost frame
+                // and would be poisoned by a half-corrected one.
+                ++stats_.fec_fail;
+                return FrameOutcome::kPayloadUncorrectable;
+            }
+            ++stats_.fec_ok_combined;
         }
         ++stats_.fec_ok;
         message = std::move(dec).value();
@@ -288,6 +292,80 @@ FrameOutcome ReceiveSession::Ingest(std::span<const double> cell_samples,
     ++stats_.buffered;
     held_.push_back(Held{h, std::vector<std::uint8_t>(data.begin(), data.end())});
     return FrameOutcome::kBuffered;
+}
+
+namespace {
+
+// Two captures' soft decisions for the same cells, added: independent noise averages down while
+// the signal adds up, so two captures that each fail can decode together. A cell one capture
+// erased takes the other's value; opposite votes of equal weight cancel to an erasure, which is
+// the honest answer. Saturates rather than wrapping.
+SoftSymbolBuffer Sum(const SoftSymbolBuffer& a, const SoftSymbolBuffer& b) {
+    SoftSymbolBuffer out;
+    out.resize(a.size());
+    for (std::size_t i = 0; i < a.size(); ++i) {
+        const SoftSymbol& x = a.symbols[i];
+        const SoftSymbol& y = b.symbols[i];
+        const int vx = x.erased ? 0 : x.llr;
+        const int vy = y.erased ? 0 : y.llr;
+        const int v = std::clamp(vx + vy, -127, 127);
+        out.symbols[i] = SoftSymbol{static_cast<Llr>(v), v == 0};
+    }
+    return out;
+}
+
+}  // namespace
+
+// Soft combining across captures (F68).
+//
+// The camera runs at about twice the display's state rate, so most states are captured twice --
+// and on a marginal channel (eight colours on a Pixel: colour noise ~33 against the ~30 they
+// need) each capture fails FEC on its own and was thrown away, so 80 states seen yielded 6
+// symbols. Summing the LLRs of two captures of the same state halves the noise power, which is
+// worth far more than the second capture alone.
+//
+// Only ever a fallback: a frame is first tried on its own, exactly as before. A capture that
+// straddled two states (rolling shutter) adds wrong evidence and simply fails to combine; the
+// CRC after FEC still guards every result.
+Result<std::vector<std::uint8_t>> ReceiveSession::CombineWithEarlier(const FrameHeader& h,
+                                                                     const SoftSymbolBuffer& soft,
+                                                                     const IntraFec& fec,
+                                                                     std::size_t coded_len) {
+    auto it = std::find_if(failed_.begin(), failed_.end(), [&](const Failed& f) {
+        return f.session_id == h.session_id && f.sequence == h.sequence &&
+               f.profile == h.profile && f.nsym == h.fec_nsym;
+    });
+    if (it == failed_.end()) {
+        failed_.push_back(Failed{h.session_id, h.sequence, h.profile, h.fec_nsym, {soft}});
+        if (failed_.size() > kFailedStates) failed_.pop_front();
+        return Error::kUncorrectable;
+    }
+    auto attempt = [&](const SoftSymbolBuffer& sum) {
+        const HardDecision hd = HardDecide(sum, coded_len, cfg_.erase_below);
+        return fec.Decode(hd.bytes, hd.erased_bytes, &last_fec_);
+    };
+    // Each earlier capture paired with this one, then all of them together.
+    for (const SoftSymbolBuffer& earlier : it->captures) {
+        if (earlier.size() != soft.size()) continue;
+        auto dec = attempt(Sum(earlier, soft));
+        if (dec.ok()) {
+            failed_.erase(it);
+            return dec;
+        }
+    }
+    if (it->captures.size() >= 2) {
+        SoftSymbolBuffer all = soft;
+        for (const SoftSymbolBuffer& earlier : it->captures) {
+            if (earlier.size() == all.size()) all = Sum(all, earlier);
+        }
+        auto dec = attempt(all);
+        if (dec.ok()) {
+            failed_.erase(it);
+            return dec;
+        }
+    }
+    if (it->captures.size() < kCapturesPerState) it->captures.push_back(soft);
+    return Error::kUncorrectable;
 }
 
 Result<std::vector<std::uint8_t>> ReceiveSession::Finish() {

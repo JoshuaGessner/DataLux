@@ -44,12 +44,14 @@ struct Outcome {
     int frames = 0;
     std::size_t symbol_bytes = 0;
     ColorDiagnostics color;
+    ReceiveStats stats;
 };
 
 // Sends `file` until it verifies, through the simulated camera, and counts the display states it
-// took. The receiver is told nothing about the profile: it reads it from each header.
+// took. The receiver is told nothing about the profile: it reads it from each header. Each state
+// is photographed `captures` times, each with its own noise -- a camera at twice the state rate.
 Outcome Transfer(const std::vector<std::uint8_t>& file, ModulationProfile profile,
-                 const sim::ColorChannelConfig& camera, int max_frames = 400) {
+                 const sim::ColorChannelConfig& camera, int max_frames = 400, int captures = 1) {
     const FrameLayout layout = FrameLayout::Create(kGrid, LayoutConfig{}).value();
     TransmitConfig tc;
     tc.profile = profile;
@@ -62,20 +64,25 @@ Outcome Transfer(const std::vector<std::uint8_t>& file, ModulationProfile profil
     Outcome out;
     out.symbol_bytes = tx.value().transmitter().manifest().symbol_size;
     CellMatrix frame(kGrid.cols, kGrid.rows);
-    for (int n = 0; n < max_frames; ++n) {
+    for (int n = 0; n < max_frames && !out.verified; ++n) {
         EXPECT_TRUE(tx.value().Next(&frame).ok());
-        Homography truth;
-        const sim::YuvImage img = sim::RenderColorView(frame, kGrid, Optics(static_cast<std::uint64_t>(n) + 1U), camera, &truth);
-        const ChromaPlanes chroma{img.u.view(), img.v.view()};
-        const LiveStatus s =
-            rx.value().Ingest(img.y.view(), static_cast<std::int64_t>(n) * 33'333'333 + 1, 0, &chroma);
-        if (s.phase == LivePhase::kVerified) {
-            out.verified = rx.value().File().value() == file;
-            out.frames = n + 1;
-            break;
+        for (int c = 0; c < captures; ++c) {
+            Homography truth;
+            // Each capture its own noise: the seed drives the sensor noise too.
+            const auto seed = static_cast<std::uint64_t>(n * captures + c) + 1U;
+            const sim::YuvImage img = sim::RenderColorView(frame, kGrid, Optics(seed), camera, &truth);
+            const ChromaPlanes chroma{img.u.view(), img.v.view()};
+            const auto t = static_cast<std::int64_t>(n) * 33'333'333 + c * 16'666'666 + 1;
+            const LiveStatus s = rx.value().Ingest(img.y.view(), t, 0, &chroma);
+            if (s.phase == LivePhase::kVerified) {
+                out.verified = rx.value().File().value() == file;
+                out.frames = n + 1;
+                break;
+            }
         }
     }
     out.color = rx.value().session().last_color();
+    out.stats = rx.value().session().stats();
     return out;
 }
 
@@ -239,6 +246,33 @@ TEST(ColorTransfer, DISABLED_MarginTable) {
                     c.color.centroid_spread, c.color.noise_sigma);
     }
     g_blur = 1;
+}
+
+}  // namespace fileflow
+
+namespace fileflow {
+
+TEST(ColorTransfer, TwoCapturesOfAStateDecodeWhereOneAloneCannot) {
+    // F68. A camera at twice the state rate photographs each state twice. On a channel where a
+    // single capture almost never passes FEC -- eight colours with heavy crosstalk, bleed and
+    // sensor noise -- the two captures' soft decisions, summed, decode most states.
+    sim::ColorChannelConfig camera;
+    for (std::size_t i = 0; i < 3; ++i) {
+        for (std::size_t j = 0; j < 3; ++j) {
+            if (i != j) camera.mix[i][j] *= 2.0;
+        }
+    }
+    camera.sensor_noise = 75.0;
+    camera.shading = {0.15, -0.045, -0.15};
+    camera.chroma_blur = 1;
+    g_blur = 2;
+    const Outcome one = Transfer(File(60000), ModulationProfile::kM5EightColor, camera, 60, 1);
+    const Outcome two = Transfer(File(60000), ModulationProfile::kM5EightColor, camera, 60, 2);
+    g_blur = 1;
+    EXPECT_FALSE(one.verified) << "one capture a state should not be enough here";
+    EXPECT_TRUE(two.verified) << "two captures, combined, should be";
+    EXPECT_LT(two.frames, 20);
+    EXPECT_GT(two.stats.fec_ok_combined, two.stats.fec_ok / 2) << "and mostly because of combining";
 }
 
 }  // namespace fileflow

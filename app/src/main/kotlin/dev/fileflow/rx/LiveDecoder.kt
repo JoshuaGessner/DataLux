@@ -72,6 +72,8 @@ data class LiveStatus(
     val originalSize: Long,
     val codec: Int,
     val compressMs: Long,
+    /** Frames that decoded only combined with another capture of the same state. */
+    val combinedFrames: Long,
     /** The grid this status was decoded against: the detected one once [gridKnown]. */
     val cols: Int,
     val rows: Int,
@@ -269,8 +271,25 @@ class LiveDecoder(
         return dst
     }
 
+    /**
+     * The grid this frame is tried against while none is proven.
+     *
+     * Round robin, unless exactly one grid is reading headers: then three frames in four go to it.
+     * A Pixel 8 reading eight colours read every header on the right grid and none on the others,
+     * but no payload decoded, so the grid was never proven and two thirds of its frames went to
+     * grids that could not read at all -- which also kept two captures of one state from ever
+     * meeting to be combined. Every fourth frame still tries the others: a near-miss grid can read
+     * headers too (F58), so this favours a grid; only a payload commits one.
+     */
+    private fun pick(ts: Long): Candidate {
+        val n = next.getAndIncrement()
+        val reading = candidates.filter { ts - (lastHeaderNs[it] ?: Long.MIN_VALUE / 2) < HEADER_FRESH_NS }
+        if (reading.size == 1 && Math.floorMod(n, 4) != 3) return reading[0]
+        return candidates[Math.floorMod(n, candidates.size)]
+    }
+
     private fun ingest(lane: Lane, buf: ByteBuffer, width: Int, height: Int, ts: Long): LiveStatus? {
-        val c = committed ?: candidates[Math.floorMod(next.getAndIncrement(), candidates.size)]
+        val c = committed ?: pick(ts)
         val t0 = System.nanoTime()
         val s = ingestInto(lane, c, buf, width, height, ts) ?: return null
         decodeNs.addAndGet(System.nanoTime() - t0)
@@ -283,7 +302,8 @@ class LiveDecoder(
                 "${"%.1f".format(decodeNs.getAndSet(0) / 1e6 / TELEMETRY_EVERY)} ms each, " +
                 "${width}x$height, grid ${c.cols}x${c.rows}" +
                 "${if (committed == null) " (searching)" else ""}, phase ${s.phase}, " +
-                "read ${"%.2f".format(s.recentReadFraction)}, payloads ${s.payloadFrames}, " +
+                "read ${"%.2f".format(s.recentReadFraction)}, payloads ${s.payloadFrames} " +
+                "(${s.combinedFrames} combined), " +
                 "blur ${"%.2f".format(s.motionBlurCells)} cells, " +
                 "${"%.1f".format((s.distinctStates - lastDistinct).coerceAtLeast(0) / wall)} " +
                 "states/s seen, ${"%.0f".format(s.bytesPerSecond / 1024)} KB/s" +
@@ -368,6 +388,7 @@ class LiveDecoder(
             originalSize = slots[Slot.OriginalSize.ordinal].toLong(),
             codec = slots[Slot.Codec.ordinal].toInt(),
             compressMs = slots[Slot.CompressMs.ordinal].toLong(),
+            combinedFrames = slots[Slot.CombinedFrames.ordinal].toLong(),
             cols = c.cols,
             rows = c.rows,
             gridKnown = committed === c,
@@ -516,6 +537,7 @@ class LiveDecoder(
         Phase, Hint, Progress, SecondsRemaining, MotionBlurCells, RecentReadFraction,
         ScreenInView, Frames, FileSize, PayloadFrames, BytesPerSecond, DistinctStates,
         ColorSpread, ColorNoise, TransferSeconds, BitsPerCell, OriginalSize, Codec, CompressMs,
+        CombinedFrames,
     }
 
     companion object {
@@ -526,6 +548,8 @@ class LiveDecoder(
         private const val MAX_LANES = 8  // LiveReceiver::kMaxLanes
         /** No payload on the chosen grid for this long: look at the others again. */
         private const val RESEARCH_AFTER_NS = 6_000_000_000L
+        /** A grid read headers this recently: it is "reading", for [pick]. */
+        private const val HEADER_FRESH_NS = 1_500_000_000L
         /**
          * Lanes by default: as many as there are cores to spare, at most 4. The camera, the
          * preview and the UI need theirs, and past about four the lanes queue on the session lock

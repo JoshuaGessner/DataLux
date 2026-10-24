@@ -138,6 +138,8 @@ struct LiveStatus {
     double color_noise = 0.0;
     // Bits per cell the sender is using (1, 2 or 3), from its headers; 0 before any has read.
     std::uint32_t bits_per_cell = 0;
+    // Frames whose payload decoded only combined with another capture of the same state.
+    std::uint64_t combined_frames = 0;
 
     std::string file_name;            // a display hint (sanitised), once the manifest is in
     std::uint64_t file_size = 0;

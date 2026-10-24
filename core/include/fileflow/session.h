@@ -20,6 +20,7 @@
 #include <fileflow/transfer.h>
 
 #include <cstdint>
+#include <deque>
 #include <map>
 #include <optional>
 #include <set>
@@ -116,6 +117,9 @@ struct ReceiveStats {
     std::uint64_t erased_cells = 0;
     std::uint64_t fec_ok = 0;
     std::uint64_t fec_fail = 0;
+    // Of fec_ok: frames that failed alone and decoded once combined with an earlier capture of
+    // the same display state -- what keeping failed frames is worth.
+    std::uint64_t fec_ok_combined = 0;
     std::uint64_t crc_fail = 0;
     std::uint64_t manifests = 0;
     std::uint64_t manifests_rejected = 0;
@@ -201,6 +205,11 @@ class ReceiveSession {
           color4_(layout, ModulationProfile::kM3FourColor), cfg_(cfg) {}
 
     const IntraFec* FecFor(std::size_t nsym, std::size_t bits_per_cell);
+    // A frame whose payload failed FEC alone: tried again summed with the earlier failed captures
+    // of the same display state, and kept for later ones if that fails too.
+    Result<std::vector<std::uint8_t>> CombineWithEarlier(const FrameHeader& h,
+                                                         const SoftSymbolBuffer& soft,
+                                                         const IntraFec& fec, std::size_t coded_len);
     FrameOutcome AcceptManifest(const FrameHeader& h, std::span<const std::uint8_t> bytes);
     void NoteSequence(std::uint32_t seq, std::int64_t ts);
 
@@ -208,6 +217,19 @@ class ReceiveSession {
         FrameHeader header;
         std::vector<std::uint8_t> data;
     };
+    // Failed captures of one display state, newest last.
+    struct Failed {
+        std::uint32_t session_id = 0;
+        std::uint32_t sequence = 0;
+        ModulationProfile profile{};
+        std::uint8_t nsym = 0;
+        std::vector<SoftSymbolBuffer> captures;
+    };
+    // The camera runs at about twice the state rate, so a state's captures arrive within a few
+    // frames of each other -- out of order across decode lanes, but never far apart. A handful of
+    // recent states is all that can still be matched.
+    static constexpr std::size_t kFailedStates = 8;
+    static constexpr std::size_t kCapturesPerState = 3;
 
     M0Modulator mod_;
     ColorModulator color8_;
@@ -220,6 +242,7 @@ class ReceiveSession {
     std::size_t last_bits_ = 0;
     std::optional<FileReceiver> rx_;
     std::vector<Held> held_;
+    std::deque<Failed> failed_;
     std::set<std::uint32_t> seen_;
     bool any_sequence_ = false;
     ReceiveStats stats_;

@@ -1052,12 +1052,10 @@ class CameraRecorder(private val context: Context) {
         private const val TAG = "FileFlow.Capture"
         /**
          * Most a live receive zooms. Zoom here is a crop, not optics: it lets the person stand back to
-         * where the lens focuses while the screen still fills the picture. It cannot add sensor
-         * pixels, but it is taken before the camera halves colour resolution, so colour per cell
-         * gains all of it. At 2x with the screen filling the picture, a 260-row grid still has
-         * ~6.5 sensor pixels a cell on a 4032-wide stream.
+         * where the lens focuses while the screen still fills the picture, and costs nothing until
+         * the sensor pixels per cell run short -- 1.6x keeps ~8 of them at the distance it is for.
          */
-        const val MAX_LIVE_ZOOM = 2.0f
+        const val MAX_LIVE_ZOOM = 1.6f
         private const val IMAGE_BUFFERS = 6
         /** Side of the tap-to-focus region, and of the standing centre region, as array fractions. */
         private const val AF_TAP_FRACTION = 0.15f
