@@ -91,6 +91,20 @@ struct SubcellConfig {
     // cells of error in the worst scene. Every pilot is kept; the rest are thinned evenly to this
     // cap, which bounds the per-frame cost.
     std::size_t max_anchors = 512;
+
+    // Warm start, for live frames (F71). A hand-held phone's frames sit within a hair of each
+    // other, and so does the correction the tracker's estimate needs, so each frame starts from
+    // the last one's and searches only near it: a 5x5 shift over +/-warm_range, then corners from
+    // warm_corner_step down, at most warm_corner_evaluations. Measured on a Pixel 8, the full
+    // search was ~19 ms of a ~58 ms frame. A full search still runs when the tracker had to
+    // reacquire, when the carried correction scores worse than none, and every cold_every frames,
+    // so an error cannot outlive a few frames.
+    bool warm_start = true;
+    int cold_every = 8;
+    double warm_range = 0.1;
+    int warm_steps = 5;
+    double warm_corner_step = 0.075;
+    int warm_corner_evaluations = 96;
 };
 
 struct PipelineConfig {
@@ -255,7 +269,18 @@ class FramePipeline {
 
     // Coordinate descent over the four corners. Returns `h` unchanged if nothing improves.
     [[nodiscard]] Homography RefineCorners(const ImageView8& img, const Homography& h,
-                                           double* gain) const;
+                                           double* gain, double first_step,
+                                           int max_evaluations) const;
+
+    // Process()'s alignment: warm-started from the previous frame's correction (SubcellConfig).
+    [[nodiscard]] Homography AlignTracked(const ImageView8& img, const Homography& h0,
+                                          bool reacquired);
+    // The shift search over steps x steps candidates, `passes` times, coarse to fine.
+    [[nodiscard]] Homography SearchShift(const ImageView8& img, const Homography& h, double range,
+                                         int steps, int passes);
+    // The correction `h` makes to `h0`, as grid-cell offsets of the four corners; and back.
+    void RememberCorrection(const Homography& h0, const Homography& h);
+    [[nodiscard]] std::optional<Homography> ApplyCorrection(const Homography& h0) const;
 
     // A cell whose level is known by construction, for the alignment objective.
     struct Anchor {
@@ -280,6 +305,9 @@ class FramePipeline {
     ScreenTracker tracker_;
 
     Homography last_h_;
+    std::array<double, 8> correction_{};  // AlignTracked's last result, relative to its input
+    bool correction_valid_ = false;
+    int warm_frames_ = 0;  // since the last full search
 
     std::optional<PhotometricField> last_field_;
 

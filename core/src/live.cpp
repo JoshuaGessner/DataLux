@@ -106,8 +106,34 @@ LiveStatus LiveReceiver::Ingest(const ImageView8& img, std::int64_t timestamp_ns
     const std::uint64_t geo_fail_before = p.diagnostics().geometry_failures;
     CapturedFrame cf = p.Process(img, frame_no, timestamp_ns, chroma);
     const bool in_view = p.diagnostics().geometry_failures == geo_fail_before;
+    FrameDecoder& decoder = *decoders_[lane % decoders_.size()];
     DecodedFrame decoded;
-    if (p.last_ok()) decoded = decoders_[lane % decoders_.size()]->Decode(cf.cell_samples, cf.cell_rgb);
+    if (p.last_ok()) decoded = decoder.Decode(cf.cell_samples, cf.cell_rgb);
+
+    // Failed FEC alone: combine with the earlier failed captures of the same state HERE, in the
+    // lane, with only a brief lock to copy them. Under the lock it was up to four more FEC
+    // decodes per failed frame, and on eight colours most frames fail: a Pixel 8 fell from ~50
+    // decoded frames a second to ~30, so most states got one decoded capture and had nothing to
+    // be combined with (F69).
+    if (decoded.reached_fec && !decoded.fec_ok) {
+        std::vector<SoftSymbolBuffer> earlier;
+        {
+            const std::lock_guard<std::mutex> lock(*mu_);
+            earlier = session_->EarlierCaptures(decoded.header);
+        }
+        if (!earlier.empty()) {
+            if (const IntraFec* fec = decoder.FecFor(decoded.header.fec_nsym, decoded.bits)) {
+                auto dec = TryCombine(earlier, decoded.soft, *fec, decoded.coded_len,
+                                      cfg_.receive.erase_below, &decoded.fec);
+                if (dec.ok()) {
+                    decoded.fec_ok = true;
+                    decoded.combined = true;
+                    decoded.message = std::move(dec).value();
+                }
+            }
+        }
+        decoded.combine_tried = true;
+    }
 
     const std::lock_guard<std::mutex> lock(*mu_);
     if (status_.phase == LivePhase::kVerified || status_.phase == LivePhase::kFailed) {

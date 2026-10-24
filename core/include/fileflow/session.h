@@ -180,7 +180,19 @@ struct DecodedFrame {
     std::size_t coded_len = 0;
     SoftSymbolBuffer soft;              // kept only when FEC failed: the session may combine it
     std::vector<std::uint8_t> message;  // corrected payload (or the raw bytes without FEC)
+    // Set by a caller that already tried combining this frame with the earlier captures of its
+    // state, outside the session's lock (TryCombine): Commit then only records the outcome.
+    bool combine_tried = false;
+    bool combined = false;  // ...and it worked: fec_ok and message come from the combination
 };
+
+// Soft combining (F68): `soft` summed with each of `earlier` -- captures of the same display
+// state that failed FEC alone -- then with all of them, and decoded. The corrected payload on the
+// first that succeeds. Pure: safe on any lane, outside any lock.
+[[nodiscard]] Result<std::vector<std::uint8_t>> TryCombine(std::span<const SoftSymbolBuffer> earlier,
+                                                           const SoftSymbolBuffer& soft,
+                                                           const IntraFec& fec, std::size_t coded_len,
+                                                           Llr erase_below, IntraFec::Stats* stats);
 
 // The frame-local half of receiving: header, demodulation, FEC. One per decode lane, so several
 // lanes decode at once -- the session's lock then covers only the bookkeeping.
@@ -233,6 +245,10 @@ class ReceiveSession {
     // expensive half can run outside whatever lock guards this session.
     FrameOutcome Commit(DecodedFrame frame, std::int64_t timestamp_ns);
 
+    // Copies of the failed captures held for this frame's display state, for TryCombine outside
+    // the lock. Empty when there are none.
+    [[nodiscard]] std::vector<SoftSymbolBuffer> EarlierCaptures(const FrameHeader& h) const;
+
     [[nodiscard]] bool has_manifest() const noexcept { return rx_.has_value(); }
     [[nodiscard]] const FileManifest* manifest() const noexcept {
         return rx_ ? &rx_->manifest() : nullptr;
@@ -263,6 +279,10 @@ class ReceiveSession {
     Result<std::vector<std::uint8_t>> CombineWithEarlier(const FrameHeader& h,
                                                          const SoftSymbolBuffer& soft,
                                                          const IntraFec& fec, std::size_t coded_len);
+    // Keeps a failed capture for later ones of its state to combine with; Forget drops a state
+    // once one of its captures has decoded.
+    void Remember(const FrameHeader& h, const SoftSymbolBuffer& soft);
+    void Forget(const FrameHeader& h);
     FrameOutcome AcceptManifest(const FrameHeader& h, std::span<const std::uint8_t> bytes);
     void NoteSequence(std::uint32_t seq, std::int64_t ts);
 

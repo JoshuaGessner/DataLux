@@ -286,11 +286,18 @@ FrameOutcome ReceiveSession::Commit(DecodedFrame f, std::int64_t timestamp_ns) {
         stats_.worst_codeword_erasures =
             std::max(stats_.worst_codeword_erasures, last_fec_.worst_erasures_in_codeword);
         if (f.fec_ok) {
+            if (f.combined) {
+                ++stats_.fec_ok_combined;
+                Forget(h);
+            }
             message = std::move(f.message);
         } else {
-            const IntraFec* fec = decoder_.FecFor(h.fec_nsym, f.bits);
-            auto dec = fec != nullptr ? CombineWithEarlier(h, f.soft, *fec, f.coded_len)
-                                      : Result<std::vector<std::uint8_t>>(Error::kUncorrectable);
+            Result<std::vector<std::uint8_t>> dec = Error::kUncorrectable;
+            if (f.combine_tried) {
+                Remember(h, f.soft);  // the caller combined already; keep it for later captures
+            } else if (const IntraFec* fec = decoder_.FecFor(h.fec_nsym, f.bits); fec != nullptr) {
+                dec = CombineWithEarlier(h, f.soft, *fec, f.coded_len);
+            }
             if (!dec.ok()) {
                 // Never ingest partially-corrected data: the fountain layer absorbs a lost frame
                 // and would be poisoned by a half-corrected one.
@@ -364,10 +371,43 @@ SoftSymbolBuffer Sum(const SoftSymbolBuffer& a, const SoftSymbolBuffer& b) {
 // Only ever a fallback: a frame is first tried on its own, exactly as before. A capture that
 // straddled two states (rolling shutter) adds wrong evidence and simply fails to combine; the
 // CRC after FEC still guards every result.
-Result<std::vector<std::uint8_t>> ReceiveSession::CombineWithEarlier(const FrameHeader& h,
-                                                                     const SoftSymbolBuffer& soft,
-                                                                     const IntraFec& fec,
-                                                                     std::size_t coded_len) {
+Result<std::vector<std::uint8_t>> TryCombine(std::span<const SoftSymbolBuffer> earlier,
+                                             const SoftSymbolBuffer& soft, const IntraFec& fec,
+                                             std::size_t coded_len, Llr erase_below,
+                                             IntraFec::Stats* stats) {
+    auto attempt = [&](const SoftSymbolBuffer& sum) {
+        const HardDecision hd = HardDecide(sum, coded_len, erase_below);
+        return fec.Decode(hd.bytes, hd.erased_bytes, stats);
+    };
+    // Each earlier capture paired with this one, then all of them together.
+    std::size_t usable = 0;
+    for (const SoftSymbolBuffer& e : earlier) {
+        if (e.size() != soft.size()) continue;
+        ++usable;
+        auto dec = attempt(Sum(e, soft));
+        if (dec.ok()) return dec;
+    }
+    if (usable >= 2) {
+        SoftSymbolBuffer all = soft;
+        for (const SoftSymbolBuffer& e : earlier) {
+            if (e.size() == all.size()) all = Sum(all, e);
+        }
+        return attempt(all);
+    }
+    return Error::kUncorrectable;
+}
+
+std::vector<SoftSymbolBuffer> ReceiveSession::EarlierCaptures(const FrameHeader& h) const {
+    for (const Failed& f : failed_) {
+        if (f.session_id == h.session_id && f.sequence == h.sequence && f.profile == h.profile &&
+            f.nsym == h.fec_nsym) {
+            return f.captures;
+        }
+    }
+    return {};
+}
+
+void ReceiveSession::Remember(const FrameHeader& h, const SoftSymbolBuffer& soft) {
     auto it = std::find_if(failed_.begin(), failed_.end(), [&](const Failed& f) {
         return f.session_id == h.session_id && f.sequence == h.sequence &&
                f.profile == h.profile && f.nsym == h.fec_nsym;
@@ -375,33 +415,31 @@ Result<std::vector<std::uint8_t>> ReceiveSession::CombineWithEarlier(const Frame
     if (it == failed_.end()) {
         failed_.push_back(Failed{h.session_id, h.sequence, h.profile, h.fec_nsym, {soft}});
         if (failed_.size() > kFailedStates) failed_.pop_front();
-        return Error::kUncorrectable;
+    } else if (it->captures.size() < kCapturesPerState) {
+        it->captures.push_back(soft);
     }
-    auto attempt = [&](const SoftSymbolBuffer& sum) {
-        const HardDecision hd = HardDecide(sum, coded_len, cfg_.erase_below);
-        return fec.Decode(hd.bytes, hd.erased_bytes, &last_fec_);
-    };
-    // Each earlier capture paired with this one, then all of them together.
-    for (const SoftSymbolBuffer& earlier : it->captures) {
-        if (earlier.size() != soft.size()) continue;
-        auto dec = attempt(Sum(earlier, soft));
+}
+
+void ReceiveSession::Forget(const FrameHeader& h) {
+    std::erase_if(failed_, [&](const Failed& f) {
+        return f.session_id == h.session_id && f.sequence == h.sequence;
+    });
+}
+
+// The single-threaded path (Ingest): try, then remember on failure.
+Result<std::vector<std::uint8_t>> ReceiveSession::CombineWithEarlier(const FrameHeader& h,
+                                                                     const SoftSymbolBuffer& soft,
+                                                                     const IntraFec& fec,
+                                                                     std::size_t coded_len) {
+    const std::vector<SoftSymbolBuffer> earlier = EarlierCaptures(h);
+    if (!earlier.empty()) {
+        auto dec = TryCombine(earlier, soft, fec, coded_len, cfg_.erase_below, &last_fec_);
         if (dec.ok()) {
-            failed_.erase(it);
+            Forget(h);
             return dec;
         }
     }
-    if (it->captures.size() >= 2) {
-        SoftSymbolBuffer all = soft;
-        for (const SoftSymbolBuffer& earlier : it->captures) {
-            if (earlier.size() == all.size()) all = Sum(all, earlier);
-        }
-        auto dec = attempt(all);
-        if (dec.ok()) {
-            failed_.erase(it);
-            return dec;
-        }
-    }
-    if (it->captures.size() < kCapturesPerState) it->captures.push_back(soft);
+    Remember(h, soft);
     return Error::kUncorrectable;
 }
 

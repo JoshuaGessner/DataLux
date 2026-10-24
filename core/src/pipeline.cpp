@@ -29,7 +29,8 @@ double FramePipeline::PilotContrast(const ImageView8& img, const Homography& h, 
 }
 
 Homography FramePipeline::RefineCorners(const ImageView8& img, const Homography& h,
-                                        double* gain) const {
+                                        double* gain, double first_step,
+                                        int max_evaluations) const {
     const GridGeometry g = layout_->geometry();
     const auto cols = static_cast<double>(g.cols);
     const auto rows = static_cast<double>(g.rows);
@@ -55,14 +56,13 @@ Homography FramePipeline::RefineCorners(const ImageView8& img, const Homography&
     double best = base;
     int evals = 0;
     const double range = cfg_.subcell.corner_range;
-    for (double step = range / 2.0; step >= 0.02 && evals < cfg_.subcell.corner_evaluations;
-         step /= 2.0) {
+    for (double step = first_step; step >= 0.02 && evals < max_evaluations; step /= 2.0) {
         bool improved = true;
         for (int round = 0; improved && round < 3; ++round) {
             improved = false;
             for (std::size_t k = 0; k < d.size(); ++k) {
                 for (const double sign : {1.0, -1.0}) {
-                    if (evals >= cfg_.subcell.corner_evaluations) break;
+                    if (evals >= max_evaluations) break;
                     const double cand = d[k] + sign * step;
                     if (std::abs(cand) > range) continue;
                     auto trial = d;
@@ -98,13 +98,27 @@ Homography FramePipeline::Align(const ImageView8& img, const Homography& h0) {
     // dark. When the grid sits on the cells that gap is maximal; when it straddles them each
     // sample is a blend and the gap collapses. It optimises exactly the quantity that was
     // failing, and it needs no payload knowledge, so F15's rule holds (F47).
+    h = SearchShift(img, h, cfg_.subcell.range, cfg_.subcell.steps, cfg_.subcell.passes);
+
+    // --- Corners (F51) ---
+    double corner_gain = 1.0;
+    if (cfg_.subcell.refine_corners) {
+        h = RefineCorners(img, h, &corner_gain, cfg_.subcell.corner_range / 2.0,
+                          cfg_.subcell.corner_evaluations);
+        if (corner_gain > 1.0) ++diag_.corner_refined_frames;
+    }
+    diag_.sum_corner_gain += corner_gain;
+    return h;
+}
+
+Homography FramePipeline::SearchShift(const ImageView8& img, const Homography& h0, double range,
+                                      int steps, int passes) {
+    Homography h = h0;
     double best_dx = 0.0;
     double best_dy = 0.0;
     double best_sep = PilotContrast(img, h, 0.0, 0.0);
     const double base_sep = best_sep;
-    double range = cfg_.subcell.range;
-    for (int pass = 0; pass < cfg_.subcell.passes; ++pass) {
-        const int steps = cfg_.subcell.steps;
+    for (int pass = 0; pass < passes; ++pass) {
         const double step = (2.0 * range) / static_cast<double>(steps - 1);
         const double cx = best_dx;
         const double cy = best_dy;
@@ -128,14 +142,70 @@ Homography FramePipeline::Align(const ImageView8& img, const Homography& h0) {
     ++diag_.subcell_frames;
     diag_.sum_subcell_shift += std::sqrt(best_dx * best_dx + best_dy * best_dy);
     if (base_sep > 0.0) diag_.sum_subcell_gain += best_sep / base_sep;
+    return h;
+}
 
-    // --- Corners (F51) ---
-    double corner_gain = 1.0;
-    if (cfg_.subcell.refine_corners) {
-        h = RefineCorners(img, h, &corner_gain);
-        if (corner_gain > 1.0) ++diag_.corner_refined_frames;
+void FramePipeline::RememberCorrection(const Homography& h0, const Homography& h) {
+    correction_valid_ = false;
+    auto inv = h0.Inverse();
+    if (!inv.ok()) return;
+    const GridGeometry g = layout_->geometry();
+    const std::array<Point2, 4> grid{Point2{0, 0}, Point2{static_cast<double>(g.cols), 0},
+                                     Point2{static_cast<double>(g.cols), static_cast<double>(g.rows)},
+                                     Point2{0, static_cast<double>(g.rows)}};
+    for (std::size_t i = 0; i < 4; ++i) {
+        const Point2 p = inv.value().Apply(h.Apply(grid[i]));
+        const double ex = p.x - grid[i].x;
+        const double ey = p.y - grid[i].y;
+        // Never carry a correction bigger than the search could have made: that is a wrong one.
+        if (!std::isfinite(ex) || !std::isfinite(ey) || std::abs(ex) > 2.0 || std::abs(ey) > 2.0) {
+            return;
+        }
+        correction_[2 * i] = ex;
+        correction_[2 * i + 1] = ey;
     }
-    diag_.sum_corner_gain += corner_gain;
+    correction_valid_ = true;
+}
+
+std::optional<Homography> FramePipeline::ApplyCorrection(const Homography& h0) const {
+    if (!correction_valid_) return std::nullopt;
+    const GridGeometry g = layout_->geometry();
+    const std::array<Point2, 4> grid{Point2{0, 0}, Point2{static_cast<double>(g.cols), 0},
+                                     Point2{static_cast<double>(g.cols), static_cast<double>(g.rows)},
+                                     Point2{0, static_cast<double>(g.rows)}};
+    std::array<Point2, 4> img_pts{};
+    for (std::size_t i = 0; i < 4; ++i) {
+        img_pts[i] = h0.Apply({grid[i].x + correction_[2 * i], grid[i].y + correction_[2 * i + 1]});
+    }
+    auto r = Homography::FromCorrespondences(grid, img_pts);
+    if (!r.ok()) return std::nullopt;
+    return r.value();
+}
+
+Homography FramePipeline::AlignTracked(const ImageView8& img, const Homography& h0,
+                                       bool reacquired) {
+    if (!cfg_.subcell.enabled) return h0;
+    const SubcellConfig& sc = cfg_.subcell;
+    if (sc.warm_start && !reacquired && warm_frames_ < sc.cold_every) {
+        if (const auto hw = ApplyCorrection(h0)) {
+            if (PilotContrast(img, *hw) >= PilotContrast(img, h0)) {
+                Homography h = SearchShift(img, *hw, sc.warm_range, sc.warm_steps, 1);
+                double corner_gain = 1.0;
+                if (sc.refine_corners) {
+                    h = RefineCorners(img, h, &corner_gain, sc.warm_corner_step,
+                                      sc.warm_corner_evaluations);
+                    if (corner_gain > 1.0) ++diag_.corner_refined_frames;
+                }
+                diag_.sum_corner_gain += corner_gain;
+                ++warm_frames_;
+                RememberCorrection(h0, h);
+                return h;
+            }
+        }
+    }
+    const Homography h = Align(img, h0);
+    warm_frames_ = 0;
+    RememberCorrection(h0, h);
     return h;
 }
 
@@ -313,7 +383,7 @@ CapturedFrame FramePipeline::Process(const ImageView8& img, std::uint64_t index,
         return out;
     }
     // --- Sub-cell alignment: global shift, then the corners independently ---
-    const Homography h = Align(img, tr.grid_to_image);
+    const Homography h = AlignTracked(img, tr.grid_to_image, tr.reacquired);
 
     last_h_ = h;
     last_score_ = tr.marker_score;
