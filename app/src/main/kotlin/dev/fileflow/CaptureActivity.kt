@@ -888,17 +888,6 @@ class CaptureActivity : AppCompatActivity() {
                 // and that screen not separating the colours (F65, F66), and nothing the person can
                 // do with THIS phone fixes it; the sending phone's setting can: from eight colours
                 // to four, and from four to black and white.
-                // Unless the screen is simply too small in the picture for them: then moving
-                // closer is the fix, and asked for first.
-                s.colorSpread > 0.0 && s.recentReadFraction >= 0.5 &&
-                    now - maxOf(lastPayloadMs, coachStartMs) > COLOUR_STALL_MS &&
-                    !pinnedAtClosest() &&
-                    a.pxPerCell in 0.1..(if (s.bitsPerCell >= 3) EIGHT_COLOUR_MIN_PX else FOUR_COLOUR_MIN_PX) ->
-                    "colour-closer" to Shown(
-                        "Reading the screen, but it's too small in the picture for its colours. " +
-                            "Move closer, until the screen fills the picture.$progress",
-                        LIVE_WARN,
-                    )
                 s.colorSpread > 0.0 && s.recentReadFraction >= 0.5 &&
                     now - maxOf(lastPayloadMs, coachStartMs) > COLOUR_STALL_MS ->
                     "colour-stall" to Shown(
@@ -1291,14 +1280,6 @@ class CaptureActivity : AppCompatActivity() {
         private const val COLOUR_STALL_MS = 6000L
         /** Saved diagnosis frames this far apart, so three are three different moments. */
         private const val DUMP_SPACING_MS = 300L
-        /**
-         * Pixels a cell the colours need, by bits a cell. Eight colours read at 10-11 on the Galaxy
-         * and 12.6 on a Pixel 10, and failed on a Pixel 8 at 6-9: the camera keeps colour at half
-         * the resolution of brightness, so a smaller cell is 3-4 colour pixels and its neighbours
-         * bleed in. Four colours are twice as far apart and need less.
-         */
-        private const val EIGHT_COLOUR_MIN_PX = 11.0
-        private const val FOUR_COLOUR_MIN_PX = 8.0
         private const val WHITE_CEILING = 245.0
         private const val WHITE_FLOOR = 170.0
         /** A payload decoded this recently counts as data arriving. */
