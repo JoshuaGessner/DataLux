@@ -1,6 +1,7 @@
 package dev.fileflow.rx
 
 import android.content.Context
+import dev.fileflow.SessionLog
 import java.io.File
 import java.nio.ByteBuffer
 import java.util.concurrent.Executors
@@ -49,86 +50,227 @@ data class LiveStatus(
     val screenInView: Boolean,
     val frames: Long,
     val fileSize: Long,
+    /** Frames whose payload passed FEC and CRC. More than zero proves the grid (F58). */
+    val payloadFrames: Long,
+    /** Verified-file bytes per second right now, smoothed in native (TransferRate); 0 = none. */
+    val bytesPerSecond: Double,
+    /** The grid this status was decoded against: the detected one once [gridKnown]. */
+    val cols: Int,
+    val rows: Int,
+    /** True once a frame header has decoded, which proves the grid. Before that it is a guess. */
+    val gridKnown: Boolean,
 )
 
 /**
- * Feeds camera frames to the native receiver on ONE worker thread.
- *
- * Frames that arrive while the worker is busy are DROPPED, deliberately. The decoder cannot keep up
- * with every frame on a phone, and it does not need to: fountain coding makes any sufficiently large
- * set of frames enough, so skipping one costs a little time and nothing else. Queuing them instead
- * would build latency until the status on screen described where the phone was seconds ago — the
- * worst possible thing for someone trying to hold it steady.
+ * The grids a transmitter can be sending. The SEND screen offers exactly these, and the receiver
+ * tries each of them, so nobody has to set the same grid on two phones.
  */
-class LiveDecoder(cols: Int, rows: Int, exposureNs: Long) : AutoCloseable {
+object Grids {
+    val ALL: List<Pair<Int, Int>> = listOf(120 to 260, 144 to 240, 180 to 390)
+}
 
-    private val handle = NativeReceiver.open(cols, rows, exposureNs)
-    private val slots = DoubleArray(NativeReceiver.slotCount())
-    private val worker = Executors.newSingleThreadExecutor { r -> Thread(r, "ff-live-decode") }
-    private val busy = AtomicBoolean(false)
+/**
+ * Feeds camera frames to the native receiver on [lanes] worker threads at once (F60).
+ *
+ * Each worker owns one decode lane: its own frame buffer, its own native pipeline. A frame goes to
+ * whichever lane is idle; when every lane is busy it is DROPPED, deliberately. Fountain coding
+ * makes any sufficiently large set of frames enough, so a skipped frame costs a little time and
+ * nothing else, while queuing would build latency until the status on screen described where the
+ * phone was seconds ago -- the worst thing for someone trying to hold it steady.
+ *
+ * One lane used to be all there was, and it decoded 20-50 ms of a 4080-wide frame: 20-50 frames a
+ * second at best, against a camera delivering 30 or 60.
+ */
+class LiveDecoder(
+    grids: List<Pair<Int, Int>>,
+    exposureNs: Long,
+    private val lanes: Int = DEFAULT_LANES,
+) : AutoCloseable {
+
+    /**
+     * One native receiver per grid the sender might be using, until a frame's PAYLOAD decodes
+     * against one of them. That proves the grid -- the payload spans every cell and must pass RS
+     * and a CRC. A decoded header does not: a near-miss grid reads the header band at the top of
+     * the frame on every frame (F58).
+     *
+     * The grid used to be a setting on BOTH phones that had to match, with nothing to say so when
+     * it did not. Now the receiver finds it: frames go to the candidates in turn until one decodes
+     * a payload, then every frame goes to that one. The losers are kept until [close], unfed --
+     * another lane may be inside one of them at the moment of the switch, and freeing it there
+     * would be a use-after-free.
+     */
+    private class Candidate(val cols: Int, val rows: Int, val handle: Long)
+
+    private val candidates: List<Candidate> =
+        grids.distinct().map { (c, r) -> Candidate(c, r, NativeReceiver.open(c, r, exposureNs, lanes)) }
+    private val next = java.util.concurrent.atomic.AtomicInteger(0)
+    private val lastByCandidate = java.util.concurrent.ConcurrentHashMap<Candidate, LiveStatus>()
+    /** Per candidate: payload count last seen, and the capture time it last went up. */
+    private val lastPayloads = java.util.concurrent.ConcurrentHashMap<Candidate, Long>()
+    private val lastPayloadNs = java.util.concurrent.ConcurrentHashMap<Candidate, Long>()
+    /** Non-null once the grid is proven. */
+    @Volatile private var committed: Candidate? = null
+    private val handle: Long get() = (committed ?: candidates.first()).handle
+
+    /** One per worker thread: its buffer, its slots, its busy flag, its executor. */
+    private inner class Lane(val index: Int) {
+        val busy = AtomicBoolean(false)
+        val slots = DoubleArray(NativeReceiver.slotCount())
+        var frame: ByteBuffer? = null
+        val worker = Executors.newSingleThreadExecutor { r ->
+            Thread(r, "ff-live-decode-$index").apply { priority = Thread.MAX_PRIORITY - 1 }
+        }
+    }
+    private val laneList = List(lanes.coerceIn(1, MAX_LANES)) { Lane(it) }
+
+    /**
+     * Lanes actually fed, at most [lanes]. Lowered when the phone runs hot: decoding a 60 fps
+     * camera on four cores is sustained work, and a phone that throttles itself mid-transfer
+     * slows everything at once, the camera included. Fewer lanes only means more frames
+     * skipped, which the fountain code absorbs (OQ-036).
+     */
+    @Volatile var activeLanes: Int = lanes
+
+    // Telemetry, logged periodically: the only way to know on a real phone whether the decoder
+    // keeps up with the camera, which decides how much of the transmitter's rate is reaching us.
+    private val offered = java.util.concurrent.atomic.AtomicLong()
+    private val taken = java.util.concurrent.atomic.AtomicLong()
+    private val decoded = java.util.concurrent.atomic.AtomicLong()
+    private val decodeNs = java.util.concurrent.atomic.AtomicLong()
+    private val windowStartNs = java.util.concurrent.atomic.AtomicLong(System.nanoTime())
     private val closed = AtomicBoolean(false)
     private val nativeLock = Any()
-    private var frame: ByteBuffer? = null
 
     /** Set once the transfer has verified or failed; frames are ignored from then on. */
     @Volatile var finished = false
         private set
 
-    /** Called on the WORKER thread after every decoded frame. */
+    /** Called on a WORKER thread after every decoded frame -- from several, so possibly concurrently. */
     @Volatile var onStatus: ((LiveStatus) -> Unit)? = null
 
     init {
-        require(slots.size == Slot.entries.size) {
-            "native reports ${slots.size} slots but Kotlin expects ${Slot.entries.size} — the ABI " +
-                "has drifted"
+        require(laneList.first().slots.size == Slot.entries.size) {
+            "native reports ${laneList.first().slots.size} slots but Kotlin expects " +
+                "${Slot.entries.size} — the ABI has drifted"
         }
     }
 
     /**
      * Offer one frame, from the camera thread. Copies the Y plane (the camera's buffer is released
-     * the moment the callback returns) and hands it to the worker — unless the worker is busy, in
-     * which case the frame is dropped. Returns whether it was taken.
+     * the moment the callback returns) into an idle lane — or drops it if every lane is busy.
+     * Returns whether it was taken.
      */
     fun offer(y: ByteBuffer, width: Int, height: Int, rowStride: Int, timestampNs: Long): Boolean {
         if (width <= 0 || height <= 0 || rowStride < width) return false
         // The camera reports stride and size; a buffer shorter than they imply would make the copy
         // below throw ON THE CAMERA THREAD and take the app down mid-transfer. Refuse the frame.
         if (y.capacity().toLong() < rowStride.toLong() * (height - 1) + width) return false
-        if (finished || closed.get() || !busy.compareAndSet(false, true)) return false
-        // From here every exit must release `busy`, or one bad frame stops decoding for good while
-        // the screen keeps saying "receiving".
+        offered.incrementAndGet()
+        if (finished || closed.get()) return false
+        val limit = activeLanes.coerceIn(1, laneList.size)
+        var lane: Lane? = null
+        for (i in 0 until limit) {
+            if (laneList[i].busy.compareAndSet(false, true)) { lane = laneList[i]; break }
+        }
+        if (lane == null) return false
+        taken.incrementAndGet()
+        // From here every exit must release `busy`, or one bad frame stops that lane for good.
         try {
             val need = width * height
-            val dst = frame?.takeIf { it.capacity() >= need }
-                ?: ByteBuffer.allocateDirect(need).also { frame = it }
+            val dst = lane.frame?.takeIf { it.capacity() >= need }
+                ?: ByteBuffer.allocateDirect(need).also { lane.frame = it }
             val src = y.duplicate()  // own position/limit; the preview reads the same buffer
             dst.clear()
-            for (row in 0 until height) {
+            if (rowStride == width) {
                 src.clear()
-                src.position(row * rowStride)
-                src.limit(row * rowStride + width)
+                src.limit(need)
                 dst.put(src)
+            } else {
+                for (row in 0 until height) {
+                    src.clear()
+                    src.position(row * rowStride)
+                    src.limit(row * rowStride + width)
+                    dst.put(src)
+                }
             }
             dst.flip()
-            worker.execute {
+            lane.worker.execute {
                 try {
-                    val s = ingest(dst, width, height, timestampNs) ?: return@execute
+                    val s = ingest(lane, dst, width, height, timestampNs) ?: return@execute
                     if (s.phase.terminal) finished = true
                     onStatus?.invoke(s)
                 } finally {
-                    busy.set(false)
+                    lane.busy.set(false)
                 }
             }
             return true
         } catch (e: RuntimeException) {
             // Includes RejectedExecutionException from a close() racing this frame.
-            busy.set(false)
+            lane.busy.set(false)
             return false
         }
     }
 
-    private fun ingest(buf: ByteBuffer, width: Int, height: Int, ts: Long): LiveStatus? {
-        val message = NativeReceiver.ingest(handle, buf, width, height, width, ts, slots)
+    /** A lane's worker thread. */
+    private fun ingest(lane: Lane, buf: ByteBuffer, width: Int, height: Int, ts: Long): LiveStatus? {
+        val c = committed ?: candidates[Math.floorMod(next.getAndIncrement(), candidates.size)]
+        val t0 = System.nanoTime()
+        val s = ingestInto(lane, c, buf, width, height, ts) ?: return null
+        decodeNs.addAndGet(System.nanoTime() - t0)
+        val n = decoded.incrementAndGet()
+        if (n % TELEMETRY_EVERY == 0L) {
+            val now = System.nanoTime()
+            val wall = (now - windowStartNs.getAndSet(now)) / 1e9
+            SessionLog.i(TAG, "decoded $n of ${taken.get()} taken / ${offered.get()} offered frames; " +
+                "${"%.1f".format(TELEMETRY_EVERY / wall)} decoded/s on ${laneList.size} lanes, " +
+                "${"%.1f".format(decodeNs.getAndSet(0) / 1e6 / TELEMETRY_EVERY)} ms each, " +
+                "${width}x$height, grid ${c.cols}x${c.rows}" +
+                "${if (committed == null) " (searching)" else ""}, phase ${s.phase}, " +
+                "read ${"%.2f".format(s.recentReadFraction)}, payloads ${s.payloadFrames}, " +
+                "blur ${"%.2f".format(s.motionBlurCells)} cells")
+        }
+        val payloads = s.payloadFrames
+        if (payloads > (lastPayloads[c] ?: -1L)) {
+            lastPayloads[c] = payloads
+            lastPayloadNs[c] = ts
+        }
+        if (committed != null) {
+            // The sender may have changed its speed setting -- a different grid -- and nothing on
+            // this one will ever decode again. After a while with no payload, search all grids
+            // again; the committed one is among them, so a person who merely looked away is back
+            // on it within a few frames of looking back.
+            if (committed === c && ts - (lastPayloadNs[c] ?: ts) > RESEARCH_AFTER_NS) {
+                synchronized(nativeLock) { committed = null }
+                lastByCandidate.clear()
+                SessionLog.i(TAG, "no payload on ${c.cols}x${c.rows} for ${RESEARCH_AFTER_NS / 1_000_000_000} s: " +
+                    "searching grids again")
+            }
+            return s
+        }
+
+        // A decoded PAYLOAD proves the grid. Not a decoded header -- a near-miss grid reads those
+        // (F58); a payload spans every cell and carries a CRC. Fresh payloads only: a candidate
+        // that decoded some before a re-search must decode a NEW one to be chosen again.
+        if (payloads > 0 && lastPayloadNs[c] == ts) {
+            synchronized(nativeLock) {
+                if (committed == null) {
+                    committed = c
+                    SessionLog.i(TAG, "grid detected: ${c.cols}x${c.rows}")
+                }
+            }
+            return if (committed === c) s.copy(gridKnown = true) else null
+        }
+        // Still searching: report whichever candidate has got furthest, so the status on screen
+        // does not flicker between them.
+        lastByCandidate[c] = s
+        return lastByCandidate.values.maxByOrNull { it.phase.ordinal } ?: s
+    }
+
+    private fun ingestInto(
+        lane: Lane, c: Candidate, buf: ByteBuffer, width: Int, height: Int, ts: Long,
+    ): LiveStatus? {
+        val slots = lane.slots
+        val message = NativeReceiver.ingest(c.handle, buf, width, height, width, ts, lane.index, slots)
         if (slots[Slot.Phase.ordinal] < 0.0) return null
         return LiveStatus(
             phase = LivePhase.from(slots[Slot.Phase.ordinal].toInt()),
@@ -141,19 +283,24 @@ class LiveDecoder(cols: Int, rows: Int, exposureNs: Long) : AutoCloseable {
             screenInView = slots[Slot.ScreenInView.ordinal] != 0.0,
             frames = slots[Slot.Frames.ordinal].toLong(),
             fileSize = slots[Slot.FileSize.ordinal].toLong(),
+            payloadFrames = slots[Slot.PayloadFrames.ordinal].toLong(),
+            bytesPerSecond = slots[Slot.BytesPerSecond.ordinal],
+            cols = c.cols,
+            rows = c.rows,
+            gridKnown = committed === c,
         )
     }
 
     /**
-     * Write the VERIFIED file into the app's "received" folder and return it, or null if there is
-     * no verified file. Call once [finished].
+     * Write the VERIFIED file to Downloads/FileFlow (or, failing that, the app's own "received"
+     * folder) and say where, or null if there is no verified file. Call once [finished].
      *
-     * Written to a randomly named temporary file first and renamed into place, so a crash mid-write
-     * never leaves something that looks like a complete file (PROTOCOL-SPEC, file layer). The name is
+     * Never visible half-written, either way: pending in MediaStore until complete, or a temporary
+     * file renamed into place (PROTOCOL-SPEC, file layer). The name is
      * the manifest's — sanitised in native, and sanitised again here, because it came off a screen
      * that anyone could have been showing (THREAT-MODEL T3).
      */
-    fun saveVerified(context: Context): File? {
+    fun saveVerified(context: Context): SavedFile? {
         // Under the same lock as close(): leaving the screen at the moment of completion would
         // otherwise free the native receiver while its bytes were being read out.
         val (bytes, raw) = synchronized(nativeLock) {
@@ -161,10 +308,67 @@ class LiveDecoder(cols: Int, rows: Int, exposureNs: Long) : AutoCloseable {
             val b = NativeReceiver.fileBytes(handle) ?: return null
             b to NativeReceiver.fileName(handle)
         }
-        val dir = (context.getExternalFilesDir(RECEIVED_DIR) ?: File(context.filesDir, RECEIVED_DIR))
-            .apply { mkdirs() }
         val safe = raw.replace(Regex("[/\\\\\\u0000-\\u001f]"), "_")
             .trimStart('.').ifBlank { "received.bin" }
+        return runCatching { saveToDownloads(context, safe, bytes) }.getOrNull()
+            ?: saveToAppFolder(context, safe, bytes)?.let {
+                SavedFile(it.name, null, it.absolutePath, bytes.size.toLong())
+            }
+    }
+
+    /** Where a received file ended up. [uri] is null when only the app-private fallback worked. */
+    data class SavedFile(
+        val name: String,
+        val uri: android.net.Uri?,
+        val location: String,
+        val bytes: Long,
+    )
+
+    /**
+     * Into the public Downloads/FileFlow folder, through MediaStore.
+     *
+     * The app-private folder it used to go to is under `Android/data`, which the Files app hides on
+     * current Android -- so a file that had been received and verified could not then be found by
+     * the person who received it. MediaStore needs no storage permission for an app's own
+     * downloads, de-duplicates names itself, and the file stays hidden (`IS_PENDING`) until every
+     * byte is written, so nothing half-written is ever visible (PROTOCOL-SPEC, file layer).
+     */
+    private fun saveToDownloads(context: Context, name: String, bytes: ByteArray): SavedFile? {
+        val resolver = context.contentResolver
+        val ext = name.substringAfterLast('.', "").lowercase()
+        val mime = android.webkit.MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext)
+            ?: "application/octet-stream"
+        val values = android.content.ContentValues().apply {
+            put(android.provider.MediaStore.MediaColumns.DISPLAY_NAME, name)
+            put(android.provider.MediaStore.MediaColumns.MIME_TYPE, mime)
+            put(android.provider.MediaStore.MediaColumns.RELATIVE_PATH,
+                android.os.Environment.DIRECTORY_DOWNLOADS + "/" + DOWNLOADS_SUBDIR)
+            put(android.provider.MediaStore.MediaColumns.IS_PENDING, 1)
+        }
+        val uri = resolver.insert(
+            android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI, values,
+        ) ?: return null
+        try {
+            resolver.openOutputStream(uri)?.use { it.write(bytes) } ?: error("no output stream")
+            values.clear()
+            values.put(android.provider.MediaStore.MediaColumns.IS_PENDING, 0)
+            resolver.update(uri, values, null, null)
+        } catch (e: Exception) {
+            runCatching { resolver.delete(uri, null, null) }
+            SessionLog.w(TAG, "could not save to Downloads", e)
+            return null
+        }
+        // MediaStore may have renamed it ("name (1).ext"); report the name it actually has.
+        val finalName = resolver.query(
+            uri, arrayOf(android.provider.MediaStore.MediaColumns.DISPLAY_NAME), null, null, null,
+        )?.use { if (it.moveToFirst()) it.getString(0) else null } ?: name
+        return SavedFile(finalName, uri, "Downloads/$DOWNLOADS_SUBDIR/$finalName", bytes.size.toLong())
+    }
+
+    /** Fallback when MediaStore refuses: the app's own folder, temp file then rename. */
+    private fun saveToAppFolder(context: Context, safe: String, bytes: ByteArray): File? {
+        val dir = (context.getExternalFilesDir(RECEIVED_DIR) ?: File(context.filesDir, RECEIVED_DIR))
+            .apply { mkdirs() }
         val stem = safe.substringBeforeLast('.', safe)
         val ext = if ('.' in safe) "." + safe.substringAfterLast('.') else ""
         var target = File(dir, safe)
@@ -184,22 +388,40 @@ class LiveDecoder(cols: Int, rows: Int, exposureNs: Long) : AutoCloseable {
      * stopped: freeing it under a decode still in flight would be a use-after-free in native.
      */
     override fun close() {
+        if (!closed.compareAndSet(false, true)) return
+        finished = true
+        // Wait for the lanes OUTSIDE the lock: a lane committing to a grid takes it, and holding it
+        // here would stall that lane until the timeout.
+        laneList.forEach { it.worker.shutdown() }
+        val stopped = laneList.all { it.worker.awaitTermination(2, TimeUnit.SECONDS) }
         synchronized(nativeLock) {
-            if (!closed.compareAndSet(false, true)) return
-            finished = true
-            worker.shutdown()
-            if (worker.awaitTermination(2, TimeUnit.SECONDS)) NativeReceiver.close(handle)
+            // Freed only if every lane actually stopped: freeing under a decode still in flight
+            // would be a use-after-free in native. A leak is the lesser failure.
+            if (stopped) candidates.forEach { NativeReceiver.close(it.handle) }
         }
     }
 
     /** Declaration order IS the wire format. Keep in lockstep with `Slot` in `jni_receiver.cpp`. */
     private enum class Slot {
         Phase, Hint, Progress, SecondsRemaining, MotionBlurCells, RecentReadFraction,
-        ScreenInView, Frames, FileSize,
+        ScreenInView, Frames, FileSize, PayloadFrames, BytesPerSecond,
     }
 
     companion object {
         const val RECEIVED_DIR = "received"
+        const val DOWNLOADS_SUBDIR = "FileFlow"
+        private const val TAG = "FileFlow.Live"
+        private const val TELEMETRY_EVERY = 60L
+        private const val MAX_LANES = 8  // LiveReceiver::kMaxLanes
+        /** No payload on the chosen grid for this long: look at the others again. */
+        private const val RESEARCH_AFTER_NS = 6_000_000_000L
+        /**
+         * Lanes by default: as many as there are cores to spare, at most 4. The camera, the
+         * preview and the UI need theirs, and past about four the lanes queue on the session lock
+         * rather than run (F60).
+         */
+        val DEFAULT_LANES: Int =
+            (Runtime.getRuntime().availableProcessors() - 3).coerceIn(1, 4)
     }
 }
 
@@ -209,10 +431,10 @@ internal object NativeReceiver {
     }
 
     @JvmStatic external fun slotCount(): Int
-    @JvmStatic external fun open(cols: Int, rows: Int, exposureNs: Long): Long
+    @JvmStatic external fun open(cols: Int, rows: Int, exposureNs: Long, lanes: Int): Long
     @JvmStatic external fun ingest(
         handle: Long, y: ByteBuffer, width: Int, height: Int, rowStride: Int, timestampNs: Long,
-        out: DoubleArray,
+        lane: Int, out: DoubleArray,
     ): String
     @JvmStatic external fun fileName(handle: Long): String
     @JvmStatic external fun fileBytes(handle: Long): ByteArray?

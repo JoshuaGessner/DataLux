@@ -15,9 +15,12 @@
         android:required="false" />
 
     <application
+        android:name=".FileFlowApp"
         android:label="FileFlow"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher"
         android:supportsRtl="true"
-        android:theme="@style/Theme.AppCompat.DayNight.NoActionBar">
+        android:theme="@style/Theme.FileFlow">
 
         <!-- The front door.
              Until this existed every screen was reachable only through `adb shell am start`, and
@@ -32,6 +35,7 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            <meta-data android:name="android.app.shortcuts" android:resource="@xml/shortcuts" />
         </activity>
 
         <activity
@@ -48,6 +52,7 @@
             android:name=".CaptureActivity"
             android:exported="true"
             android:screenOrientation="portrait"
+            android:theme="@style/Theme.FileFlow.Fullscreen"
             android:configChanges="orientation|screenSize|keyboardHidden" />
 
         <!-- Live aiming guidance (UI-02), standalone. Portrait-locked because the schematic
@@ -56,7 +61,7 @@
             android:name=".AimActivity"
             android:exported="true"
             android:screenOrientation="portrait"
-            android:theme="@style/Theme.AppCompat.NoActionBar"
+            android:theme="@style/Theme.FileFlow.Fullscreen"
             android:configChanges="orientation|screenSize|keyboardHidden" />
 
         <!-- The transmitter (C03). Fullscreen and portrait-locked: a re-layout mid-run would
@@ -68,7 +73,15 @@
             android:name=".TransmitActivity"
             android:exported="true"
             android:screenOrientation="portrait"
-            android:theme="@style/Theme.AppCompat.NoActionBar"
-            android:configChanges="orientation|screenSize|keyboardHidden|screenLayout|smallestScreenSize" />
+            android:theme="@style/Theme.FileFlow.Fullscreen"
+            android:configChanges="orientation|screenSize|keyboardHidden|screenLayout|smallestScreenSize">
+            <!-- "Share → FileFlow" from any app sends that one file, the same as picking it with
+                 "Send a file…". One file only: there is no multi-file transfer. -->
+            <intent-filter android:label="Send with FileFlow">
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="*/*" />
+            </intent-filter>
+        </activity>
     </application>
 </manifest>

@@ -67,6 +67,188 @@ class CameraRecorder(private val context: Context) {
     var lastFocusDiopters: Float = -1f
         private set
 
+    /** `LENS_INFO_MINIMUM_FOCUS_DISTANCE` of the camera in use: the CLOSEST it can focus, diopters. */
+    @Volatile
+    var minFocusDiopters: Float = 0f
+        private set
+
+    /** `SENSOR_ROLLING_SHUTTER_SKEW` of the latest frame, ns; -1 when the camera does not say. */
+    @Volatile
+    var rollingShutterSkewNs: Long = -1L
+        private set
+
+    /**
+     * `DISTORTION_CORRECTION_MODE` the camera APPLIED to the latest frame (0 off, 1 fast, 2 high
+     * quality); -1 when it does not report one, which is what a camera without the control does.
+     */
+    @Volatile
+    var distortionCorrection: Int = -1
+        private set
+
+    /** Latest `CONTROL_AF_STATE`, or -1 before the first result. */
+    @Volatile
+    var afState: Int = -1
+        private set
+
+    /** Sensitivity currently requested, and the range the sensor accepts. */
+    @Volatile
+    var iso: Int = DEFAULT_ISO
+        private set
+    @Volatile
+    var isoRange: android.util.Range<Int> = android.util.Range(DEFAULT_ISO, DEFAULT_ISO)
+        private set
+
+    /**
+     * Run-time control of the repeating request: refocus and exposure, while frames keep flowing.
+     *
+     * Everything is posted to the camera handler thread, which owns the session and the builder, so
+     * callers on any thread never touch either directly.
+     */
+    private inner class LiveControl(
+        val session: CameraCaptureSession,
+        val builder: CaptureRequest.Builder,
+        val callback: CameraCaptureSession.CaptureCallback,
+        val handler: Handler,
+        val chars: CameraCharacteristics,
+    ) {
+        /** Bumped by every refocus, so a stale "return to continuous" from an older one is ignored. */
+        var generation = 0
+        var scanning = false
+
+        fun repeat() {
+            runCatching { session.setRepeatingRequest(builder.build(), callback, handler) }
+        }
+    }
+
+    @Volatile
+    private var control: LiveControl? = null
+
+    /**
+     * Run a full focus scan now, weighted on ([nx], [ny]) — normalised SENSOR coordinates, 0..1 —
+     * then resume continuous autofocus. Returns false when there is no running session or this
+     * camera's focus is fixed.
+     *
+     * WHY A SCAN AND NOT A TRIGGER IN CONTINUOUS MODE. A trigger in `CONTINUOUS_PICTURE` locks
+     * wherever passive focus already is; if it has settled on the wrong distance (the desk behind a
+     * phone, or a lens pinned at its closest limit) the trigger just confirms that. `AUTO` plus a
+     * trigger always sweeps. Continuous is restored afterwards because a hand-held receiver changes
+     * distance constantly and a depth of field of a few millimetres does not survive a lock (F57).
+     */
+    fun focusAt(nx: Float, ny: Float): Boolean {
+        val c = control ?: return false
+        if (minFocusDiopters <= 0f) return false  // fixed-focus lens: nothing to do
+        c.handler.post {
+            if (control !== c) return@post
+            val gen = ++c.generation
+            c.scanning = true
+            afRegion(c.chars, nx, ny, AF_TAP_FRACTION)?.let {
+                c.builder.set(CaptureRequest.CONTROL_AF_REGIONS, arrayOf(it))
+            }
+            c.builder.set(CaptureRequest.CONTROL_AF_MODE, CameraMetadata.CONTROL_AF_MODE_AUTO)
+            c.builder.set(CaptureRequest.CONTROL_AF_TRIGGER, CameraMetadata.CONTROL_AF_TRIGGER_IDLE)
+            c.repeat()
+            runCatching {
+                c.builder.set(CaptureRequest.CONTROL_AF_TRIGGER, CameraMetadata.CONTROL_AF_TRIGGER_START)
+                c.session.capture(c.builder.build(), c.callback, c.handler)
+                c.builder.set(CaptureRequest.CONTROL_AF_TRIGGER, CameraMetadata.CONTROL_AF_TRIGGER_IDLE)
+            }
+            // A scan that never reports locked must not leave AF switched off for good.
+            c.handler.postDelayed({ resumeContinuous(c, gen) }, AF_SCAN_TIMEOUT_MS)
+        }
+        return true
+    }
+
+    /** Refocus on the centre of the view. */
+    fun refocus(): Boolean = focusAt(0.5f, 0.5f)
+
+    /** Sets sensor sensitivity, clamped to what the sensor accepts. No-op without manual control. */
+    fun setIso(value: Int) {
+        val c = control ?: return
+        val clamped = value.coerceIn(isoRange.lower, isoRange.upper)
+        if (clamped == iso) return
+        iso = clamped
+        c.handler.post {
+            if (control !== c) return@post
+            c.builder.set(CaptureRequest.SENSOR_SENSITIVITY, clamped)
+            c.repeat()
+        }
+    }
+
+    /** Exposure currently requested, ns; 0 before a manual session starts. */
+    @Volatile
+    var exposureNs: Long = 0L
+        private set
+
+    /**
+     * Sets the exposure time, clamped to the sensor's range and to the frame period. Shorter is
+     * the way to go darker once ISO is at its floor -- and it also cuts motion blur.
+     */
+    fun setExposure(ns: Long) {
+        val c = control ?: return
+        if (exposureNs <= 0L) return  // not under manual control
+        val range = c.chars.get(CameraCharacteristics.SENSOR_INFO_EXPOSURE_TIME_RANGE)
+        val clamped = ns.coerceIn(range?.lower ?: 1L, minOf(range?.upper ?: ns, maxExposureNs))
+        if (clamped == exposureNs) return
+        exposureNs = clamped
+        c.handler.post {
+            if (control !== c) return@post
+            c.builder.set(CaptureRequest.SENSOR_EXPOSURE_TIME, clamped)
+            c.repeat()
+        }
+    }
+
+    /** The frame period: an exposure longer than this would lower the frame rate. */
+    @Volatile
+    private var maxExposureNs: Long = Long.MAX_VALUE
+
+    /** Camera thread. Ends a scan once it has locked -- focused or not -- after a short hold. */
+    private fun onAfState(state: Int) {
+        val c = control ?: return
+        if (!c.scanning) return
+        if (state == CaptureResult.CONTROL_AF_STATE_FOCUSED_LOCKED ||
+            state == CaptureResult.CONTROL_AF_STATE_NOT_FOCUSED_LOCKED
+        ) {
+            c.scanning = false
+            val gen = c.generation
+            c.handler.postDelayed({ resumeContinuous(c, gen) }, AF_HOLD_AFTER_SCAN_MS)
+        }
+    }
+
+    private fun resumeContinuous(c: LiveControl, gen: Int) {
+        if (control !== c || c.generation != gen) return
+        c.scanning = false
+        c.builder.set(CaptureRequest.CONTROL_AF_TRIGGER, CameraMetadata.CONTROL_AF_TRIGGER_IDLE)
+        c.builder.set(
+            CaptureRequest.CONTROL_AF_MODE, CameraMetadata.CONTROL_AF_MODE_CONTINUOUS_PICTURE,
+        )
+        c.repeat()
+    }
+
+    /** The middle of the view, for continuous AF. Null when the camera takes no AF regions. */
+    private fun centreAfRegion(chars: CameraCharacteristics) =
+        afRegion(chars, 0.5f, 0.5f, AF_CENTRE_FRACTION)
+
+    /**
+     * A metering rectangle centred on ([nx], [ny]) in normalised sensor coordinates, [fraction] of
+     * the active array on a side.
+     *
+     * Active-array coordinates are correct here because nothing in this app sets a zoom ratio or a
+     * crop region; with either, regions are relative to the zoomed field of view instead.
+     */
+    private fun afRegion(
+        chars: CameraCharacteristics, nx: Float, ny: Float, fraction: Float,
+    ): android.hardware.camera2.params.MeteringRectangle? {
+        if ((chars.get(CameraCharacteristics.CONTROL_MAX_REGIONS_AF) ?: 0) <= 0) return null
+        val active = chars.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE) ?: return null
+        val w = (active.width() * fraction).toInt().coerceAtLeast(1)
+        val h = (active.height() * fraction).toInt().coerceAtLeast(1)
+        val x = (active.width() * nx - w / 2f).toInt().coerceIn(0, active.width() - w)
+        val y = (active.height() * ny - h / 2f).toInt().coerceIn(0, active.height() - h)
+        return android.hardware.camera2.params.MeteringRectangle(
+            x, y, w, h, android.hardware.camera2.params.MeteringRectangle.METERING_WEIGHT_MAX,
+        )
+    }
+
     /**
      * Set to stop an unbounded run. Checked on the camera callback thread.
      *
@@ -272,6 +454,7 @@ class CameraRecorder(private val context: Context) {
 
         val chars = mgr.getCameraCharacteristics(cameraId)
         sensorOrientation = chars.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 0
+        minFocusDiopters = chars.get(CameraCharacteristics.LENS_INFO_MINIMUM_FOCUS_DISTANCE) ?: 0f
         val map = chars.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
             ?: return failure("no stream configuration map", cameraId)
 
@@ -365,7 +548,7 @@ class CameraRecorder(private val context: Context) {
             device = openCamera(mgr, cameraId, handler)
                 ?: return failure("could not open camera $cameraId", cameraId, size, targetFps)
 
-            val request = device.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {
+            val builder = device.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {
                 addTarget(reader.surface)
                 if (previewSurface != null) addTarget(previewSurface)
                 set(
@@ -448,6 +631,10 @@ class CameraRecorder(private val context: Context) {
                         else (1_000_000_000L / targetFps) * 9 / 10
                     set(CaptureRequest.SENSOR_EXPOSURE_TIME, exposure)
                     set(CaptureRequest.SENSOR_SENSITIVITY, iso)
+                    this@CameraRecorder.iso = iso
+                    this@CameraRecorder.exposureNs = exposure
+                    maxExposureNs = 1_000_000_000L / targetFps
+                    chars.get(CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE)?.let { isoRange = it }
                     if (focusDiopters >= 0f) {
                         // Clamped to what the lens can actually do. Requesting 10 diopters on a lens
                         // whose minimum focus distance is 5 would otherwise be silently ignored, and
@@ -473,39 +660,96 @@ class CameraRecorder(private val context: Context) {
                 } else {
                     set(CaptureRequest.CONTROL_AE_LOCK, true)
                 }
-            }.build()
+
+                // Optical stabilisation ON, electronic stabilisation OFF -- for a hand-held receiver.
+                //
+                // OIS moves the lens against hand tremor DURING the exposure, which is exactly the
+                // motion blur that loses frames (F53). EIS is the opposite kind of help: it warps
+                // and crops each frame after capture, which bends the straight boundary edges the
+                // detector fits and throws away resolution the density budget needs.
+                if (chars.get(CameraCharacteristics.LENS_INFO_AVAILABLE_OPTICAL_STABILIZATION)
+                        ?.contains(CameraMetadata.LENS_OPTICAL_STABILIZATION_MODE_ON) == true
+                ) {
+                    set(
+                        CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE,
+                        CameraMetadata.LENS_OPTICAL_STABILIZATION_MODE_ON,
+                    )
+                }
+                set(
+                    CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE,
+                    CameraMetadata.CONTROL_VIDEO_STABILIZATION_MODE_OFF,
+                )
+
+                // Lens distortion corrected in the camera, wherever it offers that without costing
+                // frame rate (FAST). The decoder maps the screen with ONE homography, which is
+                // exact for a flat screen through an ideal lens and cannot bend: a wide phone lens
+                // bows straight edges, most of all near the edges of the picture -- exactly where a
+                // screen that fills the view has its corners. From the Pixel 8's own calibration
+                // (`LENS_DISTORTION` 0.089, -0.162, 0.119), a screen filling 85% of the frame is
+                // off by ~10 px, about 0.7 of a cell, along its long edges; at a third of the frame,
+                // a quarter of that. That is "the Pixel reads best from far away". It offers FAST
+                // and was never asked for it. The S26 Ultra's main camera does not list the
+                // control at all, and its own coefficients put the same framing at ~0.35 of a cell.
+                chars.get(CameraCharacteristics.DISTORTION_CORRECTION_AVAILABLE_MODES)
+                    ?.takeIf { CameraMetadata.DISTORTION_CORRECTION_MODE_FAST in it }
+                    ?.let {
+                        set(
+                            CaptureRequest.DISTORTION_CORRECTION_MODE,
+                            CameraMetadata.DISTORTION_CORRECTION_MODE_FAST,
+                        )
+                    }
+
+                // Focus on the MIDDLE of the view, where the sender's screen is. Unweighted, AF
+                // can settle on whatever has the most contrast -- the desk, a hand -- and the
+                // screen at a different distance is then outside a depth of field that is only a
+                // few millimetres deep at 15 cm (F57).
+                if (focusDiopters < 0f) centreAfRegion(chars)?.let {
+                    set(CaptureRequest.CONTROL_AF_REGIONS, arrayOf(it))
+                }
+            }
+            val request = builder.build()
 
             session = createSession(device, reader.surface, previewSurface, handler)
                 ?: return failure("could not configure a capture session", cameraId, size, targetFps)
 
-            session.setRepeatingRequest(
-                request,
-                object : CameraCaptureSession.CaptureCallback() {
-                    override fun onCaptureCompleted(
-                        s: CameraCaptureSession,
-                        r: CaptureRequest,
-                        result: TotalCaptureResult,
-                    ) {
-                        // Read back what the camera DID, not what we asked for. RISK-011: a
-                        // device advertising MANUAL_SENSOR may ignore the settings, and the only
-                        // way to know is to compare the result against the request.
-                        result.get(CaptureResult.SENSOR_EXPOSURE_TIME)?.let { reportedExposure = it }
-                        result.get(CaptureResult.SENSOR_SENSITIVITY)?.let { reportedIso = it }
-                        result.get(CaptureResult.LENS_FOCUS_DISTANCE)?.let {
-                            reportedFocus = it
-                            lastFocusDiopters = it
-                        }
-                        result.get(CaptureResult.CONTROL_AE_MODE)?.let { aeMode = it }
-                        result.get(CaptureResult.SENSOR_FRAME_DURATION)?.let {
-                            reportedFrameDuration = it
-                        }
-                        result.get(CaptureResult.EDGE_MODE)?.let { edgeMode = it }
-                        result.get(CaptureResult.SHADING_MODE)?.let { shadingMode = it }
-                        result.get(CaptureResult.NOISE_REDUCTION_MODE)?.let { nrMode = it }
+            val callback = object : CameraCaptureSession.CaptureCallback() {
+                override fun onCaptureCompleted(
+                    s: CameraCaptureSession,
+                    r: CaptureRequest,
+                    result: TotalCaptureResult,
+                ) {
+                    // First row to last row, per frame. With the exposure it bounds how fast the
+                    // display can change state before captures tear (F60) -- measured, not assumed.
+                    result.get(CaptureResult.SENSOR_ROLLING_SHUTTER_SKEW)?.let {
+                        rollingShutterSkewNs = it
                     }
-                },
-                handler,
-            )
+                    result.get(CaptureResult.DISTORTION_CORRECTION_MODE)?.let {
+                        distortionCorrection = it
+                    }
+                    result.get(CaptureResult.CONTROL_AF_STATE)?.let {
+                        afState = it
+                        onAfState(it)
+                    }
+                    // Read back what the camera DID, not what we asked for. RISK-011: a
+                    // device advertising MANUAL_SENSOR may ignore the settings, and the only
+                    // way to know is to compare the result against the request.
+                    result.get(CaptureResult.SENSOR_EXPOSURE_TIME)?.let { reportedExposure = it }
+                    result.get(CaptureResult.SENSOR_SENSITIVITY)?.let { reportedIso = it }
+                    result.get(CaptureResult.LENS_FOCUS_DISTANCE)?.let {
+                        reportedFocus = it
+                        lastFocusDiopters = it
+                    }
+                    result.get(CaptureResult.CONTROL_AE_MODE)?.let { aeMode = it }
+                    result.get(CaptureResult.SENSOR_FRAME_DURATION)?.let {
+                        reportedFrameDuration = it
+                    }
+                    result.get(CaptureResult.EDGE_MODE)?.let { edgeMode = it }
+                    result.get(CaptureResult.SHADING_MODE)?.let { shadingMode = it }
+                    result.get(CaptureResult.NOISE_REDUCTION_MODE)?.let { nrMode = it }
+                }
+            }
+            control = LiveControl(session, builder, callback, handler, chars)
+            session.setRepeatingRequest(request, callback, handler)
 
             if (unbounded) {
                 // No deadline: an aiming session lasts as long as the user needs. Polled rather than
@@ -525,6 +769,7 @@ class CameraRecorder(private val context: Context) {
             error = "${e::class.simpleName}: ${e.message}"
             Log.e(TAG, "capture failed", e)
         } finally {
+            control = null
             runCatching { session?.stopRepeating() }
             runCatching { session?.close() }
             runCatching { device?.close() }
@@ -560,6 +805,49 @@ class CameraRecorder(private val context: Context) {
     }
 
     // ------------------------------------------------------------------ helpers
+
+    object Modes {
+        /**
+         * The capture rate to ask for: the highest of [rates] this camera offers at (nearly) the
+         * same resolution as the lowest.
+         *
+         * More captures per display state is more chances that one of them is clean, and a shorter
+         * frame period caps the exposure, which cuts both motion blur and state mixing (F60). But
+         * resolution decides how far away the phone can be held (F57), so 60 fps is only worth it
+         * where it costs almost none: the Pixel 8 offers 4032x2268 at 60 against 4080x3072 at 30,
+         * the same long axis -- and the long axis is the one the screen's long side lies along.
+         */
+        fun chooseFps(context: Context, maxWidth: Int, rates: List<Int> = listOf(60, 50, 30)): Int {
+            val longest = { fps: Int ->
+                runCatching {
+                    val mgr = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
+                    val id = mgr.cameraIdList.firstOrNull { cid ->
+                        mgr.getCameraCharacteristics(cid).get(CameraCharacteristics.LENS_FACING) ==
+                            CameraCharacteristics.LENS_FACING_BACK
+                    } ?: return@runCatching 0
+                    val map = mgr.getCameraCharacteristics(id)
+                        .get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+                        ?: return@runCatching 0
+                    map.getOutputSizes(ImageFormat.YUV_420_888)
+                        .filter { it.width <= maxWidth }
+                        .filter {
+                            map.getOutputMinFrameDuration(ImageFormat.YUV_420_888, it) <=
+                                1_000_000_000L / fps
+                        }
+                        .maxOfOrNull { maxOf(it.width, it.height) } ?: 0
+                }.getOrDefault(0)
+            }
+            // The fastest rate that keeps (nearly) the resolution of the slowest. Not just 60-or-30:
+            // the S26 Ultra offers 60 fps only up to 2336x1080, but 50 fps at 4000x1848 -- the
+            // same long side as its 30 fps mode, so 50 is two thirds more captures for free.
+            val slowest = rates.minOrNull() ?: 30
+            val base = longest(slowest)
+            return rates.sortedDescending().firstOrNull { r ->
+                val l = longest(r)
+                l > 0 && l >= base * 0.9
+            } ?: slowest
+        }
+    }
 
     private fun CameraCharacteristics.hasCapability(cap: Int): Boolean =
         get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES)?.contains(cap) == true
@@ -703,6 +991,13 @@ class CameraRecorder(private val context: Context) {
     companion object {
         private const val TAG = "FileFlow.Capture"
         private const val IMAGE_BUFFERS = 6
+        /** Side of the tap-to-focus region, and of the standing centre region, as array fractions. */
+        private const val AF_TAP_FRACTION = 0.15f
+        private const val AF_CENTRE_FRACTION = 0.4f
+        /** A scan that has not locked by now is abandoned and continuous AF resumed. */
+        private const val AF_SCAN_TIMEOUT_MS = 2500L
+        /** How long a completed scan holds before continuous AF takes over again. */
+        private const val AF_HOLD_AFTER_SCAN_MS = 600L
 
         /**
          * Low, deliberately. The subject is an emissive display at full brightness, not a room.

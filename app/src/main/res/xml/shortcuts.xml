@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Long-press the app icon: straight to the two things the app is for. Both go through
+     MainActivity, which applies the person's saved speed setting before handing on. -->
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut
+        android:shortcutId="receive"
+        android:enabled="true"
+        android:icon="@drawable/ic_shortcut_receive"
+        android:shortcutShortLabel="@string/shortcut_receive"
+        android:shortcutLongLabel="@string/shortcut_receive_long">
+        <intent
+            android:action="dev.fileflow.action.RECEIVE"
+            android:targetPackage="dev.fileflow"
+            android:targetClass="dev.fileflow.MainActivity" />
+    </shortcut>
+    <shortcut
+        android:shortcutId="send"
+        android:enabled="true"
+        android:icon="@drawable/ic_shortcut_send"
+        android:shortcutShortLabel="@string/shortcut_send"
+        android:shortcutLongLabel="@string/shortcut_send_long">
+        <intent
+            android:action="dev.fileflow.action.SEND_FILE"
+            android:targetPackage="dev.fileflow"
+            android:targetClass="dev.fileflow.MainActivity" />
+    </shortcut>
+</shortcuts>

@@ -37,7 +37,7 @@ import javax.microedition.khronos.opengles.GL10
 class OpticalRenderer(
     private val tx: Transmitter,
     /** Present a new optical state every Nth vsync. 1 = every vsync. */
-    private val vsyncDivisor: Int,
+    private var vsyncDivisor: Int,
     /**
      * Pixels of black to keep clear on every side, before the pitch is computed.
      *
@@ -52,7 +52,24 @@ class OpticalRenderer(
      * wrong conclusion.
      */
     private val marginPx: Int = 0,
+    /**
+     * When > 0, states per second to aim for, with the divisor re-derived from the MEASURED vsync
+     * interval rather than taken as given.
+     *
+     * The requested display mode is only a request. On the Pixel 8 a 120 Hz request came back as a
+     * panel running at 60, so a divisor computed for 120 presented 7.5 states a second instead of 15
+     * and halved the link without a word (F59). Panels also change rate on their own (adaptive
+     * refresh), so it is re-measured every [REMEASURE_FRAMES] frames, not once.
+     */
+    private val targetStateRate: Double = 0.0,
 ) : GLSurfaceView.Renderer {
+
+    /** Divisor in use right now, and the vsync rate it was derived from (0 = not yet measured). */
+    val divisor: Int get() = vsyncDivisor
+    @Volatile var measuredVsyncHz: Double = 0.0; private set
+    private val vsyncIntervals = LongArray(REMEASURE_FRAMES)
+    private var vsyncIntervalCount = 0
+    private var lastDrawNs = 0L
 
     /** Observed, not requested. */
     @Volatile var framesDrawn: Long = 0L; private set
@@ -93,6 +110,25 @@ class OpticalRenderer(
     private var vsyncCounter = 0
 
     fun submitIntervalsNs(): LongArray = submitIntervals.copyOf(loggedIntervals)
+
+    /** Render thread. Median vsync interval over the last window sets the divisor. */
+    private fun adaptDivisor(now: Long) {
+        if (lastDrawNs != 0L) vsyncIntervals[vsyncIntervalCount++] = now - lastDrawNs
+        lastDrawNs = now
+        if (vsyncIntervalCount < vsyncIntervals.size) return
+        vsyncIntervalCount = 0
+        vsyncIntervals.sort()  // in place: the window is reused, nothing allocated
+        val median = vsyncIntervals[vsyncIntervals.size / 2]
+        if (median <= 0L) return
+        val hz = 1e9 / median
+        val d = Math.round(hz / targetStateRate).toInt().coerceAtLeast(1)
+        if (d != vsyncDivisor || measuredVsyncHz == 0.0) {
+            dev.fileflow.SessionLog.i(TAG, "panel measured at %.1f Hz: divisor %d -> %d (%.1f states/s)".format(
+                hz, vsyncDivisor, d, hz / d))
+        }
+        measuredVsyncHz = hz
+        vsyncDivisor = d
+    }
 
     override fun onSurfaceCreated(gl: GL10?, config: EGLConfig?) {
         program = buildProgram()
@@ -144,7 +180,7 @@ class OpticalRenderer(
         drawnWidth = pitchPx * tx.cols
         drawnHeight = pitchPx * tx.rows
 
-        Log.i(TAG, "surface ${width}x$height, margin $marginPx => pitch $pitchPx px/cell, " +
+        dev.fileflow.SessionLog.i(TAG, "surface ${width}x$height, margin $marginPx => pitch $pitchPx px/cell, " +
                    "drawn ${drawnWidth}x$drawnHeight for a ${tx.cols}x${tx.rows} grid")
 
         if (drawnWidth > width || drawnHeight > height) {
@@ -165,6 +201,7 @@ class OpticalRenderer(
         if (firstDrawUptimeMs < 0) firstDrawUptimeMs = SystemClock.uptimeMillis()
         lastDrawUptimeMs = SystemClock.uptimeMillis()
         framesDrawn++
+        if (targetStateRate > 0.0) adaptDivisor(now)
 
         // Advance the optical state only every Nth vsync. Redrawing the SAME state on the other
         // vsyncs is deliberate: the display keeps refreshing regardless, and presenting an
@@ -245,6 +282,8 @@ class OpticalRenderer(
     companion object {
         private const val TAG = "FileFlow.Tx"
         private const val MAX_LOGGED_INTERVALS = 20_000
+        /** Vsyncs per divisor re-measurement: half a second at 120 Hz. */
+        private const val REMEASURE_FRAMES = 60
 
         // Texture V is flipped relative to GL's convention so cell row 0 lands at the TOP of the
         // screen. Getting this wrong produces a vertically mirrored frame, which decodes to garbage

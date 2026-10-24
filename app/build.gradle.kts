@@ -74,4 +74,7 @@ dependencies {
     implementation("androidx.core:core-ktx:1.15.0")
     implementation("androidx.appcompat:appcompat:1.7.0")
     implementation("androidx.activity:activity-ktx:1.9.3")
+    // Material 3: the components (cards, segmented buttons, dialogs, progress) and the dynamic
+    // colour that make the app look like the rest of the phone rather than a debug tool.
+    implementation("com.google.android.material:material:1.12.0")
 }

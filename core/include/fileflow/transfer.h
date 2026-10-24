@@ -77,8 +77,14 @@ class FileTransmitter {
     // The receiver cannot finish without the manifest but CAN use every symbol it reads before
     // the manifest arrives (`ReceiveSession` buffers them), so the interval only bounds how long
     // a receiver that missed every manifest waits at the end -- it costs no symbols. Each manifest
-    // frame does cost one display state, so the interval grows with the transfer: half the
-    // symbols needed, clamped to [16, 128], which is 0.8-6% of display states.
+    // frame does cost one display state, so the interval grows with the transfer: an eighth of
+    // the symbols needed, clamped to [8, 32], which is 3-12.5% of display states.
+    //
+    // It was half, clamped to [16, 128], until the first hand-held transfer (F59). Where only one
+    // payload in twenty decodes, a manifest every 32 states at 7.5 states/s arrives on average a
+    // minute and a half apart -- and until it does the person sees 0% however much has been read.
+    // That run sat at 0% for 2.5 minutes holding 98% of the file. What a manifest costs is a
+    // display state; what a missed one costs is the person giving up.
     [[nodiscard]] static std::uint32_t AutoManifestInterval(std::uint64_t symbols_needed) noexcept;
 
     [[nodiscard]] const FileManifest& manifest() const noexcept { return manifest_; }

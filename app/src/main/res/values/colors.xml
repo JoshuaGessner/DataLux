@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Fallback palette (used when the phone has no dynamic colour): a cool cyan, for light. -->
+    <color name="ff_primary">#7DD3F0</color>
+    <color name="ff_on_primary">#003544</color>
+    <color name="ff_primary_container">#004D61</color>
+    <color name="ff_on_primary_container">#BDEBFF</color>
+    <color name="ff_secondary_container">#2E4A54</color>
+    <color name="ff_on_secondary_container">#CFE6F0</color>
+    <color name="ff_tertiary">#A8E6A1</color>
+    <color name="ff_background">#0F1416</color>
+    <color name="ff_surface_container">#1A2023</color>
+    <color name="ff_surface_container_high">#242B2E</color>
+
+    <!-- Status colours on the camera overlay: fixed, so they mean the same on every phone. -->
+    <color name="ff_ok">#69F0AE</color>
+    <color name="ff_warn">#FFC266</color>
+    <color name="ff_bad">#FF6B6B</color>
+    <color name="ff_scrim">#B3000000</color>
+
+    <color name="ic_launcher_background">#0B2A33</color>
+</resources>

@@ -22,6 +22,16 @@ get_filename_component(FILEFLOW_ROOT "${CMAKE_CURRENT_LIST_DIR}/../.." ABSOLUTE)
 # the Android build would quietly enforce less than CI does.
 include(${FILEFLOW_ROOT}/cmake/warnings.cmake)
 
+# Optimised in EVERY variant, debug included, and before the core is added so it applies there.
+#
+# AGP builds the debug APK's native code with CMAKE_BUILD_TYPE=Debug, which on this toolchain
+# means no -O flag at all: -O0. That debug APK is the one every hardware run has used, and the
+# live decoder in it took 140 ms a frame at 4080x3072 -- seven frames a second against a
+# transmitter presenting fifteen -- so the phone was being measured with one hand tied (F57).
+# The decode chain runs per camera frame; it has no unoptimised mode worth having. -g stays, so
+# symbols and line tables are still there for a crash.
+add_compile_options(-O2)
+
 # The whole point of ADR-0010: these are the SAME sources the desktop suite and the simulator
 # exercise, cross-compiled unchanged. Not a port, not a subset.
 add_subdirectory(${FILEFLOW_ROOT}/core   ${CMAKE_BINARY_DIR}/core)

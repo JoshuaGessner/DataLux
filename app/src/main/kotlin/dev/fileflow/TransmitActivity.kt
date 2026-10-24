@@ -10,6 +10,9 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import dev.fileflow.tx.OpticalRenderer
 import dev.fileflow.tx.Transmitter
+import dev.fileflow.ui.Ui.button
+import dev.fileflow.ui.Ui.dp
+import dev.fileflow.ui.Ui.text
 import java.io.File
 
 /**
@@ -41,7 +44,11 @@ class TransmitActivity : AppCompatActivity() {
     private var renderer: OpticalRenderer? = null
     private var requestedHz = 0.0
     private var requestedMode = "?"
-
+    /** Display states per second this run presents: panel refresh / divisor. */
+    private var stateRate = 0.0
+    /** The Speed setting's display states per second. */
+    private var targetStateRate = Speed.DEFAULT.statesPerSecond
+    private var reported = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -64,10 +71,12 @@ class TransmitActivity : AppCompatActivity() {
             screenBrightness = WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_FULL
         }
 
-        val cols = intent.getIntExtra("cols", 144)
-        val rows = intent.getIntExtra("rows", 240)
-        val divisor = intent.getIntExtra("divisor", 1).coerceAtLeast(1)
-        val seconds = intent.getIntExtra("seconds", 20)
+        // Defaults are the forgiving grid: a launch from the share sheet carries no grid at all.
+        val cols = intent.getIntExtra("cols", dev.fileflow.rx.Grids.ALL[0].first)
+        val rows = intent.getIntExtra("rows", dev.fileflow.rx.Grids.ALL[0].second)
+        // 0 = no timed report: the run lasts until the person presses Back, and reports then.
+        // Scripted measurement runs still pass a duration.
+        val seconds = intent.getIntExtra("seconds", 0)
         val nsym = intent.getIntExtra("nsym", 32)
         // 0 = the default size, 64 symbols' worth, kept so runs stay comparable with older captures.
         //
@@ -119,13 +128,116 @@ class TransmitActivity : AppCompatActivity() {
             window.attributes = window.attributes.apply { preferredDisplayModeId = best.modeId }
         }
 
-        val t = runCatching { Transmitter.open(cols, rows, nsym, payload, seed = 5L) }
-            .getOrElse { e ->
-                report("transmitter open failed: ${e.message}", null)
-                return
+        // States per second, not refreshes per state, is what has to be the same on every phone.
+        //
+        // The rate is the Speed setting's (F60: 20/s suits any receiving camera, 30/s a 60 fps
+        // one). A fixed divisor gave the intended rate on a 120 Hz panel and half of it on a
+        // 60 Hz one; the renderer now re-derives the divisor from the vsync rate it measures
+        // (F59). An explicit `divisor` extra still wins, for scripted sweeps.
+        targetStateRate = intent.getDoubleExtra("stateRate", Speed.DEFAULT.statesPerSecond)
+            .coerceIn(1.0, 120.0)
+        val panelHz = if (requestedHz > 0.0) requestedHz else (display?.refreshRate ?: 60f).toDouble()
+        val divisor = if (intent.hasExtra("divisor")) {
+            intent.getIntExtra("divisor", 1).coerceAtLeast(1)
+        } else {
+            Math.round(panelHz / targetStateRate).toInt().coerceAtLeast(1)
+        }
+        stateRate = panelHz / divisor
+
+        // From "Send a file…" the document is the intent data; from the share sheet, EXTRA_STREAM.
+        val uri = intent.data ?: if (intent.action == android.content.Intent.ACTION_SEND) {
+            androidx.core.content.IntentCompat.getParcelableExtra(
+                intent, android.content.Intent.EXTRA_STREAM, android.net.Uri::class.java,
+            )
+        } else null
+        if (uri == null && intent.action == android.content.Intent.ACTION_SEND) {
+            // Shared text, or a share with no file attached: never fall back to the test file.
+            fail("Nothing to send — FileFlow sends a file, and this share did not include one.")
+            return
+        }
+        if (uri == null) {
+            val t = runCatching { Transmitter.open(cols, rows, nsym, payload, seed = 5L) }
+                .getOrElse { e ->
+                    fail("Could not start sending: ${e.message}")
+                    return
+                }
+            begin(t, divisor, marginPx, seconds)
+            return
+        }
+
+        // A picked file is read OFF the main thread -- it can be tens of megabytes, from a cloud
+        // provider that has to download it first -- with a holding screen meanwhile.
+        setContentView(message("Preparing the file…"))
+        Thread {
+            val opened = runCatching {
+                val (name, size) = describe(uri)
+                if (size > MAX_FILE_BYTES) {
+                    error("$name is ${formatBytes(size)}. The most this can send is " +
+                          "${formatBytes(MAX_FILE_BYTES)} — at optical speeds a bigger file " +
+                          "would take too long to be practical.")
+                }
+                val bytes = contentResolver.openInputStream(uri)?.use { input ->
+                    // Bounded read: a provider that misreported the size cannot exhaust memory.
+                    val out = java.io.ByteArrayOutputStream()
+                    val buf = ByteArray(64 * 1024)
+                    var total = 0L
+                    while (true) {
+                        val n = input.read(buf)
+                        if (n < 0) break
+                        total += n
+                        if (total > MAX_FILE_BYTES) {
+                            error("$name is larger than ${formatBytes(MAX_FILE_BYTES)}.")
+                        }
+                        out.write(buf, 0, n)
+                    }
+                    out.toByteArray()
+                } ?: error("The file could not be opened.")
+                if (bytes.isEmpty()) error("$name is empty — there is nothing to send.")
+                Transmitter.openFile(cols, rows, nsym, bytes, name)
             }
+            runOnUiThread {
+                if (isFinishing || isDestroyed) {
+                    opened.getOrNull()?.close()
+                    return@runOnUiThread
+                }
+                opened.fold(
+                    onSuccess = { t -> begin(t, divisor, marginPx, seconds) },
+                    onFailure = { e -> fail(e.message ?: "The file could not be read.") },
+                )
+            }
+        }.start()
+    }
+
+    /** Display name and size of a picked document; size -1 when the provider does not say. */
+    private fun describe(uri: android.net.Uri): Pair<String, Long> {
+        var name = uri.lastPathSegment?.substringAfterLast('/') ?: "file"
+        var size = -1L
+        contentResolver.query(
+            uri,
+            arrayOf(
+                android.provider.OpenableColumns.DISPLAY_NAME,
+                android.provider.OpenableColumns.SIZE,
+            ),
+            null, null, null,
+        )?.use { c ->
+            if (c.moveToFirst()) {
+                c.getString(0)?.let { name = it }
+                if (!c.isNull(1)) size = c.getLong(1)
+            }
+        }
+        return name to size
+    }
+
+    /** Starts presenting frames for [t]. */
+    private fun begin(t: Transmitter, divisor: Int, marginPx: Int, seconds: Int) {
         tx = t
-        val r = OpticalRenderer(t, divisor, marginPx)
+        SessionLog.start(this, "send")
+        SessionLog.i(LOG_TAG, "sending ${t.fileName}, ${formatBytes(t.fileBytes)}, " +
+            "${t.cols}x${t.rows} at ${"%.0f".format(targetStateRate)} states/s")
+        // An explicit divisor is a scripted sweep and is held fixed; otherwise the renderer
+        // re-derives it from the vsync rate the panel actually runs at (F59).
+        val adaptive = !intent.hasExtra("divisor")
+        val r = OpticalRenderer(t, divisor, marginPx, if (adaptive) targetStateRate else 0.0)
         renderer = r
 
         glView = GLSurfaceView(this).apply {
@@ -136,15 +248,128 @@ class TransmitActivity : AppCompatActivity() {
             // WHEN_DIRTY would couple the cadence to our own scheduling instead of the panel's.
             renderMode = GLSurfaceView.RENDERMODE_CONTINUOUSLY
         }
-        setContentView(glView)
+        val fileBytes = t.fileBytes
+        val perFrame = t.symbolBytes
+        val estimate = if (perFrame > 0 && stateRate > 0.0) {
+            // Data frames needed, plus the manifest frames interleaved with them; a perfect link.
+            val frames = Math.ceil(fileBytes.toDouble() / perFrame) * 1.05
+            formatSeconds(frames / stateRate)
+        } else null
 
-        // Finish the run on a timer rather than on a frame count, so a device that cannot hit the
-        // rate produces a SHORTER report rather than running longer to reach a quota — which would
-        // hide the very shortfall we are measuring.
-        glView?.postDelayed({ report(null, r) }, seconds * 1000L)
+        // What is being sent, and how to stop, in the black margin ABOVE the optical frame -- never
+        // over it. The margin exists to keep the frame off the panel's rounded corners (F34); on
+        // the reference phones it is 260-290 px tall, room for one quiet row. The text is dim so it
+        // stays well below the receiver's lit threshold, and it is shown only once the frame's
+        // real size is known and the row fits; otherwise a toast says the same thing once.
+        val bar = sendingBar(t, estimate)
+        setContentView(android.widget.FrameLayout(this).apply {
+            setBackgroundColor(android.graphics.Color.BLACK)
+            addView(glView)
+            addView(bar, android.widget.FrameLayout.LayoutParams(
+                android.widget.FrameLayout.LayoutParams.MATCH_PARENT,
+                android.widget.FrameLayout.LayoutParams.WRAP_CONTENT,
+                android.view.Gravity.TOP,
+            ))
+        })
+        bar.postDelayed({
+            val margin = (r.surfaceHeight - r.drawnHeight) / 2
+            if (r.drawnHeight > 0 && bar.height in 1..(margin - dp(8))) {
+                bar.visibility = android.view.View.VISIBLE
+            } else {
+                android.widget.Toast.makeText(
+                    this,
+                    "Sending ${t.fileName} (${formatBytes(fileBytes)}). Back stops.",
+                    android.widget.Toast.LENGTH_LONG,
+                ).show()
+            }
+        }, BAR_FIT_DELAY_MS)
+        startedMs = android.os.SystemClock.elapsedRealtime()
+        ticker.post(tick)
+
+        // Scripted runs finish on a timer rather than on a frame count, so a device that cannot hit
+        // the rate produces a SHORTER report rather than running longer to reach a quota — which
+        // would hide the very shortfall being measured.
+        if (seconds > 0) glView?.postDelayed({ report(null, r) }, seconds * 1000L)
+    }
+
+    private var startedMs = 0L
+    private var barMeta: android.widget.TextView? = null
+    private var barMetaPrefix = ""
+    private val ticker = android.os.Handler(android.os.Looper.getMainLooper())
+    private val tick = object : Runnable {
+        override fun run() {
+            val s = (android.os.SystemClock.elapsedRealtime() - startedMs) / 1000
+            barMeta?.text = "$barMetaPrefix · ${s / 60}:${"%02d".format(s % 60)}"
+            ticker.postDelayed(this, 1000L)
+        }
+    }
+
+    /** The row in the top margin: file, size, elapsed time, Stop. Starts hidden; see [begin]. */
+    private fun sendingBar(t: Transmitter, estimate: String?): android.view.View {
+        // ~12% linear luminance against the frame's 100%: readable on black, and captured far
+        // below the threshold that separates the frame's lit cells from its dark ones.
+        val dim = android.graphics.Color.parseColor("#70757A")
+        val meta = text("", 13f).apply { setTextColor(dim) }
+        barMeta = meta
+        barMetaPrefix = formatBytes(t.fileBytes) +
+            (estimate?.let { " · ≥$it at best" } ?: "")
+        return android.widget.LinearLayout(this).apply {
+            orientation = android.widget.LinearLayout.HORIZONTAL
+            gravity = android.view.Gravity.CENTER_VERTICAL
+            visibility = android.view.View.INVISIBLE
+            setPadding(dp(20), dp(10), dp(12), dp(6))
+            addView(android.widget.LinearLayout(context).apply {
+                orientation = android.widget.LinearLayout.VERTICAL
+                addView(text(t.fileName, 15f).apply {
+                    setTextColor(dim)
+                    maxLines = 1
+                    ellipsize = android.text.TextUtils.TruncateAt.MIDDLE
+                })
+                addView(meta)
+            }, android.widget.LinearLayout.LayoutParams(
+                0, android.widget.LinearLayout.LayoutParams.WRAP_CONTENT, 1f,
+            ))
+            addView(button("Stop", R.drawable.ic_close, dev.fileflow.ui.Ui.Style.Text) { finish() }
+                .apply {
+                    setTextColor(dim)
+                    iconTint = android.content.res.ColorStateList.valueOf(dim)
+                    minHeight = dp(40)
+                })
+        }
+    }
+
+    /** A centred holding screen: a spinner while working, or an icon when something went wrong. */
+    private fun message(s: String, error: Boolean = false) = android.widget.LinearLayout(this).apply {
+        orientation = android.widget.LinearLayout.VERTICAL
+        gravity = android.view.Gravity.CENTER
+        setBackgroundColor(getColor(R.color.ff_background))
+        setPadding(dp(32), dp(32), dp(32), dp(32))
+        if (error) {
+            addView(android.widget.ImageView(context).apply {
+                setImageResource(R.drawable.ic_error)
+                imageTintList = android.content.res.ColorStateList.valueOf(getColor(R.color.ff_bad))
+            }, android.widget.LinearLayout.LayoutParams(dp(64), dp(64)))
+        } else {
+            addView(com.google.android.material.progressindicator.CircularProgressIndicator(context)
+                .apply { isIndeterminate = true })
+        }
+        addView(text(s, 17f, com.google.android.material.R.attr.colorOnSurface).apply {
+            gravity = android.view.Gravity.CENTER
+            setPadding(0, dp(20), 0, 0)
+        })
+        if (error) {
+            addView(button("Back", style = dev.fileflow.ui.Ui.Style.Tonal) { finish() }
+                .apply { layoutParams = dev.fileflow.ui.Ui.matchWidth(dp(28)) })
+        }
+    }
+
+    private fun fail(why: String) {
+        report(why, null)
+        setContentView(message(why, error = true))
     }
 
     private fun report(error: String?, r: OpticalRenderer?) {
+        if (r != null) reported = true
         val body = buildString {
             appendLine("FileFlow transmit run (C03) — states SUBMITTED, not Fd")
             appendLine("=".repeat(64))
@@ -171,6 +396,10 @@ class TransmitActivity : AppCompatActivity() {
             appendLine("  display mode     $requestedMode @ ${"%.3f".format(requestedHz)} Hz " +
                        "(REQUESTED — the surface below is what arrived)")
             appendLine("  payload sha256   ${t?.payloadSha256}")
+            appendLine("  file             ${t?.fileName}, ${t?.fileBytes} bytes")
+            appendLine("  state rate       ${"%.2f".format(stateRate)} /s requested (refresh / divisor)")
+            appendLine("  panel measured   ${"%.1f".format(r.measuredVsyncHz)} Hz, divisor " +
+                       "${r.divisor} at the end (0 Hz = not adaptive)")
             appendLine()
 
             val spanMs = (r.lastDrawUptimeMs - r.firstDrawUptimeMs).coerceAtLeast(0)
@@ -216,14 +445,16 @@ class TransmitActivity : AppCompatActivity() {
             appendLine("devices; this run needs one.")
         }
 
-        Log.i(LOG_TAG, "--- transmit report ---")
-        body.lineSequence().forEach { Log.i(LOG_TAG, it) }
+        SessionLog.i(LOG_TAG, "--- transmit report ---")
+        body.lineSequence().forEach { SessionLog.i(LOG_TAG, it) }
         runCatching { File(filesDir, REPORT_FILE).writeText(body) }
     }
 
     override fun onPause() {
         super.onPause()
         glView?.onPause()
+        // A run that ends when the person presses Back still leaves its report.
+        if (isFinishing) renderer?.let { if (!reported) report(null, it) }
     }
 
     override fun onResume() {
@@ -233,12 +464,33 @@ class TransmitActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
+        ticker.removeCallbacks(tick)
         tx?.close()
         tx = null
+        SessionLog.close()
     }
 
     companion object {
         const val LOG_TAG = "FileFlow.Tx"
         const val REPORT_FILE = "transmit-report.txt"
+        /**
+         * Largest file accepted. The whole file is held in memory on both phones, and at the
+         * simulated tens of KB/s a file this size is already many minutes of holding a phone up.
+         */
+        const val MAX_FILE_BYTES = 64L * 1024 * 1024
+        /** Long enough for the GL surface to be sized and the bar measured. */
+        private const val BAR_FIT_DELAY_MS = 500L
+
+        fun formatBytes(n: Long): String = when {
+            n < 1024 -> "$n bytes"
+            n < 1024 * 1024 -> "%.1f KB".format(n / 1024.0)
+            else -> "%.1f MB".format(n / (1024.0 * 1024.0))
+        }
+
+        fun formatSeconds(s: Double): String = when {
+            s < 90 -> "${Math.ceil(s).toInt()} s"
+            s < 5400 -> "${Math.ceil(s / 60).toInt()} min"
+            else -> "%.1f h".format(s / 3600)
+        }
     }
 }

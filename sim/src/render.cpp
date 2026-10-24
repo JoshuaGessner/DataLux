@@ -5,6 +5,8 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
+#include <limits>
 #include <vector>
 
 namespace fileflow::sim {
@@ -292,6 +294,55 @@ Image8 RenderMoving(const CellMatrix& cells, const GridGeometry& g,
         }
     }
     for (double& v : radiance) v /= static_cast<double>(k);
+    return Finish(radiance, hits, cfg);
+}
+
+Image8 RenderUnsynced(const CellMatrix& (*state)(void* ctx, std::int64_t k), void* ctx, double fd,
+                      const GridGeometry& g, const OpticalRenderConfig& cfg,
+                      const CaptureTiming& ct, double t_start, Homography* truth,
+                      int* states_hit) {
+    const int w = cfg.view.image_width;
+    const int h = cfg.view.image_height;
+    bool ok = false;
+    const Homography hom = ViewHomography(cfg.view, g, &ok);
+    if (truth != nullptr) *truth = hom;
+    auto inv = hom.Inverse();
+    const auto n = static_cast<std::size_t>(w) * static_cast<std::size_t>(h);
+    std::vector<double> radiance(n, 0.0);
+    std::vector<std::uint8_t> hits(n, 0);
+    if (!ok || !inv.ok() || fd <= 0.0) return Finish(radiance, hits, cfg);
+
+    const int bands = std::clamp(ct.bands, 1, std::max(1, h));
+    std::int64_t lo = std::numeric_limits<std::int64_t>::max();
+    std::int64_t hi = std::numeric_limits<std::int64_t>::min();
+    for (int b = 0; b < bands; ++b) {
+        const int y0 = b * h / bands;
+        const int y1 = (b + 1) * h / bands;
+        // This band's exposure window, and how much of it each display state covers.
+        const double t0 = t_start + ct.readout_s * (0.5 * (y0 + y1)) / static_cast<double>(h);
+        const double t1 = t0 + std::max(ct.exposure_s, 1e-9);
+        const auto k0 = static_cast<std::int64_t>(std::floor(t0 * fd));
+        const auto k1 = static_cast<std::int64_t>(std::floor(t1 * fd - 1e-12));
+        for (std::int64_t k = k0; k <= k1; ++k) {
+            const double a = std::max(t0, static_cast<double>(k) / fd);
+            const double z = std::min(t1, static_cast<double>(k + 1) / fd);
+            const double weight = (z - a) / (t1 - t0);
+            if (weight <= 0.0) continue;
+            lo = std::min(lo, k);
+            hi = std::max(hi, k);
+            const CellMatrix& cells = state(ctx, k);
+            for (int y = y0; y < y1; ++y) {
+                for (int x = 0; x < w; ++x) {
+                    const std::size_t i = static_cast<std::size_t>(y) * static_cast<std::size_t>(w) +
+                                          static_cast<std::size_t>(x);
+                    double v = 0.0;
+                    if (Shade(cells, inv.value(), cfg, x, y, &v)) hits[i] = 1;
+                    radiance[i] += weight * v;
+                }
+            }
+        }
+    }
+    if (states_hit != nullptr) *states_hit = hi >= lo ? static_cast<int>(hi - lo + 1) : 0;
     return Finish(radiance, hits, cfg);
 }
 

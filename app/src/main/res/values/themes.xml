@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- One dark theme for the whole app. Two of its three screens are a camera viewfinder and a
+         full-screen optical frame, so a light theme would flash white between them. Colours come
+         from the wallpaper where the phone supports it (DynamicColors, applied in FileFlowApp);
+         these are the fallback. -->
+    <style name="Theme.FileFlow" parent="Theme.Material3.Dark.NoActionBar">
+        <item name="colorPrimary">@color/ff_primary</item>
+        <item name="colorOnPrimary">@color/ff_on_primary</item>
+        <item name="colorPrimaryContainer">@color/ff_primary_container</item>
+        <item name="colorOnPrimaryContainer">@color/ff_on_primary_container</item>
+        <item name="colorSecondaryContainer">@color/ff_secondary_container</item>
+        <item name="colorOnSecondaryContainer">@color/ff_on_secondary_container</item>
+        <item name="colorTertiary">@color/ff_tertiary</item>
+        <item name="android:colorBackground">@color/ff_background</item>
+        <item name="colorSurface">@color/ff_background</item>
+        <item name="colorSurfaceContainer">@color/ff_surface_container</item>
+        <item name="colorSurfaceContainerHigh">@color/ff_surface_container_high</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowLightStatusBar">false</item>
+    </style>
+
+    <!-- The transmitter and the receiver: nothing but the picture. -->
+    <style name="Theme.FileFlow.Fullscreen" parent="Theme.FileFlow">
+        <item name="android:windowBackground">@android:color/black</item>
+    </style>
+</resources>

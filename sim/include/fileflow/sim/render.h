@@ -140,4 +140,28 @@ struct MotionConfig {
                                   const OpticalRenderConfig& cfg, const MotionConfig& m,
                                   double t_start, Homography* truth);
 
+// ---------------------------------------------------------------- unsynchronised capture
+
+// A camera and a display that do NOT share a clock (EXP-006's `Pc`, unmodelled until F60).
+//
+// Everything else in the simulator renders one display state per capture: the camera is assumed to
+// see each state exactly once, whole. A real phone camera free-runs at its own rate, and its rolling
+// shutter reads rows over `readout_s`, each row integrating for `exposure_s`. Any row whose exposure
+// window straddles a state change records a time-weighted MIX of the two states -- a torn capture,
+// one part of the frame from each state and a smeared band where they overlap.
+//
+// Static geometry by design: this isolates the TIMING term. Motion is RenderMoving's job.
+struct CaptureTiming {
+    double exposure_s = 0.016;
+    double readout_s = 0.030;  // first row to last row
+    int bands = 64;            // row bands, each sampled at its own time
+};
+
+// `state(k)` is display state k, shown over [k/fd, (k+1)/fd). The capture's first row starts
+// exposing at `t_start`. `states_hit`, if non-null, receives how many distinct states contributed.
+[[nodiscard]] Image8 RenderUnsynced(const CellMatrix& (*state)(void* ctx, std::int64_t k), void* ctx,
+                                    double fd, const GridGeometry& g,
+                                    const OpticalRenderConfig& cfg, const CaptureTiming& ct,
+                                    double t_start, Homography* truth, int* states_hit = nullptr);
+
 }  // namespace fileflow::sim

@@ -1,213 +1,532 @@
 package dev.fileflow
 
+import android.content.ContentUris
 import android.content.Intent
-import android.graphics.Color
+import android.content.res.ColorStateList
+import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
+import android.provider.MediaStore
 import android.view.Gravity
 import android.view.View
-import android.widget.Button
+import android.widget.FrameLayout
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
-import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
-import dev.fileflow.probe.CapabilityProbe
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowCompat
+import com.google.android.material.bottomnavigation.BottomNavigationView
+import com.google.android.material.button.MaterialButton
+import com.google.android.material.button.MaterialButtonToggleGroup
+import dev.fileflow.rx.LiveDecoder
+import dev.fileflow.ui.Ui.Style
+import dev.fileflow.ui.Ui.button
+import dev.fileflow.ui.Ui.card
+import dev.fileflow.ui.Ui.dp
+import dev.fileflow.ui.Ui.helpButton
+import dev.fileflow.ui.Ui.matchWidth
+import dev.fileflow.ui.Ui.showHelp
+import dev.fileflow.ui.Ui.space
+import dev.fileflow.ui.Ui.text
+import dev.fileflow.ui.Ui.themeColor
+import dev.fileflow.ui.Ui.title
 
 /**
- * The app's front door.
+ * The app's front door: four tabs, each one screen with no scrolling.
  *
- * ## Why this exists
+ *  - **Send** and **Receive** -- the two things a person does, each a single action on one screen.
+ *  - **Received** -- what has arrived, to open again.
+ *  - **Settings** -- the speed choice, how it works, the device check; and the place anything
+ *    added later goes, so the operational screens stay one tap deep.
  *
- * Until now every screen was reachable only through `adb shell am start`, and the launcher pointed at
- * the capability probe — so a person holding the phone got a wall of monospace diagnostics and no way
- * to reach the transmitter, the receiver, or the aiming help. During a real two-device test the
- * receiver showed the capture report while the operator was trying to line up a camera, which is the
- * opposite of useful.
+ * The previous version stacked everything on one scrolling page, and the button someone came for
+ * was below the fold.
  *
- * The three buttons are the three things a person actually does. Everything remains scriptable: the
- * activities still take the same intent extras, and this screen only supplies sensible defaults.
- *
- * ## The grid is chosen here, not assumed
- *
- * The grid must have an integer cell pitch on the DEVICE THAT TRANSMITS, and that is device-dependent
- * (DEVICE-MATRIX). Worse, an app does not necessarily get the panel's native resolution — a request
- * for 1440×3120 came back as 1080×2340 on the reference device, which made the charter grid fractional
- * (F31). So the transmitter picks its own pitch at runtime from the surface it is actually given, and
- * the choice offered here is a *grid*, with the pitch left to the renderer.
+ * Everything remains scriptable: the activities take the same intent extras, and this screen only
+ * supplies defaults. The grid is the sender's choice alone (the speed setting); the receiver
+ * detects it (F58), and the transmitter picks its pixel pitch from the surface it is given (F31).
  */
 class MainActivity : AppCompatActivity() {
 
-    private var cols = 120
-    private var rows = 260
+    private var speed = Speed.DEFAULT
+    private lateinit var nav: BottomNavigationView
+    private lateinit var speedLabel: MaterialButton
+    private val pages = HashMap<Int, View>()
+    private var receivedList: LinearLayout? = null
+
+    private val pickFile = registerForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.OpenDocument(),
+    ) { uri -> if (uri != null) send(uri) }
+
+    /** Opens the transmitter on [uri], or on the generated test file when null. */
+    private fun send(uri: android.net.Uri?) {
+        val i = Intent(this, TransmitActivity::class.java)
+            .putExtra("cols", speed.cols)
+            .putExtra("rows", speed.rows)
+            .putExtra("stateRate", speed.statesPerSecond)
+        if (uri != null) {
+            // The picker's grant covers this activity; the flag passes it on to the transmitter.
+            i.setData(uri).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        startActivity(i)
+    }
+
+    private fun receive() {
+        // LIVE: decode on the phone until the file verifies (C13b). The receiver chooses its own
+        // capture rate, exposure and grid; the sender's grid is only tried first. Scripted
+        // experiments still reach the recording path by launching CaptureActivity without `live`.
+        // 4096 wide: resolution sets how far away the phone can be held (F57).
+        startActivity(
+            Intent(this, CaptureActivity::class.java)
+                .putExtra("gridCols", speed.cols)
+                .putExtra("gridRows", speed.rows)
+                .putExtra("live", true)
+                .putExtra("maxWidth", 4096)
+        )
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        WindowCompat.setDecorFitsSystemWindows(window, false)
+        val prefs = getPreferences(MODE_PRIVATE)
+        speed = Speed.named(prefs.getString(PREF_SPEED, null))
+
+        val content = FrameLayout(this)
+        pages[TAB_SEND] = sendPage()
+        pages[TAB_RECEIVE] = receivePage()
+        pages[TAB_RECEIVED] = receivedPage()
+        pages[TAB_SETTINGS] = settingsPage(prefs)
+        pages.values.forEach { content.addView(it, FrameLayout.LayoutParams(MATCH, MATCH)) }
+
+        nav = BottomNavigationView(this).apply {
+            menu.add(0, TAB_SEND, 0, "Send").setIcon(R.drawable.ic_upload)
+            menu.add(0, TAB_RECEIVE, 1, "Receive").setIcon(R.drawable.ic_camera)
+            menu.add(0, TAB_RECEIVED, 2, "Received").setIcon(R.drawable.ic_folder)
+            menu.add(0, TAB_SETTINGS, 3, "Settings").setIcon(R.drawable.ic_settings)
+            labelVisibilityMode = com.google.android.material.navigation.NavigationBarView
+                .LABEL_VISIBILITY_LABELED
+            setOnItemSelectedListener { item ->
+                show(item.itemId)
+                prefs.edit().putInt(PREF_TAB, item.itemId).apply()
+                true
+            }
+        }
 
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(Color.parseColor("#101418"))
-            setPadding(48, 72, 48, 48)
+            setBackgroundColor(themeColor(android.R.attr.colorBackground))
+            addView(content, LinearLayout.LayoutParams(MATCH, 0, 1f))
+            addView(nav, LinearLayout.LayoutParams(MATCH, WRAP))
         }
-
-        root.addView(heading("FileFlow"))
-        root.addView(
-            body(
-                "Phone-to-phone file transfer over light alone — no Wi-Fi, Bluetooth, NFC or cable. " +
-                    "One screen transmits, one camera receives."
-            )
-        )
-
-        // An honest status line. The probe returns UNSUPPORTED on every device today because nothing
-        // has been VERIFIED by measurement, and that is the correct answer rather than a defect
-        // (RISK-011). Saying so here is better than letting a user infer the app is broken.
-        root.addView(spacer(24))
-        root.addView(body(statusLine()))
-        root.addView(spacer(32))
-
-        root.addView(gridChooser())
-        root.addView(spacer(32))
-
-        root.addView(
-            bigButton("Send", "#2E7D32") {
-                startActivity(
-                    Intent(this, TransmitActivity::class.java)
-                        .putExtra("cols", cols)
-                        .putExtra("rows", rows)
-                        .putExtra("divisor", 8)
-                        .putExtra("seconds", 120)
-                )
-            }
-        )
-        root.addView(caption("Shows the optical frames. Point the other phone's camera at this screen."))
-
-        root.addView(spacer(20))
-        root.addView(
-            bigButton("Receive", "#1565C0") {
-                // Aiming is ON by default here. A person holding a camera needs help pointing it far
-                // more than they need a diagnostics dump, and receiving starts itself once the
-                // geometry is workable.
-                //
-                // LIVE: decode on the phone until the file verifies, with progress on screen (C13b).
-                // This button used to record 120 frames -- four seconds -- for desktop analysis, which
-                // could not deliver a file and could not say whether anything had worked. Scripted
-                // experiments still get the recording path: they launch CaptureActivity without
-                // `live`.
-                startActivity(
-                    Intent(this, CaptureActivity::class.java)
-                        .putExtra("gridCols", cols)
-                        .putExtra("gridRows", rows)
-                        .putExtra("aim", true)
-                        .putExtra("live", true)
-                        .putExtra("fps", 30)
-                        .putExtra("maxWidth", 2688)
-                        .putExtra("exposureNs", 16_000_000L)
-                )
-            }
-        )
-        root.addView(caption("Lines up the camera, then receives until the file is verified. " +
-                             "If the phone drifts, it pauses — nothing received is lost."))
-
-        root.addView(spacer(20))
-        root.addView(
-            bigButton("Check this device", "#455A64") {
-                startActivity(Intent(this, ProbeActivity::class.java))
-            }
-        )
-        root.addView(caption("What the camera and display claim they can do, and what that is worth."))
-
-        root.addView(spacer(36))
-        root.addView(
-            caption(
-                "Nothing here measures goodput. Fd, Pc and the density limit are all still " +
-                    "unmeasured on real hardware, so no rate this app prints is a result."
-            )
-        )
-
-        setContentView(ScrollView(this).apply {
-            setBackgroundColor(Color.parseColor("#101418"))
-            addView(root)
-        })
+        // Top and sides only: the navigation bar pads itself for the gesture area.
+        ViewCompat.setOnApplyWindowInsetsListener(root) { v, insets ->
+            val i = insets.getInsets(SYSTEM_INSETS)
+            v.setPadding(i.left, i.top, i.right, 0)
+            insets
+        }
+        setContentView(root)
+        val tab = prefs.getInt(PREF_TAB, TAB_SEND).takeIf { it in pages } ?: TAB_SEND
+        nav.selectedItemId = tab
+        show(tab, animate = false)
+        if (savedInstanceState == null) handleShortcut(intent)
     }
 
-    /** Grid choice, offered as the two options DEVICE-MATRIX recommends plus a denser one. */
-    private fun gridChooser(): View {
-        val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        val label = body("Grid")
-        val options = listOf(
-            120 to 260,   // square cells on a 1080x2340 surface, integer at 1440x3120 too (F31)
-            144 to 240,   // the charter grid; integer only at the panel's native resolution
-            180 to 390,   // densest integer-pitch grid the reference panel permits
-        )
-        val buttons = ArrayList<Button>()
-        options.forEach { (c, r) ->
-            val b = Button(this).apply {
-                text = "${c}x$r"
-                textSize = 15f
-                setOnClickListener {
-                    cols = c
-                    rows = r
-                    buttons.forEach { it.alpha = 0.45f }
-                    alpha = 1.0f
-                }
-            }
-            buttons.add(b)
-            row.addView(b, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-        }
-        buttons.forEachIndexed { i, b -> b.alpha = if (i == 0) 1.0f else 0.45f }
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        handleShortcut(intent)
+    }
 
+    /** Launcher shortcuts (res/xml/shortcuts.xml): straight to receiving, or to the picker. */
+    private fun handleShortcut(i: Intent?) {
+        when (i?.action) {
+            ACTION_RECEIVE -> receive()
+            ACTION_SEND_FILE -> {
+                nav.selectedItemId = TAB_SEND
+                pickFile.launch(arrayOf("*/*"))
+            }
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        refreshReceived()
+    }
+
+    private fun show(tab: Int, animate: Boolean = true) {
+        pages.forEach { (id, page) ->
+            if (id == tab) {
+                if (page.visibility != View.VISIBLE && animate) {
+                    page.alpha = 0f
+                    page.translationY = dp(8).toFloat()
+                    page.animate().alpha(1f).translationY(0f).setDuration(160L).start()
+                }
+                page.visibility = View.VISIBLE
+            } else {
+                page.visibility = View.GONE
+            }
+        }
+        if (tab == TAB_RECEIVED) refreshReceived()
+    }
+
+    // ------------------------------------------------------------------------------------ pages
+
+    /** A page title and its "?", the same on every tab. */
+    private fun header(name: String, helpTitle: String? = null, help: String? = null) =
+        LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(20), dp(12), dp(8), dp(4))
+            addView(title(name, 28f), LinearLayout.LayoutParams(0, WRAP, 1f))
+            if (help != null) addView(helpButton(helpTitle ?: name, help))
+        }
+
+    /** A large icon in a soft circle: the one picture on an action page. */
+    private fun hero(icon: Int) = ImageView(this).apply {
+        setImageResource(icon)
+        imageTintList = ColorStateList.valueOf(
+            themeColor(com.google.android.material.R.attr.colorOnPrimaryContainer),
+        )
+        background = GradientDrawable().apply {
+            shape = GradientDrawable.OVAL
+            setColor(themeColor(com.google.android.material.R.attr.colorPrimaryContainer))
+        }
+        val p = dp(30)
+        setPadding(p, p, p, p)
+        layoutParams = LinearLayout.LayoutParams(dp(120), dp(120)).apply {
+            gravity = Gravity.CENTER_HORIZONTAL
+        }
+    }
+
+    /** Header at the top, the content centred in what is left, actions at the bottom. */
+    private fun actionPage(header: View, middle: List<View>, actions: List<View>) =
+        LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(header)
+            addView(LinearLayout(context).apply {
+                orientation = LinearLayout.VERTICAL
+                gravity = Gravity.CENTER
+                setPadding(dp(28), 0, dp(28), 0)
+                middle.forEach { addView(it) }
+            }, LinearLayout.LayoutParams(MATCH, 0, 1f))
+            addView(LinearLayout(context).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(dp(20), 0, dp(20), dp(16))
+                actions.forEach { addView(it) }
+            })
+        }
+
+    private fun centred(v: android.widget.TextView) = v.apply { gravity = Gravity.CENTER }
+
+    private fun sendPage(): View {
+        speedLabel = button("", R.drawable.ic_tune, Style.Text) {
+            nav.selectedItemId = TAB_SETTINGS
+        }.apply { layoutParams = matchWidth(dp(4)) }
+        updateSpeedLabel()
+        return actionPage(
+            header("Send", "How it works", HOW_IT_WORKS),
+            listOf(
+                hero(R.drawable.ic_upload),
+                space(20),
+                centred(title("Send a file", 22f)),
+                space(6),
+                centred(text("It appears on this screen as light for the other phone to scan.")),
+            ),
+            listOf(
+                button("Choose a file", R.drawable.ic_file) { pickFile.launch(arrayOf("*/*")) }
+                    .apply { layoutParams = matchWidth() },
+                button("Send a test file", R.drawable.ic_bolt, Style.Tonal) { send(null) }
+                    .apply { layoutParams = matchWidth(dp(10)) },
+                speedLabel,
+            ),
+        )
+    }
+
+    private fun updateSpeedLabel() {
+        if (::speedLabel.isInitialized) speedLabel.text = "Speed: ${speed.label}"
+    }
+
+    private fun receivePage(): View = actionPage(
+        header("Receive", "Tips", RECEIVE_HELP),
+        listOf(
+            hero(R.drawable.ic_camera),
+            space(20),
+            centred(title("Receive a file", 22f)),
+            space(6),
+            centred(text("Fill this camera's picture with the sending screen.")),
+        ),
+        listOf(
+            button("Start receiving", R.drawable.ic_camera) { receive() }
+                .apply { layoutParams = matchWidth() },
+        ),
+    )
+
+    private fun receivedPage(): View {
+        val list = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(16), dp(4), dp(16), dp(16))
+        }
+        receivedList = list
         return LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            addView(label)
-            addView(row)
-            addView(
-                caption(
-                    "Denser is faster only until the receiver cannot resolve it. The transmitter " +
-                        "picks an exact integer pitch for whatever surface it is given."
-                )
-            )
+            addView(header("Received", "Received files",
+                "Verified files are saved to Downloads › ${LiveDecoder.DOWNLOADS_SUBDIR}. " +
+                    "Tap one to open it, or use your Files app."))
+            // A list may scroll -- it is the one thing here that grows.
+            addView(ScrollView(context).apply { addView(list) },
+                LinearLayout.LayoutParams(MATCH, 0, 1f))
         }
     }
 
-    private fun statusLine(): String = runCatching {
-        val (claims, modes) = CapabilityProbe.readClaims(this)
-        val hs = modes.count { it.highSpeed }
-        val cpu = modes.filter { it.cpuReadable }.maxOfOrNull { it.maxFps } ?: 0.0
-        "This phone: ${claims.panelWidth}x${claims.panelHeight} at ${claims.maxRefreshHz.toInt()} Hz, " +
-            "camera up to ${cpu.toInt()} fps readable" + if (hs > 0) ", $hs high-speed mode(s)." else "."
-    }.getOrElse { "This phone: capabilities unavailable (${it.javaClass.simpleName})." }
-
-    // ---------------------------------------------------------------- small view helpers
-
-    private fun heading(s: String) = TextView(this).apply {
-        text = s
-        textSize = 34f
-        setTextColor(Color.WHITE)
-        setTypeface(typeface, android.graphics.Typeface.BOLD)
+    /** Files this app saved to Downloads/FileFlow, newest first. */
+    private fun refreshReceived() {
+        val list = receivedList ?: return
+        list.removeAllViews()
+        data class Item(
+            val uri: android.net.Uri, val name: String, val bytes: Long, val mime: String?,
+            val addedS: Long,
+        )
+        val items = ArrayList<Item>()
+        runCatching {
+            contentResolver.query(
+                MediaStore.Downloads.EXTERNAL_CONTENT_URI,
+                arrayOf(MediaStore.MediaColumns._ID, MediaStore.MediaColumns.DISPLAY_NAME,
+                        MediaStore.MediaColumns.SIZE, MediaStore.MediaColumns.MIME_TYPE,
+                        MediaStore.MediaColumns.DATE_ADDED),
+                "${MediaStore.MediaColumns.RELATIVE_PATH} LIKE ?",
+                arrayOf("%/${LiveDecoder.DOWNLOADS_SUBDIR}/%"),
+                "${MediaStore.MediaColumns.DATE_ADDED} DESC",
+            )?.use { c ->
+                while (c.moveToNext() && items.size < 100) {
+                    items += Item(
+                        ContentUris.withAppendedId(MediaStore.Downloads.EXTERNAL_CONTENT_URI, c.getLong(0)),
+                        c.getString(1) ?: "file", c.getLong(2), c.getString(3), c.getLong(4),
+                    )
+                }
+            }
+        }
+        if (items.isEmpty()) {
+            list.addView(centred(text("Nothing received yet.")).apply { setPadding(0, dp(48), 0, 0) },
+                matchWidth())
+            return
+        }
+        items.forEach { item ->
+            val mime = item.mime ?: "application/octet-stream"
+            val whenText = android.text.format.DateUtils.getRelativeTimeSpanString(
+                item.addedS * 1000, System.currentTimeMillis(),
+                android.text.format.DateUtils.MINUTE_IN_MILLIS,
+            )
+            list.addView(row(
+                R.drawable.ic_file, item.name, "${TransmitActivity.formatBytes(item.bytes)} · $whenText",
+                onLongClick = { anchor -> fileMenu(anchor, item.uri, item.name, mime) },
+                thumbnailOf = if (mime.startsWith("image/") || mime.startsWith("video/")) item.uri else null,
+            ) {
+                val view = Intent(Intent.ACTION_VIEW)
+                    .setDataAndType(item.uri, mime)
+                    .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                runCatching { startActivity(Intent.createChooser(view, item.name)) }
+            }, matchWidth(dp(8)))
+        }
+        list.addView(centred(text("Long-press a file to share or delete it.", 13f))
+            .apply { setPadding(0, dp(12), 0, 0) }, matchWidth())
     }
 
-    private fun body(s: String) = TextView(this).apply {
-        text = s
-        textSize = 16f
-        setTextColor(Color.parseColor("#CFD8DC"))
+    /** Share or delete a received file. */
+    private fun fileMenu(anchor: View, uri: android.net.Uri, name: String, mime: String) {
+        android.widget.PopupMenu(this, anchor).apply {
+            menu.add("Share").setOnMenuItemClickListener {
+                val send = Intent(Intent.ACTION_SEND)
+                    .setType(mime)
+                    .putExtra(Intent.EXTRA_STREAM, uri)
+                    .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                runCatching { startActivity(Intent.createChooser(send, name)) }
+                true
+            }
+            menu.add("Delete").setOnMenuItemClickListener {
+                com.google.android.material.dialog.MaterialAlertDialogBuilder(this@MainActivity)
+                    .setTitle("Delete $name?")
+                    .setMessage("It will be removed from Downloads › ${LiveDecoder.DOWNLOADS_SUBDIR}.")
+                    .setNegativeButton("Cancel", null)
+                    .setPositiveButton("Delete") { _, _ ->
+                        // Files this app saved are its own to delete. One saved by an earlier
+                        // install is not, and Android would need the person's consent; the Files
+                        // app is the honest route for that rare case.
+                        val ok = runCatching { contentResolver.delete(uri, null, null) > 0 }
+                            .getOrDefault(false)
+                        if (!ok) {
+                            android.widget.Toast.makeText(
+                                this@MainActivity, "Delete it from the Files app.",
+                                android.widget.Toast.LENGTH_LONG,
+                            ).show()
+                        }
+                        refreshReceived()
+                    }
+                    .show()
+                true
+            }
+            show()
+        }
     }
 
-    private fun caption(s: String) = TextView(this).apply {
-        text = s
-        textSize = 13f
-        setTextColor(Color.parseColor("#78909C"))
-        setPadding(4, 6, 4, 0)
+    private fun settingsPage(prefs: android.content.SharedPreferences): View {
+        val toggle = MaterialButtonToggleGroup(this).apply {
+            isSingleSelection = true
+            isSelectionRequired = true
+            Speed.entries.forEach { s ->
+                // Outlined style, untouched: inside a toggle group it is what draws the checked
+                // segment filled and the others clear.
+                addView(MaterialButton(
+                    context, null, com.google.android.material.R.attr.materialButtonOutlinedStyle,
+                ).apply {
+                    id = View.generateViewId()
+                    tag = s
+                    text = s.label
+                    isAllCaps = false
+                    textSize = 14f
+                    minHeight = dp(48)
+                    maxLines = 1
+                    // The default 24 dp side padding truncated "Steady" to "Ste…".
+                    setPaddingRelative(dp(4), paddingTop, dp(4), paddingBottom)
+                }, LinearLayout.LayoutParams(0, WRAP, 1f))
+            }
+            check((0 until childCount).map { getChildAt(it) }.first { it.tag == speed }.id)
+            addOnButtonCheckedListener { group, id, checked ->
+                if (!checked) return@addOnButtonCheckedListener
+                speed = group.findViewById<View>(id).tag as Speed
+                prefs.edit().putString(PREF_SPEED, speed.name).apply()
+                updateSpeedLabel()
+            }
+        }
+        val body = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(16), dp(4), dp(16), dp(16))
+            addView(card(
+                LinearLayout(context).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
+                    addView(title("Sending speed", 18f), LinearLayout.LayoutParams(0, WRAP, 1f))
+                    addView(helpButton("Sending speed", SPEED_HELP))
+                },
+                space(8),
+                toggle.apply { layoutParams = matchWidth() },
+            ), matchWidth())
+            addView(row(R.drawable.ic_help, "How it works", null) {
+                showHelp("How it works", HOW_IT_WORKS)
+            }, matchWidth(dp(12)))
+            addView(row(R.drawable.ic_tune, "Device check", "What this phone's camera and screen can do") {
+                startActivity(Intent(this@MainActivity, ProbeActivity::class.java))
+            }, matchWidth(dp(8)))
+            addView(text("Version ${runCatching {
+                packageManager.getPackageInfo(packageName, 0).versionName
+            }.getOrNull() ?: "?"}", 13f).apply {
+                gravity = Gravity.CENTER
+                setPadding(0, dp(20), 0, 0)
+            }, matchWidth())
+        }
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(header("Settings"))
+            addView(body)
+        }
     }
 
-    private fun spacer(h: Int) = View(this).apply {
-        layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, h)
-    }
+    /** A tappable list row: icon, title, optional subtitle, chevron. */
+    private fun row(
+        icon: Int,
+        title: String,
+        subtitle: String?,
+        onLongClick: ((View) -> Unit)? = null,
+        thumbnailOf: android.net.Uri? = null,
+        onClick: () -> Unit,
+    ): View =
+        card(LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            val iconView = ImageView(context).apply {
+                setImageResource(icon)
+                imageTintList = ColorStateList.valueOf(
+                    themeColor(com.google.android.material.R.attr.colorOnSurfaceVariant),
+                )
+            }
+            val side = if (thumbnailOf != null) dp(48) else dp(24)
+            addView(iconView, LinearLayout.LayoutParams(side, side))
+            // A picture is recognised faster than its file name. Loaded off the main thread;
+            // the generic icon stays if the provider has no thumbnail to give.
+            if (thumbnailOf != null) {
+                iconView.scaleType = ImageView.ScaleType.CENTER_INSIDE
+                Thread {
+                    val bmp = runCatching {
+                        contentResolver.loadThumbnail(thumbnailOf, android.util.Size(dp(96), dp(96)), null)
+                    }.getOrNull() ?: return@Thread
+                    iconView.post {
+                        iconView.imageTintList = null
+                        iconView.scaleType = ImageView.ScaleType.CENTER_CROP
+                        iconView.clipToOutline = true
+                        iconView.outlineProvider = object : android.view.ViewOutlineProvider() {
+                            override fun getOutline(v: View, o: android.graphics.Outline) {
+                                o.setRoundRect(0, 0, v.width, v.height, dp(10).toFloat())
+                            }
+                        }
+                        iconView.setImageBitmap(bmp)
+                    }
+                }.start()
+            }
+            addView(LinearLayout(context).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(dp(16), 0, dp(8), 0)
+                addView(text(title, 16f, com.google.android.material.R.attr.colorOnSurface).apply {
+                    maxLines = 1
+                    ellipsize = android.text.TextUtils.TruncateAt.MIDDLE
+                })
+                if (subtitle != null) addView(text(subtitle, 13f))
+            }, LinearLayout.LayoutParams(0, WRAP, 1f))
+            addView(ImageView(context).apply {
+                setImageResource(R.drawable.ic_chevron)
+                imageTintList = ColorStateList.valueOf(
+                    themeColor(com.google.android.material.R.attr.colorOnSurfaceVariant),
+                )
+            }, LinearLayout.LayoutParams(dp(20), dp(20)))
+        }).apply {
+            radius = dp(20).toFloat()
+            (getChildAt(0) as? LinearLayout)?.setPadding(dp(18), dp(16), dp(14), dp(16))
+            isClickable = true
+            isFocusable = true
+            setOnClickListener { onClick() }
+            if (onLongClick != null) setOnLongClickListener { onLongClick(it); true }
+        }
 
-    private fun bigButton(label: String, colour: String, onClick: () -> Unit) = Button(this).apply {
-        text = label
-        textSize = 20f
-        setTextColor(Color.WHITE)
-        setBackgroundColor(Color.parseColor(colour))
-        gravity = Gravity.CENTER
-        setPadding(0, 36, 0, 36)
-        setOnClickListener { onClick() }
+    companion object {
+        const val ACTION_RECEIVE = "dev.fileflow.action.RECEIVE"
+        const val ACTION_SEND_FILE = "dev.fileflow.action.SEND_FILE"
+        private const val PREF_SPEED = "speed"
+        private const val PREF_TAB = "tab"
+        private const val TAB_SEND = 1
+        private const val TAB_RECEIVE = 2
+        private const val TAB_RECEIVED = 3
+        private const val TAB_SETTINGS = 4
+        private const val MATCH = LinearLayout.LayoutParams.MATCH_PARENT
+        private const val WRAP = LinearLayout.LayoutParams.WRAP_CONTENT
+
+        private const val HOW_IT_WORKS =
+            "One phone shows the file as a fast-changing pattern of light. The other phone's " +
+                "camera reads it.\n\n" +
+                "Nothing goes over Wi-Fi, Bluetooth, NFC or a cable. Every file is checked " +
+                "(SHA-256) before it is saved, so a received file is exactly the one sent.\n\n" +
+                "Received files go to Downloads › FileFlow."
+
+        private const val RECEIVE_HELP =
+            "• Fill the picture with the sending screen: its pattern just inside the corner " +
+                "marks. That is where it reads fastest.\n\n" +
+                "• Keep the two phones parallel.\n\n" +
+                "• It finds the sender's speed setting by itself.\n\n" +
+                "• If it pauses, just aim back: nothing received so far is lost."
+
+        private const val SPEED_HELP =
+            "Steady — large cells at 20 frames a second. Works with any phone's camera and is " +
+                "the easiest to hold.\n\n" +
+                "Fast — the same cells at 30 frames a second. Needs a receiver whose camera runs " +
+                "at 60 fps (most recent phones).\n\n" +
+                "Fastest — smaller cells at 30 frames a second. Hold the receiver steady, with the " +
+                "sending screen filling its picture.\n\n" +
+                "Only the sending phone needs this setting; the receiver works it out."
     }
 }

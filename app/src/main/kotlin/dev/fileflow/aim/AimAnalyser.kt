@@ -42,6 +42,9 @@ data class Aim(
      * mid-fraction falls to zero — so the blurriest frame scores best (F40).
      */
     val levelSeparation: Double,
+    /** The two class means, in sensor counts. What exposure control steers on. */
+    val darkLevel: Double,
+    val brightLevel: Double,
     /**
      * Level separation per tile across the screen, row-major, [tileCols] wide.
      *
@@ -103,6 +106,8 @@ class AimAnalyser {
             meanLuminance = slots[Slot.MeanLuminance.ordinal],
             threshold = slots[Slot.Threshold.ordinal].toInt(),
             levelSeparation = slots[Slot.LevelSeparation.ordinal],
+            darkLevel = slots[Slot.DarkLevel.ordinal],
+            brightLevel = slots[Slot.BrightLevel.ordinal],
             tiles = tiles.copyOf(),
             tileCols = TILE_COLS,
         )
@@ -113,7 +118,7 @@ class AimAnalyser {
         Verdict, LitFraction, BboxX, BboxY, BboxW, BboxH,
         ClippedLeft, ClippedTop, ClippedRight, ClippedBottom,
         RotationDeg, PxPerCell, BboxInflation, MidFraction, MeanLuminance, Threshold,
-        LevelSeparation,
+        LevelSeparation, DarkLevel, BrightLevel,
     }
 }
 

@@ -102,6 +102,10 @@ struct AimAdvice {
      * mid-fraction duly picked 40 cm for a subject at 20 cm (F40).
      */
     double level_separation = 0.0;
+    // The two class means themselves. The receiver's exposure control steers on these: the bright
+    // level away from clipping, the dark level down to black (C05).
+    double dark_level = 0.0;
+    double bright_level = 0.0;
 
     /**
      * Level separation measured per TILE over the screen's bounding box, row-major.

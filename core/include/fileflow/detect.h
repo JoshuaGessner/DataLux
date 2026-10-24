@@ -63,6 +63,31 @@ struct Detection {
     std::uint32_t threshold = 0;   // binarisation level actually used
 };
 
+// The screen's extent in the image: the bounding box of the connected bright structure that SPANS
+// THE MOST of the image (not the one with the most lit pixels), in pixels, inclusive. `valid` is false when nothing is lit at all.
+//
+// WHY NOT EVERY LIT PIXEL. Localisation and aiming both used to take the extremes of every pixel
+// above threshold anywhere in the frame. One desk lamp, window or ceiling light in view then
+// stretched the "screen" out to it: detection failed outright, and the aiming analyser reported
+// the screen as clipped at an edge it was nowhere near, forever, however well the phone was held.
+// A rig in a dark room never shows this; a person holding a phone in a lit room shows it
+// constantly (F56).
+//
+// The boundary ring is always lit and is one closed loop, so on a coarse block map it is one
+// connected component spanning the whole screen whatever the payload is -- a frame of zeros
+// included (F15). A light source separated from the screen by any dark gap is a different
+// component and is ignored. One touching the screen (glare on the glass) still merges with it;
+// marker verification remains the backstop for that.
+//
+// Bounded memory: the block map is at most kLitRegionMaxBlocks per side, whatever the image size
+// or content (F12).
+struct LitRegion {
+    int x0 = 0, y0 = 0, x1 = -1, y1 = -1;
+    bool valid = false;
+};
+inline constexpr int kLitRegionMaxBlocks = 128;
+[[nodiscard]] LitRegion LargestLitRegion(const ImageView8& img, std::uint32_t threshold);
+
 class ScreenDetector {
   public:
     static Result<ScreenDetector> Create(const FrameLayout& layout, DetectionConfig cfg = {});

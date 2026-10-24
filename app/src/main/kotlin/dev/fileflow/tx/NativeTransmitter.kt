@@ -16,7 +16,12 @@ class Transmitter private constructor(
     private var handle: Long,
     val cols: Int,
     val rows: Int,
+    /** The name the receiver is told — a display hint, which it sanitises. */
+    val fileName: String,
 ) : AutoCloseable {
+
+    /** Size of the file being sent, in bytes. */
+    val fileBytes: Long = NativeTransmitter.fileSize(handle)
 
     /**
      * One byte per cell, row-major — the exact layout the GL texture wants.
@@ -46,10 +51,28 @@ class Transmitter private constructor(
             nsym: Int = 32,
             payloadBytes: Int = 128 * 1024,
             seed: Long = 5,
+            name: String = TEST_FILE_NAME,
         ): Transmitter = Transmitter(
-            NativeTransmitter.open(cols, rows, nsym, payloadBytes, seed), cols, rows,
+            NativeTransmitter.open(
+                cols, rows, nsym, payloadBytes, seed, name.toByteArray(Charsets.UTF_8),
+            ),
+            cols, rows, name,
         )
+
+        /** Sends a real file: its bytes, and the name the receiver will save it under. */
+        fun openFile(cols: Int, rows: Int, nsym: Int, data: ByteArray, name: String): Transmitter =
+            Transmitter(
+                NativeTransmitter.openFile(cols, rows, nsym, data, name.toByteArray(Charsets.UTF_8)),
+                cols, rows, name,
+            )
+
+        /** What the receiver saves the generated test file as. */
+        const val TEST_FILE_NAME = "fileflow-test.bin"
     }
+
+    /** File bytes carried by each data frame — what a transfer-time estimate is built on. */
+    val symbolBytes: Int
+        get() = if (handle != 0L) NativeTransmitter.symbolBytes(handle) else -1
 
     /**
      * Renders the next display state into [cells].
@@ -92,8 +115,13 @@ class Transmitter private constructor(
 /** Raw external declarations. Use [Transmitter] rather than calling these directly. */
 internal object NativeTransmitter {
     @JvmStatic external fun open(
-        cols: Int, rows: Int, nsym: Int, payloadBytes: Int, seed: Long,
+        cols: Int, rows: Int, nsym: Int, payloadBytes: Int, seed: Long, nameUtf8: ByteArray,
     ): Long
+    @JvmStatic external fun openFile(
+        cols: Int, rows: Int, nsym: Int, data: ByteArray, nameUtf8: ByteArray,
+    ): Long
+    @JvmStatic external fun symbolBytes(handle: Long): Int
+    @JvmStatic external fun fileSize(handle: Long): Long
     @JvmStatic external fun nextFrame(handle: Long, dst: ByteBuffer): Int
     @JvmStatic external fun lastSequence(handle: Long): Int
     @JvmStatic external fun payloadSha256(handle: Long): String

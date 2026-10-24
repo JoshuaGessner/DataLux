@@ -101,8 +101,10 @@ class AimView(context: Context, private var cols: Int, private var rows: Int) : 
     }
 
     fun setGrid(c: Int, r: Int) {
+        if (c == cols && r == rows) return
         cols = c
         rows = r
+        postInvalidate()
     }
 
     fun setMessage(m: String) {
@@ -162,6 +164,33 @@ class AimView(context: Context, private var cols: Int, private var rows: Int) : 
         postInvalidate()
     }
 
+    /**
+     * False while receiving live: the top card then carries the one instruction that matters, and
+     * the aim verdict at the bottom would be a second, sometimes contradictory, voice ("move
+     * closer" under "receiving — 40%"). The facts stay, because they are how a person learns what
+     * a good hold looks like.
+     */
+    @Volatile var showGuidance = true
+
+    /** An extra line of facts under the aim's own, e.g. focus distance and ISO. */
+    @Volatile var extraFact: String? = null
+
+    /** Show the coverage map and the numbers. Off in the receive screen until asked for. */
+    @Volatile var details = true
+
+    /** The decoder has the screen (its markers matched): the simple outline turns green. */
+    @Volatile var locked = false
+
+    /** Status bar / cutout above and navigation bar below, which text must stay clear of. */
+    private var insetTop = 0f
+    private var insetBottom = 0f
+
+    fun setInsets(top: Float, bottom: Float) {
+        insetTop = top
+        insetBottom = bottom
+        postInvalidate()
+    }
+
     private var live: String? = null
     private var liveProgress = -1f
     private var liveColour = Color.parseColor("#69F0AE")
@@ -189,9 +218,9 @@ class AimView(context: Context, private var cols: Int, private var rows: Int) : 
         val lineH = 56f
         val lines = wrap(msg, 30)
         val barH = if (liveProgress >= 0f) 22f + pad else 0f
-        val blockH = pad * 2 + lines.size * lineH + barH
+        val blockH = insetTop + pad * 2 + lines.size * lineH + barH
         canvas.drawRect(0f, 0f, width.toFloat(), blockH, textScrim)
-        var ty = pad + 42f
+        var ty = insetTop + pad + 42f
         for (line in lines) {
             canvas.drawText(line, pad, ty, bigText)
             ty += lineH
@@ -214,11 +243,63 @@ class AimView(context: Context, private var cols: Int, private var rows: Int) : 
         invalidate()
     }
 
+    /**
+     * Corner marks showing where the sending screen should sit: filling the picture, in the shape
+     * of the sender's pattern. Filling the view is how people want to hold it -- the autofocus then
+     * has nothing else to choose, and the same framing is easy to repeat -- and it is where the
+     * cells are largest, 11 camera px against 3.5 at "a third of the picture" on the first 2.2 MB
+     * transfer, which ran at ten times the rate once it got there.
+     */
+    @Volatile var showFrameGuide = false
+
+    private val guidePaint = Paint().apply {
+        style = Paint.Style.STROKE
+        strokeWidth = 8f
+        strokeCap = Paint.Cap.ROUND
+        isAntiAlias = true
+    }
+
+    /**
+     * The part of this view not covered by the status card and the buttons, in view pixels. The
+     * picture runs edge to edge beneath them, but a screen lined up under the card is a screen the
+     * person cannot see, so the guide fits the visible part.
+     */
+    var guideClear: android.graphics.RectF? = null
+        set(v) { field = v; postInvalidate() }
+
+    private fun drawFrameGuide(canvas: Canvas, picture: android.graphics.RectF) {
+        val image = android.graphics.RectF(picture)
+        guideClear?.let { if (!image.intersect(it)) return }
+        // Tall, as a phone held upright shows its pattern to a phone held upright.
+        val aspect = rows.toFloat() / cols.coerceAtLeast(1)
+        var h = image.height() * GUIDE_FILL
+        var w = h / aspect
+        if (w > image.width() * GUIDE_FILL) {
+            w = image.width() * GUIDE_FILL
+            h = w * aspect
+        }
+        val l = image.centerX() - w / 2f
+        val t = image.centerY() - h / 2f
+        val r = l + w
+        val b = t + h
+        val arm = minOf(w, h) * 0.14f
+        guidePaint.color = if (locked) Color.parseColor("#69F0AE") else Color.parseColor("#B3FFFFFF")
+        for ((x, y, dx, dy) in listOf(
+            arrayOf(l, t, 1f, 1f), arrayOf(r, t, -1f, 1f),
+            arrayOf(l, b, 1f, -1f), arrayOf(r, b, -1f, -1f),
+        )) {
+            canvas.drawLine(x, y, x + dx * arm, y, guidePaint)
+            canvas.drawLine(x, y, x, y + dy * arm, guidePaint)
+        }
+    }
+
     override fun onDraw(canvas: Canvas) {
         // NO scrim over the image. This canvas is the preview itself now, and dimming the whole of
         // it would dim the thing being aimed. Text gets a local scrim behind it instead, so it stays
         // legible over a bright screen without obscuring the rest.
+        if (showFrameGuide && !details) contentRect?.let { drawFrameGuide(canvas, it) }
         val a = aim
+        if (a == null && !details) return
         if (a == null) {
             drawTextBlock(canvas, listOf(message ?: ""), emptyList())
             drawLive(canvas)
@@ -249,10 +330,26 @@ class AimView(context: Context, private var cols: Int, private var rows: Int) : 
         }
         screenPaint.color = colour
 
+        // The simple view, for someone receiving a file: only an outline round the screen, green
+        // once the decoder has actually locked on to it. The coverage map, clipped-edge bars and
+        // numbers are for working out WHY something fails -- one tap away, not in the way.
+        if (!details) {
+            if (a.bboxW > 0 && a.bboxH > 0 && a.verdict != AimVerdict.NoScreenFound) {
+                val (bx0, by0) = rotatePoint(a.bboxX, a.bboxY)
+                val (bx1, by1) = rotatePoint(a.bboxX + a.bboxW, a.bboxY + a.bboxH)
+                screenPaint.color = if (locked) Color.parseColor("#69F0AE")
+                                    else Color.parseColor("#99FFFFFF")
+                canvas.drawRoundRect(
+                    ox + minOf(bx0, bx1) * scale, oy + minOf(by0, by1) * scale,
+                    ox + maxOf(bx0, bx1) * scale, oy + maxOf(by0, by1) * scale,
+                    24f, 24f, screenPaint,
+                )
+            }
+            return
+        }
+
         // Under the outline, so the box edges stay readable over it.
-
         drawCoverage(canvas, a, ox, oy, scale)
-
 
         if (a.bboxW > 0 && a.bboxH > 0) {
             // Rotate the box's corners into display space, then take their extent. Rotating the
@@ -299,13 +396,14 @@ class AimView(context: Context, private var cols: Int, private var rows: Int) : 
         if (left) canvas.drawLine(l, t, l, bb, edgePaint)
         if (right) canvas.drawLine(rr, t, rr, bb, edgePaint)
 
-        val facts = listOf(
+        val facts = listOfNotNull(
             "px/cell %.1f    rotation %.0f°    screen %.0f%%".format(
                 a.pxPerCell, a.rotationDeg, a.litFraction * 100.0),
-            "brightness %.0f    blur %.2f    grid ${cols}x$rows".format(
-                a.meanLuminance, a.midFraction),
+            "levels %.0f/%.0f    blur %.2f    grid ${cols}x$rows".format(
+                a.darkLevel, a.brightLevel, a.midFraction),
+            extraFact,
         )
-        drawTextBlock(canvas, wrap(a.guidance, 30), facts)
+        drawTextBlock(canvas, if (showGuidance) wrap(a.guidance, 30) else emptyList(), facts)
         drawLive(canvas)
     }
 
@@ -323,7 +421,7 @@ class AimView(context: Context, private var cols: Int, private var rows: Int) : 
         // The banner line counts too. It used to be drawn without being measured, so with a banner
         // showing the last line of text was pushed 46 px off the bottom of the screen.
         val bannerH = if (banner != null) 46f else 0f
-        val blockH = pad * 2 + bannerH + lines.size * lineH + facts.size * factH
+        val blockH = pad * 2 + bannerH + lines.size * lineH + facts.size * factH + insetBottom
         val top = height - blockH
         canvas.drawRect(0f, top, width.toFloat(), height.toFloat(), textScrim)
 
@@ -367,5 +465,13 @@ class AimView(context: Context, private var cols: Int, private var rows: Int) : 
         }
         if (line.isNotEmpty()) out.add(line.toString())
         return out
+    }
+
+    private companion object {
+        /**
+         * Share of the picture the guide spans: the screen fills it, with room left for a hand's
+         * drift before an edge leaves the picture and the frame is clipped.
+         */
+        const val GUIDE_FILL = 0.92f
     }
 }

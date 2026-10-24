@@ -265,6 +265,57 @@ TEST(ScreenDetector, RefusesASmallBrightDistractor) {
     EXPECT_EQ(det.value().Detect(img.view()).error(), Error::kMarkersNotFound);
 }
 
+TEST(ScreenDetector, LocatesAScreenWithALampElsewhereInTheView) {
+    // F56. Every lit pixel used to vote for the corners, so one light source anywhere in the frame
+    // pulled a corner out to itself and detection failed -- a rig in a dark room never sees it, a
+    // person in a lit room sees it constantly. Two distractors, at different edges.
+    const auto layout = MakeLayout();
+    const auto cells = RenderFrame(layout);
+    const int w = kGrid.cols * kPx + 320;
+    const int h = kGrid.rows * kPx + 200;
+    const std::array<Point2, 4> quad{Point2{60, 100}, Point2{60.0 + kGrid.cols * kPx, 100},
+                                     Point2{60.0 + kGrid.cols * kPx, 100.0 + kGrid.rows * kPx},
+                                     Point2{60, 100.0 + kGrid.rows * kPx}};
+    Image8 img = Scene(cells, quad, w, h);
+    for (int y = 10; y < 160; ++y) {
+        for (int x = w - 120; x < w; ++x) img.set(x, y, 255);  // a window, top right
+    }
+    for (int y = h - 50; y < h; ++y) {
+        for (int x = 0; x < 200; ++x) img.set(x, y, 240);  // a lamp, bottom left
+    }
+
+    auto det = ScreenDetector::Create(layout, {});
+    ASSERT_TRUE(det.ok());
+    auto d = det.value().Detect(img.view());
+    ASSERT_TRUE(d.ok()) << ErrorName(d.error());
+    for (std::size_t i = 0; i < 4; ++i) {
+        EXPECT_NEAR(d.value().quad[i].x, quad[i].x, 2.0) << "corner " << i;
+        EXPECT_NEAR(d.value().quad[i].y, quad[i].y, 2.0) << "corner " << i;
+    }
+}
+
+TEST(LargestLitRegion, FindsTheScreenNotTheLampAndIsBoundedOnAHugeFrame) {
+    Image8 img(4000, 3000, 6);
+    for (int y = 500; y < 2500; ++y) {  // the screen's ring
+        for (int x = 800; x < 2000; ++x) {
+            if (y < 510 || y >= 2490 || x < 810 || x >= 1990) img.set(x, y, 220);
+        }
+    }
+    for (int y = 0; y < 400; ++y) {
+        for (int x = 3600; x < 4000; ++x) img.set(x, y, 255);  // a brighter, solid lamp
+    }
+    const LitRegion r = LargestLitRegion(img.view(), 128);
+    ASSERT_TRUE(r.valid);
+    // Within the one-block padding (32 px at this size) plus the block quantisation.
+    EXPECT_NEAR(r.x0, 800, 64);
+    EXPECT_NEAR(r.x1, 1999, 64);
+    EXPECT_NEAR(r.y0, 500, 64);
+    EXPECT_NEAR(r.y1, 2499, 64);
+
+    EXPECT_FALSE(LargestLitRegion(Image8(640, 480, 6).view(), 128).valid);
+    EXPECT_FALSE(LargestLitRegion(ImageView8{}, 128).valid);
+}
+
 TEST(ScreenDetector, RefusesRatherThanGuessWhenMarkersAreDestroyed) {
     // THE anti-confidence test. A blank bright rectangle has a perfectly good boundary but no
     // marker structure, so no rotation is better than any other. Returning a confident

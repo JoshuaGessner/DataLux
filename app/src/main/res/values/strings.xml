@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="shortcut_receive">Receive</string>
+    <string name="shortcut_receive_long">Receive a file</string>
+    <string name="shortcut_send">Send a file</string>
+    <string name="shortcut_send_long">Choose a file to send</string>
+</resources>

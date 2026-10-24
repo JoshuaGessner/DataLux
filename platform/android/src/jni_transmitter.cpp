@@ -34,6 +34,7 @@
 #include <memory>
 #include <new>
 #include <optional>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -58,26 +59,42 @@ struct TxHandle {
 
 TxHandle* FromJLong(jlong h) { return reinterpret_cast<TxHandle*>(h); }
 
-}  // namespace
-
-extern "C" {
-
-// Signature matches app/src/main/kotlin/dev/fileflow/tx/NativeTransmitter.kt.
+// Session id from the FILE, not a constant and not a random number.
 //
-// `payload_bytes` is generated deterministically from `seed` rather than passed in: a transmit run
-// needs a reproducible payload, and shipping the bytes across JNI to produce them here would be
-// pointless. The receiver checks the SHA-256 the in-band manifest carries (ADR-0015), so the
-// payload only has to be reproducible on the sending side.
-JNIEXPORT jlong JNICALL
-Java_dev_fileflow_tx_NativeTransmitter_open(JNIEnv* env, jclass /*unused*/, jint cols, jint rows,
-                                           jint nsym, jint payload_bytes, jlong seed) {
+// A constant meant two different files were the same session to a receiver: one that had started on
+// the first kept going on frames of the second, and the fountain decoder mixed them into a file
+// that could only fail verification. A random id per Send fixes that and breaks the opposite case --
+// pressing Send again for the SAME file (the sender timed out, or the app was reopened) would strand
+// a receiver half-way through, because every new frame would belong to a "different" transfer.
+// Hashing the content and name gives both: same file, same session, the receiver carries on; any
+// other file, a different session.
+std::uint32_t SessionIdFor(std::span<const std::uint8_t> payload, const std::string& name) {
+    fileflow::Sha256 h;
+    h.Update(payload);
+    h.Update({reinterpret_cast<const std::uint8_t*>(name.data()), name.size()});
+    const auto d = h.Finish();
+    const std::uint32_t id = (static_cast<std::uint32_t>(d[0]) << 24) |
+                             (static_cast<std::uint32_t>(d[1]) << 16) |
+                             (static_cast<std::uint32_t>(d[2]) << 8) | d[3];
+    return id != 0 ? id : 1u;
+}
+
+struct Prepared {
+    std::unique_ptr<fileflow::FrameLayout> layout;
+    fileflow::GridGeometry geom;
+    std::size_t symbol_size = 0;
+};
+
+// Everything about a transmit session that does not depend on the file. Throws and returns nullopt
+// on a configuration the grid cannot carry.
+std::optional<Prepared> Prepare(JNIEnv* env, jint cols, jint rows, jint nsym) {
     if (cols <= 0 || rows <= 0) {
         ThrowIllegalState(env, "cols and rows must both be positive");
-        return 0;
+        return std::nullopt;
     }
     if (nsym < 0 || nsym >= 255) {
         ThrowIllegalState(env, "nsym must be in [0, 255)");
-        return 0;
+        return std::nullopt;
     }
 
     const fileflow::GridGeometry geom{static_cast<std::uint32_t>(cols),
@@ -86,7 +103,7 @@ Java_dev_fileflow_tx_NativeTransmitter_open(JNIEnv* env, jclass /*unused*/, jint
     if (!layout_r.ok()) {
         ThrowIllegalState(env, std::string("layout: ") +
                                    std::string(fileflow::ErrorName(layout_r.error())));
-        return 0;
+        return std::nullopt;
     }
     auto layout = std::make_unique<fileflow::FrameLayout>(std::move(layout_r).value());
 
@@ -100,14 +117,9 @@ Java_dev_fileflow_tx_NativeTransmitter_open(JNIEnv* env, jclass /*unused*/, jint
                                    std::to_string(probe_mod.header_capacity_bytes()) +
                                    " bytes, header needs " +
                                    std::to_string(probe_hdr.coded_size()));
-        return 0;
+        return std::nullopt;
     }
 
-    // `payload_bytes <= 0` keeps the old default size -- 64 symbols' worth -- so runs stay
-    // comparable with captures taken before protocol v2. It no longer needs to "fill the block":
-    // v1 sent the zero padding past the end of the file, which rendered as near-black frames and
-    // confounded every optical measurement across them (F15, F39). v2 never transmits padding at
-    // all (ADR-0015), so any size is safe.
     std::size_t symbol_size = probe_mod.payload_capacity_bytes();
     if (nsym > 0) {
         fileflow::IntraFecParams fp;
@@ -116,21 +128,26 @@ Java_dev_fileflow_tx_NativeTransmitter_open(JNIEnv* env, jclass /*unused*/, jint
         if (!f.ok()) {
             ThrowIllegalState(env, std::string("intra-frame FEC: ") +
                                        std::string(fileflow::ErrorName(f.error())));
-            return 0;
+            return std::nullopt;
         }
         symbol_size = f.value().message_bytes();
     }
-    const std::size_t want = payload_bytes > 0 ? static_cast<std::size_t>(payload_bytes)
-                                               : symbol_size * 64u;
-    if (want == 0) {
+    if (symbol_size == 0) {
         ThrowIllegalState(env, "this grid carries no payload");
+        return std::nullopt;
+    }
+    return Prepared{std::move(layout), geom, symbol_size};
+}
+
+// Opens the session over `payload`. Throws and returns 0 on failure.
+jlong Start(JNIEnv* env, Prepared prep, std::vector<std::uint8_t> payload, std::string name,
+            jint nsym) {
+    if (payload.empty()) {
+        ThrowIllegalState(env, "the file is empty");
         return 0;
     }
-    std::vector<std::uint8_t> payload(want);
-    fileflow::SplitMix64 prng(static_cast<std::uint64_t>(seed) ^ 0xF11EF10ULL);
-    for (auto& b : payload) b = static_cast<std::uint8_t>(prng.Next() & 0xFF);
-
-    auto* handle = new (std::nothrow) TxHandle(std::move(layout), geom, std::move(payload));
+    const std::uint32_t session_id = SessionIdFor(payload, name);
+    auto* handle = new (std::nothrow) TxHandle(std::move(prep.layout), prep.geom, std::move(payload));
     if (handle == nullptr) {
         ThrowIllegalState(env, "out of memory opening the transmitter");
         return 0;
@@ -138,8 +155,8 @@ Java_dev_fileflow_tx_NativeTransmitter_open(JNIEnv* env, jclass /*unused*/, jint
 
     fileflow::TransmitConfig tc;
     tc.fec_nsym = static_cast<std::size_t>(nsym);
-    auto tx_r = fileflow::TransmitSession::Create(*handle->layout, handle->payload, "tx.bin",
-                                                  0x51533101, tc);
+    auto tx_r = fileflow::TransmitSession::Create(*handle->layout, handle->payload, std::move(name),
+                                                  session_id, tc);
     if (!tx_r.ok()) {
         delete handle;
         ThrowIllegalState(env, std::string("transmitter: ") +
@@ -148,6 +165,75 @@ Java_dev_fileflow_tx_NativeTransmitter_open(JNIEnv* env, jclass /*unused*/, jint
     }
     handle->session.emplace(std::move(tx_r).value());
     return reinterpret_cast<jlong>(handle);
+}
+
+}  // namespace
+
+extern "C" {
+
+// Signature matches app/src/main/kotlin/dev/fileflow/tx/NativeTransmitter.kt.
+//
+// The TEST FILE: `payload_bytes` of deterministic pseudo-random data from `seed`, so a run is
+// reproducible without shipping bytes across JNI. `payload_bytes <= 0` keeps the old default size
+// -- 64 symbols' worth -- so runs stay comparable with captures taken before protocol v2. Any size
+// is safe: v1 sent zero padding past the end of the file, which rendered as near-black frames
+// (F15, F39); v2 never transmits padding (ADR-0015).
+JNIEXPORT jlong JNICALL
+Java_dev_fileflow_tx_NativeTransmitter_open(JNIEnv* env, jclass /*unused*/, jint cols, jint rows,
+                                           jint nsym, jint payload_bytes, jlong seed,
+                                           jbyteArray name_utf8) {
+    auto prep = Prepare(env, cols, rows, nsym);
+    if (!prep) return 0;
+    const std::size_t want = payload_bytes > 0 ? static_cast<std::size_t>(payload_bytes)
+                                               : prep->symbol_size * 64u;
+    std::vector<std::uint8_t> payload(want);
+    fileflow::SplitMix64 prng(static_cast<std::uint64_t>(seed) ^ 0xF11EF10ULL);
+    for (auto& b : payload) b = static_cast<std::uint8_t>(prng.Next() & 0xFF);
+    return Start(env, std::move(*prep), std::move(payload),
+                 fileflow::android_jni::Utf8(env, name_utf8), nsym);
+}
+
+// A REAL file: its bytes and the name the receiver will save it under. The name is only a display
+// hint; the receiver sanitises it (INPUT-VALIDATION).
+JNIEXPORT jlong JNICALL
+Java_dev_fileflow_tx_NativeTransmitter_openFile(JNIEnv* env, jclass /*unused*/, jint cols,
+                                               jint rows, jint nsym, jbyteArray data,
+                                               jbyteArray name_utf8) {
+    if (data == nullptr) {
+        ThrowIllegalState(env, "no file data");
+        return 0;
+    }
+    auto prep = Prepare(env, cols, rows, nsym);
+    if (!prep) return 0;
+    const jsize n = env->GetArrayLength(data);
+    std::vector<std::uint8_t> payload;
+    try {
+        payload.resize(static_cast<std::size_t>(n));
+    } catch (const std::bad_alloc&) {
+        ThrowIllegalState(env, "out of memory reading the file");
+        return 0;
+    }
+    if (n > 0) {
+        env->GetByteArrayRegion(data, 0, n, reinterpret_cast<jbyte*>(payload.data()));
+    }
+    return Start(env, std::move(*prep), std::move(payload),
+                 fileflow::android_jni::Utf8(env, name_utf8), nsym);
+}
+
+JNIEXPORT jlong JNICALL
+Java_dev_fileflow_tx_NativeTransmitter_fileSize(JNIEnv* /*env*/, jclass /*unused*/, jlong handle) {
+    TxHandle* h = FromJLong(handle);
+    if (h == nullptr || !h->session.has_value()) return -1;
+    return static_cast<jlong>(h->session->manifest().file_size);
+}
+
+// Bytes of file carried per data frame, so the app can say how long a file will take.
+JNIEXPORT jint JNICALL
+Java_dev_fileflow_tx_NativeTransmitter_symbolBytes(JNIEnv* /*env*/, jclass /*unused*/,
+                                                   jlong handle) {
+    TxHandle* h = FromJLong(handle);
+    if (h == nullptr || !h->session.has_value()) return -1;
+    return static_cast<jint>(h->session->manifest().symbol_size);
 }
 
 // Renders the next display state into `dst` as one byte per cell, row-major.

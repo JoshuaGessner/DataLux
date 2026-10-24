@@ -5,6 +5,13 @@ import android.widget.ScrollView
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 import dev.fileflow.probe.CapabilityProbe
+import dev.fileflow.ui.Ui.Style
+import dev.fileflow.ui.Ui.button
+import dev.fileflow.ui.Ui.card
+import dev.fileflow.ui.Ui.dp
+import dev.fileflow.ui.Ui.matchWidth
+import dev.fileflow.ui.Ui.text
+import dev.fileflow.ui.Ui.title
 
 /**
  * Runs the capability probe and shows its verdict. Deliberately the whole UI for now.
@@ -22,21 +29,94 @@ class ProbeActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-
-        val text = TextView(this).apply {
-            typeface = android.graphics.Typeface.MONOSPACE
-            textSize = 11f
-            setPadding(24, 24, 24, 24)
-            setTextIsSelectable(true)  // so a tester can copy the verdict into a bug report
-        }
-        setContentView(ScrollView(this).apply { addView(text) })
+        androidx.core.view.WindowCompat.setDecorFitsSystemWindows(window, false)
 
         val body = runCatching { report() }
             .getOrElse { e -> "probe failed: ${e::class.simpleName}: ${e.message}\n" +
                               e.stackTraceToString() }
-        text.text = body
         emit(body)
+
+        // The full report, folded away: it is evidence for a bug report, not something to read.
+        val full = TextView(this).apply {
+            typeface = android.graphics.Typeface.MONOSPACE
+            textSize = 11f
+            text = body
+            setTextIsSelectable(true)  // so a tester can copy the verdict into a bug report
+            visibility = android.view.View.GONE
+            setPadding(0, dp(12), 0, 0)
+        }
+        val col = android.widget.LinearLayout(this).apply {
+            orientation = android.widget.LinearLayout.VERTICAL
+            setPadding(dp(16), dp(8), dp(16), dp(24))
+            addView(android.widget.LinearLayout(context).apply {
+                orientation = android.widget.LinearLayout.HORIZONTAL
+                gravity = android.view.Gravity.CENTER_VERTICAL
+                addView(com.google.android.material.button.MaterialButton(
+                    context, null, com.google.android.material.R.attr.materialIconButtonStyle,
+                ).apply {
+                    setIconResource(R.drawable.ic_close)
+                    contentDescription = "Close"
+                    setOnClickListener { finish() }
+                })
+                addView(title("Device check", 24f).apply { setPadding(dp(4), 0, 0, 0) })
+            })
+            addView(card(*summary().map { (k, v) -> fact(k, v) }.toTypedArray()), matchWidth(dp(8)))
+            addView(card(
+                button("Show the full report", R.drawable.ic_info, Style.Text) {
+                    full.visibility = if (full.visibility == android.view.View.VISIBLE)
+                        android.view.View.GONE else android.view.View.VISIBLE
+                }.apply { layoutParams = matchWidth() },
+                full,
+            ), matchWidth(dp(12)))
+            addView(button("Share report", R.drawable.ic_share, Style.Tonal) {
+                val send = android.content.Intent(android.content.Intent.ACTION_SEND)
+                    .setType("text/plain")
+                    .putExtra(android.content.Intent.EXTRA_SUBJECT, "FileFlow device check")
+                    .putExtra(android.content.Intent.EXTRA_TEXT, body)
+                runCatching { startActivity(android.content.Intent.createChooser(send, null)) }
+            }, matchWidth(dp(12)))
+        }
+        setContentView(ScrollView(this).apply {
+            setBackgroundColor(getColor(R.color.ff_background))
+            addView(col)
+        }.padForSystemBars())
     }
+
+    /** A label and its value, one row of the summary. */
+    private fun fact(label: String, value: String) = android.widget.LinearLayout(this).apply {
+        orientation = android.widget.LinearLayout.VERTICAL
+        setPadding(0, dp(6), 0, dp(6))
+        addView(text(label, 13f))
+        addView(text(value, 16f, com.google.android.material.R.attr.colorOnSurface))
+    }
+
+    /**
+     * What this phone means for FileFlow, in plain words: what the receiver will run at, how
+     * close it can focus, how many cores it will decode on. Claims, labelled as such -- the full
+     * report below is the evidence.
+     */
+    private fun summary(): List<Pair<String, String>> = runCatching {
+        val (claims, _) = CapabilityProbe.readClaims(this)
+        val fps = dev.fileflow.capture.CameraRecorder.Modes.chooseFps(this, 4096)
+        val mgr = getSystemService(CAMERA_SERVICE) as android.hardware.camera2.CameraManager
+        val back = mgr.cameraIdList.firstOrNull {
+            mgr.getCameraCharacteristics(it)
+                .get(android.hardware.camera2.CameraCharacteristics.LENS_FACING) ==
+                android.hardware.camera2.CameraCharacteristics.LENS_FACING_BACK
+        }
+        val minFocus = back?.let {
+            mgr.getCameraCharacteristics(it)
+                .get(android.hardware.camera2.CameraCharacteristics.LENS_INFO_MINIMUM_FOCUS_DISTANCE)
+        } ?: 0f
+        listOf(
+            "Screen" to "${claims.panelWidth}×${claims.panelHeight}, up to " +
+                "${claims.maxRefreshHz.toInt()} Hz",
+            "Receiving camera" to "$fps fps" +
+                if (fps >= 50) " — can receive every speed" else " — best with Steady",
+            "Closest focus" to if (minFocus > 0f) "%.0f cm".format(100f / minFocus) else "fixed focus",
+            "Decoding" to "${dev.fileflow.rx.LiveDecoder.DEFAULT_LANES} cores in parallel",
+        )
+    }.getOrElse { listOf("Summary" to "unavailable: ${it.message}") }
 
     /**
      * Emits the report to logcat and to a file, so it can be collected as raw experiment data

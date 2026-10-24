@@ -36,6 +36,8 @@ enum Slot : int {
     kScreenInView,
     kFrames,
     kFileSize,
+    kPayloadFrames,
+    kBytesPerSecond,
     kSlotCount,
 };
 
@@ -52,7 +54,7 @@ Java_dev_fileflow_rx_NativeReceiver_slotCount(JNIEnv* /*env*/, jclass /*unused*/
 
 JNIEXPORT jlong JNICALL
 Java_dev_fileflow_rx_NativeReceiver_open(JNIEnv* env, jclass /*unused*/, jint cols, jint rows,
-                                         jlong exposure_ns) {
+                                         jlong exposure_ns, jint lanes) {
     if (cols <= 0 || rows <= 0) {
         ThrowIllegalState(env, "cols and rows must both be positive");
         return 0;
@@ -60,6 +62,8 @@ Java_dev_fileflow_rx_NativeReceiver_open(JNIEnv* env, jclass /*unused*/, jint co
     fileflow::LiveConfig cfg;
     // The blur threshold is in cells of motion DURING an exposure, so it needs the real exposure.
     if (exposure_ns > 0) cfg.exposure_s = static_cast<double>(exposure_ns) * 1e-9;
+    // Lanes the app will drive from separate threads at once (F60); LiveReceiver validates.
+    cfg.lanes = lanes > 0 ? static_cast<std::size_t>(lanes) : 1u;
     auto r = fileflow::LiveReceiver::Create(
         fileflow::GridGeometry{static_cast<std::uint32_t>(cols), static_cast<std::uint32_t>(rows)},
         cfg);
@@ -81,7 +85,8 @@ Java_dev_fileflow_rx_NativeReceiver_open(JNIEnv* env, jclass /*unused*/, jint co
 JNIEXPORT jstring JNICALL
 Java_dev_fileflow_rx_NativeReceiver_ingest(JNIEnv* env, jclass /*unused*/, jlong handle,
                                            jobject y_plane, jint width, jint height,
-                                           jint row_stride, jlong timestamp_ns, jdoubleArray out) {
+                                           jint row_stride, jlong timestamp_ns, jint lane,
+                                           jdoubleArray out) {
     if (out != nullptr && env->GetArrayLength(out) >= 1) {
         const jdouble sentinel = -1.0;
         env->SetDoubleArrayRegion(out, kPhase, 1, &sentinel);
@@ -99,7 +104,9 @@ Java_dev_fileflow_rx_NativeReceiver_ingest(JNIEnv* env, jclass /*unused*/, jlong
     if (env->GetDirectBufferCapacity(y_plane) < needed) return env->NewStringUTF("");
 
     const fileflow::ImageView8 img(base, width, height, row_stride);
-    const fileflow::LiveStatus& s = rx->Ingest(img, static_cast<std::int64_t>(timestamp_ns));
+    // A copy: other lanes may be updating the receiver's status concurrently.
+    const fileflow::LiveStatus s = rx->Ingest(img, static_cast<std::int64_t>(timestamp_ns),
+                                              lane > 0 ? static_cast<std::size_t>(lane) : 0u);
 
     jdouble v[kSlotCount];
     v[kPhase] = static_cast<jdouble>(static_cast<int>(s.phase));
@@ -111,6 +118,8 @@ Java_dev_fileflow_rx_NativeReceiver_ingest(JNIEnv* env, jclass /*unused*/, jlong
     v[kScreenInView] = s.screen_in_view ? 1.0 : 0.0;
     v[kFrames] = static_cast<jdouble>(s.frames);
     v[kFileSize] = static_cast<jdouble>(s.file_size);
+    v[kPayloadFrames] = static_cast<jdouble>(s.payload_frames);
+    v[kBytesPerSecond] = s.bytes_per_second;
     env->SetDoubleArrayRegion(out, 0, static_cast<jsize>(kSlotCount), v);
     return env->NewStringUTF(s.message.c_str());
 }

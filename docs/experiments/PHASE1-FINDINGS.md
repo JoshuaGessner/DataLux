@@ -6,10 +6,11 @@
 > **Related:** ADR-0006, ADR-0009, ADR-0013, ADR-0015, OPTICAL-FRAME-CANDIDATES.md,
 > PERFORMANCE-MODEL.md, MODULATION-SPEC.md, EXPERIMENT-REGISTRY.md
 
-Findings F1–F55: F1–F23 from implementing the Phase 1 core, F24–F36 from first contact with
+Findings F1–F60: F1–F23 from implementing the Phase 1 core, F24–F36 from first contact with
 real hardware, F37–F44 from putting the thing in an operator's hands, F45–F48 from the first
-above-cliff capture, F49–F52 from the 2026-10-23 review that produced protocol v2 (ADR-0015), and
-F53–F55 from making the receiver work in a moving hand. Recorded here because several are
+above-cliff capture, F49–F52 from the 2026-10-23 review that produced protocol v2 (ADR-0015),
+F53–F55 from making the receiver work in a moving hand, and F56–F59 from the first hand-held
+two-phone test. Recorded here because several are
 **design defects the specifications did not anticipate**, one is a **retraction** (F14), and
 several are model-versus-implementation gaps. Almost all were surfaced by tests or by building
 a consumer for something that already existed — not by inspection.
@@ -2206,6 +2207,263 @@ fires while everything works is one people learn to ignore.
 computed the scrim height without it, so with a banner showing the last line of guidance was drawn
 46 px below the bottom of the screen — the line most likely to be the instruction. Found by
 reading the code while adding the live status card, not by a report; fixed by measuring it.
+
+---
+
+## F56 — One lamp in view defeated both the detector and the aiming advice `[FACT]` / `[HYP]`
+
+**Defect** `[FACT]`, by reading the code after the first hand-held test (F57). `ScreenDetector`
+took the corner extremes of **every pixel above threshold anywhere in the frame**, and
+`AnalyseAim` took its bounding box the same way. A window, a desk lamp or a ceiling light in view
+therefore stretched the "screen" to itself: detection failed outright, and the aiming analyser
+reported the screen **clipped** at an edge it was nowhere near — "move back", indefinitely,
+however well the phone was held. A rig in a dark room never shows this; a person holding a phone
+in a lit room shows it constantly, and with the screen filling only half the view (F57) there is
+more room around it for a light source to appear.
+
+**Fix.** `LargestLitRegion`: lit samples per block on a coarse map (at most 128 blocks a side —
+bounded memory, F12), 8-connected components, and the component that **spans the most of the
+image** is the screen. The boundary ring is always lit and one closed loop, so it is one component
+on any payload, a frame of zeros included (F15). Ranked by extent, not by lit count: a solid
+window outweighs a mostly dark frame by lit count. Padded one block, because the tip of a rotated
+screen's corner is a sliver that can fall below the noise floor of its block — two tracker tests
+caught exactly that on the first version.
+
+Tests: `ScreenDetector.LocatesAScreenWithALampElsewhereInTheView` (two distractors, corners within
+2 px), `AimAnalysis.ALampElsewhereInTheViewIsNotTheScreen`, `LargestLitRegion.*`. A light source
+*touching* the screen (glare on the glass) still merges with it; marker verification remains the
+backstop there `[HYP]`.
+
+---
+
+## F57 — The first hand-held test: no focus, no feedback, and an unoptimised decoder `[FACT]`
+
+**What happened** `[FACT]`. Galaxy S26 Ultra and Pixel 8, both hand-held, both on 120x260. Each
+phone in turn sat on the aiming screen — the Pixel for 2 min 22 s, the S26 for 51 s — and **never
+started receiving**. The operator reported that the camera would not focus, and that when it did
+show a good view nothing happened. The logs agree: no live-receiver line at all, only the preview
+being set up.
+
+**Causes, in the order they bite:**
+
+1. **The geometry asked for a distance the lens cannot focus at.** Receive captured at 2688x1512.
+   At the 7.5 px/cell floor, 260 rows need 1950 px, so the sender's screen (124 mm of drawn frame
+   on the S26) had to fill 72% of the frame's long axis: about **12 cm** from the Pixel 8's main
+   camera (6.9 mm lens, 9.79 mm sensor width). That lens focuses no closer than **10.5 cm**
+   (`LENS_INFO_MINIMUM_FOCUS_DISTANCE` 9.52 dpt; the S26's main camera, 10.0 dpt). The workable
+   band was ~1.5 cm deep — and the depth of field at 15 cm, from the reported hyperfocal distance,
+   is about ±4 mm. Hand-held, that is "autofocus not working".
+2. **A gate in front of the decoder.** Receiving began only after six consecutive *Ready* verdicts
+   from the aiming heuristic. Every condition above, and F56's lamp, kept it from ever saying
+   Ready, so the decoder — the only judge that matters — never saw a frame.
+3. **Focus was locked at the hand-over.** Correct for a dataset, wrong for a hand: a lock taken at
+   one distance is blurred a few millimetres later.
+4. **The native decoder was built `-O0`.** AGP builds the debug APK's CMake with
+   `CMAKE_BUILD_TYPE=Debug`, which on this toolchain adds no `-O` flag. Measured on the Pixel 8 at
+   4080x3072 with no screen in view: **139.7 ms/frame at `-O0`, 44–55 ms at `-O2`**; the S26,
+   31 ms. Every hardware run so far used the `-O0` build.
+
+**Fixes.**
+- Receive captures at the highest-resolution 30 fps YUV mode (4080x3072 on the Pixel, 4080x3060 on
+  the S26; `maxWidth` 4096). The screen then needs 48% of the frame: a hold from ~10.5 to ~18 cm
+  on the Pixel, ~10 to ~15 cm on the S26 receiving from the Pixel `[HYP]` (geometry, not yet a
+  measured hold).
+- No aim gate for live receiving. The aim analysis now runs beside the decoder and supplies the
+  explanation only while nothing is being read.
+- Continuous AF throughout, weighted on the middle 40% of the view; a full AF scan (`AUTO` +
+  trigger, not a trigger in continuous mode, which merely confirms wherever passive focus already
+  sits) when the screen is in view but nothing has read for 2.5 s; tap-to-focus; and when the lens
+  reports it is at its closest distance, *"Too close to focus — move back a little. This camera
+  focuses from about 11 cm."* — the one case where waiting never helps.
+- OIS on, EIS off: OIS acts during the exposure, which is when blur happens (F53); EIS warps each
+  frame after capture, bending the edges the detector fits.
+- Exposure control on the screen's own interior levels (bright cells 150–235, dark below 100):
+  ISO first, then a shorter exposure once ISO is at its floor. Steered **only** while the decoder
+  has verified the screen — the first device run of it tuned ISO to the room while pointed at a
+  ceiling — and relaxed to the start values when the screen is gone.
+- `-O2` for the native library in every variant.
+
+**What is still not known** `[HYP]`: whether a hand-held transfer now completes. Nothing above has
+been tested with two phones yet; it is what the next run answers.
+
+---
+
+## F58 — A decoded header does not prove the grid; a decoded payload does `[FACT]`
+
+The receiver now works out the sender's grid itself (one native receiver per candidate, frames
+dealt to them in turn), so the two phones no longer have to be set to the same grid. It first
+committed to a grid on the first decoded **header**, on the reasoning that a header carries RS
+parity and a CRC. `LiveReceiver.OnlyTheSendersGridDecodesAPayloadSoTheGridCanBeDetected` refuted
+that: a 120x208 receiver read a 120x200 sender's header on **60 frames of 60**. The header band
+is a few rows at the top of the frame, and a near-miss grid puts those rows almost exactly where
+the true grid has them.
+
+It now commits on the first decoded **payload** — intra-frame FEC passed and the CRC matched —
+which spans every cell. Across the same 60 frames no wrong grid decoded one. The three grids the
+app offers (120x260, 144x240, 180x390) are far enough apart that none of them reads even a
+header of another `[FACT, simulated frames]`.
+
+---
+
+## F59 — The first verified transfer on real phones, and why it took 217 s `[FACT]` / `[HYP]`
+
+**Result** `[FACT]`, 2026-10-23 17:26:48. Pixel 8 sending, Galaxy S26 Ultra receiving, both
+hand-held: the 195.1 KB test file **received and SHA-256 verified**, saved to Downloads/FileFlow.
+216.6 s from pressing Receive, 2284 frames read: **0.9 KB/s wall-clock goodput**. The first
+completed transfer in this project on real optics.
+
+**Where the time went** (S26 log):
+
+| span | distance (lens focus) | px/cell | headers read | progress |
+|---|---|--:|--:|--:|
+| 17:23:12–17:24:11, 59 s | ~12 cm | 13–14 | some | finding the grid (F58) |
+| 17:24:11–17:26:44, 153 s | ~12 cm | 12–15 | **~100%** | **0%** — no manifest |
+| 17:26:44–17:26:48, 4 s | 17 → 25 cm | 7.6 → 4.6 | 100% | **0 → 98 → 100%** |
+
+The receiver read essentially every header at 12 cm, and buffered symbols, but no MANIFEST frame
+decoded for two and a half minutes. Moved back, a manifest decoded within four seconds; the
+buffered symbols replayed to 98% at once, and it verified. So most of the file had been read up
+close, and the person saw 0% the whole time.
+
+**Interpretation** `[HYP]`: at 12 cm payload decoding was rare — enough over 150 s to hold 98% of
+the file, not enough to catch one of the manifests (then one state in 32, at 7.5 states/s). The
+header is a few rows at one end of the frame; the payload spans all of it. Depth of field at 12 cm
+is a few millimetres (F57) and scales with distance squared, so at 25 cm it is ~4x deeper: a
+slight tilt between two hand-held phones defocuses part of the payload close up, and none of it
+farther out (the same mechanism as F47). Not yet isolated: a recording at both distances would.
+
+**It also decoded at 4.6 px/cell**, under the 7.5 the aiming analyser treats as the floor (from
+EXP-001, which was measured with focus and framing problems this run did not have). One
+observation, not a new floor.
+
+**Also found on this run:**
+- The Pixel sent at **7.5 states/s, not 15**: its panel ran at 60 Hz although 120 was requested,
+  and the divisor was computed from the request. The renderer now measures the vsync interval and
+  re-derives the divisor every 60 frames — measured on the Pixel afterwards: 59.5 Hz, divisor 4,
+  14.9 states/s.
+- The status card changed **several times a second** (reading / not readable / point the camera
+  / too close): the "goes in and out" the operator reported. A message now holds for 1.5 s before
+  one of a different kind replaces it.
+- Exposure control treated a lifted dark level as overexposure and drove ISO to the sensor's floor
+  (9). The dark cells were lifted by blur, not light; it now steers on the bright level only.
+
+**Changes:** guidance is now "about 20–25 cm", "move back" when the lens reports < 15 cm and no
+payload is arriving, "move closer" only below 4 px/cell; before the manifest the card counts the
+pieces already held; manifests every eighth of the symbols needed, clamped to [8, 32] states
+(was half, [16, 128]).
+
+---
+
+## F60 — The camera and the display share no clock: the speed limit nobody had modelled `[HYP]`
+
+**The gap.** Every simulated goodput in this repository assumed the camera captures each display
+state exactly once, whole. A phone camera free-runs at its own rate, and its rolling shutter reads
+rows over `readout`, each row exposing for `exposure`. Any row whose exposure window straddles a
+state change records a time-weighted mix of two states. This is the `Pc` term of the performance
+model, never measured and never simulated.
+
+**Model.** `sim::RenderUnsynced` renders a capture band by band, each band integrating every display
+state its exposure window overlaps, weighted by time. `LiveReceiver.DISABLED_UnsynchronisedTimingSweep`
+runs the real live receiver on such captures: 200 KB file, 120x200 grid, static geometry, the
+camera detuned 0.13% from nominal (at exactly equal or harmonic rates the tear sits on the same
+row forever, which made the first version of the sweep say whatever its random phase said), three
+phases per arm, decoder assumed to keep up:
+
+| camera | display | exposure | readout | captures torn | payload decoded | goodput |
+|--:|--:|--:|--:|--:|--:|--:|
+| 30/s | 15/s | 16 ms | 30 ms | 70% | 73% | 29.8 KB/s |
+| 30/s | 10/s | 8 ms | 30 ms | 38% | 86% | 19.9 KB/s |
+| 30/s | 15/s | 8 ms | 30 ms | 57% | 77% | 29.8 KB/s |
+| 30/s | **20/s** | 8 ms | 30 ms | 69% | 59% | **34.7 KB/s** |
+| 30/s | 24/s | 8 ms | 30 ms | 90% | 53% | 31.3 KB/s |
+| 60/s | 15/s | 8 ms | 15 ms | 37% | 88% | 29.9 KB/s |
+| 60/s | 20/s | 8 ms | 15 ms | 47% | 83% | 39.8 KB/s |
+| 60/s | 24/s | 8 ms | 15 ms | 52% | 75% | 47.7 KB/s |
+| 60/s | **30/s** | 8 ms | 15 ms | 70% | 73% | **59.6 KB/s** |
+| 60/s | 40/s | 8 ms | 15 ms | 94% | 63% | 74.1 KB/s |
+
+**What it says** `[HYP]`:
+1. The clean-capture bound `Fd <= 1 / (exposure + readout + 1/Fc)` is too pessimistic. RS repairs a
+   capture torn near one edge, so goodput keeps rising past it; "torn" counts any capture touching
+   two states, however slightly.
+2. With a **30 fps** camera goodput peaks near **20 states/s** and falls beyond. The 15 used until
+   now left ~15% on the table.
+3. A **60 fps** camera roughly doubles the achievable rate — still rising at 40 states/s — provided
+   the decoder keeps up, which one core does not (F57).
+
+**Changes.**
+- **Decode lanes.** `LiveReceiver` runs `cfg.lanes` independent pipelines that may run on separate
+  threads at once, sharing one session behind a lock; only the session and the status are
+  serialised. `LiveDecoder` gives each lane a worker thread and its own frame buffer, and a frame
+  goes to whichever lane is idle (`LiveReceiver.LanesOnSeparateThreadsCompleteTheSameTransfer`:
+  three threads, one verified file). Lanes default to cores − 3, at most 4.
+- **The fastest capture rate that keeps the resolution**: the highest of 60/50/30 fps the camera
+  offers at ≥ 90% of its 30 fps mode's long side. The Pixel 8: 4032x2268 at 60 against 4080x3072 at
+  30. The S26 Ultra offers 60 fps only up to 2336x1080, but **50 fps at 4000x1848** — a first
+  version that chose only between 60 and 30 left it at 30.
+
+**Measured** `[FACT]`, no screen in view, 4 lanes: Pixel 8 at 60 fps, ~60 frames decoded/s,
+24-28 ms each; S26 Ultra at 50 fps, ~50 decoded/s, 7-9 ms each. Every delivered frame decoded on
+both. Rolling-shutter skew reported per frame: **9.7 ms** (Pixel, 4032x2268) and **15.7 ms** (S26,
+4000x1848) — inside the 15 ms the sweep assumed for 60 fps, give or take.
+- **8 ms exposure** by default (was 16): half the blur, half the mixing; exposure control buys the
+  light back with ISO.
+- **Speed presets** on the sender: Steady = 120x260 at 20/s (the 30 fps optimum, so it suits any
+  camera), Fast = 120x260 at 30/s and Fastest = 180x390 at 30/s (for 60 fps receivers).
+- The camera's `SENSOR_ROLLING_SHUTTER_SKEW` is now logged per frame, so the readout term can be
+  measured on each phone rather than assumed.
+
+**Not modelled, and next:** a capture whose tear crosses mid-frame is lost whole, because every RS
+codeword is interleaved across the entire frame. LightSync (Hu et al., MobiCom 2013) roughly
+doubled throughput by decoding such imperfect frames rather than discarding them. The equivalent
+here is localised codewords — tiles, each its own fountain symbol with its own check — so a torn
+capture still yields the tiles on either side of the tear. That is a protocol change (v3), and it
+should wait for a real capture that measures how often mid-frame tears actually happen.
+
+---
+
+## F61 — Fill the picture: 34 KB/s on a 2.2 MB photo, and why the Pixel needed distance `[FACT]` / `[HYP]`
+
+**Measured** `[FACT]` (2026-10-23, Pixel 8 sending at Steady, 120x260 at 20 states/s → S26 Ultra
+receiving at 50 fps, hand-held both): a 2.2 MB photo, SHA-256 verified, in **67.0 s from pressing
+Receive — 33.9 KB/s wall-clock goodput**, 37 times F59's. From the receiver's log, with the
+pattern's size in the picture as camera px/cell:
+
+| px/cell | focus | payload frames/s | note |
+| --- | --- | --- | --- |
+| 3.4–3.9 | 30–35 cm | ~3 | the screen a third of the picture, as the coach then asked |
+| 4.7–6.6 | 22–27 cm | ~25 | |
+| 7.1–11.8 | 11–22 cm | **~40** of 50 | the screen filling the picture |
+
+So the coach's target -- "fill about a third of the picture" -- was a tenth of the rate on offer.
+F59's failure at 12 cm was the exposure servo driving ISO to its floor, not the distance; this
+transfer ran fastest at 11 cm. The guidance is now **fill the picture**, with corner marks in the
+pattern's shape over the clear part of the viewfinder; "too close" fires only when the lens is
+pinned at its closest focus, and "too far" below 5 px/cell.
+
+**The Pixel read best from far away** (operator report, no log: the Pixel's buffer had rolled
+over). Not optics: the two main cameras are nearly the same lens (f 6.9 / 6.5 mm on a 9.79 mm
+sensor, closest focus 10.5 / 10 cm). The likely cause `[HYP]` is **lens distortion**. The decoder
+maps the screen with one homography, exact through an ideal lens, and a radial bow cannot be
+absorbed by it. From each camera's own `LENS_DISTORTION`, for a pattern filling ~85% of the
+frame, the long edges sit off the corner-fitted homography by about **10 px ≈ 0.7 cell on the
+Pixel** (k = 0.089, −0.162, 0.119) against **~0.35 cell on the S26** (0.130, −0.347, 0.257, whose
+terms cancel better at that radius) -- and by a quarter of that, in cells, with the screen a third
+of the picture. The Pixel offers `DISTORTION_CORRECTION_MODE` FAST and was never asked for it; it
+now is, wherever offered, and the applied mode is logged ("undistort on/off"). The S26 does not
+list the control. Confirm with a Pixel receive at fill: payload rate against F61's table.
+
+**Speed and time left.** The time left was the raw 4 s windowed rate, and on this transfer it read
+2 min, 4, 6, 12, 9, 12, 9, 6, 2 min, 81 s in the first sixteen seconds. Now `TransferRate`
+(core/live): the window stretches to hold ≥ 2% of the file (up to 20 s), the rate is filtered
+(τ 2 s), and the time left counts down by the clock and glides to each estimate, rising three
+times slower than it falls. Replayed on this transfer's own progress trace, it wanders from a
+steady countdown by 270 s against 1293 s, and its worded value ("4 min", "42 s") rises in 1 second
+against 12. The card shows that rate as "2.2 MB · 34 KB/s · 0:41", whole KB/s above 10 so the last
+digit does not churn, redrawn four times a second.
+
+**Session logs** now also go to `files/logs/` in app storage (newest 20), because installing a
+build clears logcat and the Pixel's side of this test was lost that way.
 
 ---
 

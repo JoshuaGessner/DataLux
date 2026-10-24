@@ -89,6 +89,17 @@ inline Evidence EvidenceFromOrdinal(std::int32_t v) noexcept {
     }
 }
 
+// A Kotlin `String.toByteArray(UTF_8)` as a std::string. Strings cross as bytes rather than jstring
+// because `GetStringUTFChars` returns MODIFIED UTF-8, which encodes anything outside the BMP -- an
+// emoji in a file name -- differently from the UTF-8 everything else expects.
+inline std::string Utf8(JNIEnv* env, jbyteArray bytes) {
+    if (bytes == nullptr) return {};
+    const jsize n = env->GetArrayLength(bytes);
+    std::string out(static_cast<std::size_t>(n), '\0');
+    if (n > 0) env->GetByteArrayRegion(bytes, 0, n, reinterpret_cast<jbyte*>(out.data()));
+    return out;
+}
+
 inline void ThrowIllegalState(JNIEnv* env, const std::string& msg) {
     jclass cls = env->FindClass("java/lang/IllegalStateException");
     if (cls != nullptr) env->ThrowNew(cls, msg.c_str());

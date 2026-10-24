@@ -1,5 +1,7 @@
 #include <fileflow/framing.h>
 
+#include <fileflow/detect.h>  // LargestLitRegion
+
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -160,6 +162,8 @@ Result<AimAdvice> AnalyseAim(const ImageView8& img, const GridGeometry& grid, Ai
     AimAdvice a;
     a.threshold = split.threshold;
     a.level_separation = split.bright_mean - split.dark_mean;
+    a.dark_level = split.dark_mean;
+    a.bright_level = split.bright_mean;
     a.mean_luminance = sampled > 0 ? sum_lum / static_cast<double>(sampled) : 0.0;
 
     // A frame with no two-level structure at all has no screen in it, whatever its brightness.
@@ -177,10 +181,20 @@ Result<AimAdvice> AnalyseAim(const ImageView8& img, const GridGeometry& grid, Ai
     // Streaming, O(1) state, zero allocation. F12 recorded what the alternative costs: collecting a
     // point per lit pixel reached 762 MB per frame at full sensor resolution, with the allocation
     // size chosen by attacker-controlled pixel content.
+    //
+    // Only over the largest connected lit structure -- the screen -- and not every lit pixel in
+    // the frame. Taking every lit pixel meant a lamp at the edge of the view read as the screen
+    // being clipped there, and "move back" was the advice however the phone was held (F56).
+    const LitRegion region = LargestLitRegion(img, static_cast<std::uint32_t>(a.threshold));
+    if (!region.valid) {
+        a.verdict = AimVerdict::kNoScreenFound;
+        a.guidance = "Point the camera at the sending phone's screen.";
+        return a;
+    }
     int min_x = w, min_y = h, max_x = -1, max_y = -1;
     std::uint64_t lit = 0;
-    for (int y = 0; y < h; ++y) {
-        for (int x = 0; x < w; ++x) {
+    for (int y = region.y0; y <= region.y1; ++y) {
+        for (int x = region.x0; x <= region.x1; ++x) {
             if (img.At(x, y) > a.threshold) {
                 ++lit;
                 if (x < min_x) min_x = x;
@@ -254,13 +268,24 @@ Result<AimAdvice> AnalyseAim(const ImageView8& img, const GridGeometry& grid, Ai
     const int qx = a.bbox_w / 4;
     const int qy = a.bbox_h / 4;
     std::uint64_t dark = 0, bright = 0, mid = 0;
+    std::array<std::uint64_t, 256> inner_hist{};
     for (int y = min_y + qy; y < min_y + qy + a.bbox_h / 2 && y < h; ++y) {
         for (int x = min_x + qx; x < min_x + qx + a.bbox_w / 2 && x < w; ++x) {
-            const double v = static_cast<double>(img.At(x, y));
+            const std::uint8_t px = img.At(x, y);
+            ++inner_hist[px];
+            const double v = static_cast<double>(px);
             if (v < lo) ++dark;
             else if (v > hi) ++bright;
             else ++mid;
         }
+    }
+    // The levels exposure control steers on come from the SCREEN'S OWN cells where there are both
+    // kinds, not from the whole frame: a lamp at 255 elsewhere in the view would otherwise drag the
+    // bright level up and the controller would darken the screen to nothing chasing it.
+    const Split inner = OtsuSplit(inner_hist);
+    if (inner.valid && inner.bright_mean - inner.dark_mean >= kMinSeparation) {
+        a.dark_level = inner.dark_mean;
+        a.bright_level = inner.bright_mean;
     }
     const double interior = static_cast<double>(dark + bright + mid);
     a.mid_fraction = interior > 0.0 ? static_cast<double>(mid) / interior : 1.0;

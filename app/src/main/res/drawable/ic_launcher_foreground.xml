@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- A few cells of an optical frame: the thing the app actually puts on a screen. Drawn inside the
+     adaptive icon's 66dp safe zone (21..87) so no launcher mask can clip it. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp" android:height="108dp" android:viewportWidth="108" android:viewportHeight="108">
+    <!-- the always-lit boundary ring -->
+    <path android:fillColor="#7DD3F0"
+        android:pathData="M32,32h44v44h-44z M36,36v36h36v-36z" android:fillType="evenOdd" />
+    <!-- payload cells -->
+    <path android:fillColor="#FFFFFF"
+        android:pathData="M40,40h8v8h-8z M60,40h8v8h-8z M50,50h8v8h-8z M60,50h8v8h-8z M40,60h8v8h-8z M50,60h8v8h-8z" />
+</vector>

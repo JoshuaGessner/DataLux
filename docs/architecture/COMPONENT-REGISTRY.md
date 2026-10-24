@@ -445,9 +445,20 @@ readable frames.
 **Open questions.** OQ-037 (symbol size still fixed by the manifest).
 
 ## C13b — Live receiver (camera frames → verified file + what to tell the person)
-> **Status 2026-10-23: IMPLEMENTED, desktop-tested, not yet run on a phone**
-> (`core/src/live.cpp` `LiveReceiver`; `platform/android/src/jni_receiver.cpp`;
-> `app/.../rx/LiveDecoder.kt`; F53, F54). What the Receive button runs.
+> **Status 2026-10-23: IMPLEMENTED, desktop-tested; runs on both reference phones, no transfer
+> completed yet** (`core/src/live.cpp` `LiveReceiver`; `platform/android/src/jni_receiver.cpp`;
+> `app/.../rx/LiveDecoder.kt`; F53, F54, F56–F58). What the Receive button runs.
+>
+> Since the first hand-held test (F57): starts decoding at once, with no aim gate; captures at the
+> highest 30 fps YUV mode; continuous AF with automatic and tap-to-focus scans; exposure steered on
+> the verified screen's own levels. `LiveDecoder` runs one `LiveReceiver` per grid the sender
+> might use and keeps the first to decode a payload (`LiveStatus::payload_frames`, F58), so the
+> grid is no longer a setting on the receiving phone.
+>
+> Since F60: `LiveConfig::lanes` independent pipelines decode on separate threads into one session
+> (only the session and status are locked). Measured on the Pixel 8 with no screen in view: 60 fps
+> capture at 4032x2268, **~60 frames decoded per second on 4 lanes** at 24-28 ms each — against
+> ~13/s on one lane at 4080x3072 before. Rolling-shutter skew reported by the camera: 9.7 ms.
 
 **Responsibility.** Drive C06a + C13a on each camera frame and reduce their state to one phase,
 one hint (point at screen / hold steadier / not readable) and one sentence for the person holding

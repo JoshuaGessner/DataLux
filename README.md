@@ -10,7 +10,7 @@ own — replacing rapidly-changing QR-code streams with a purpose-built screen-t
 communication protocol.
 
 > **Project status: Phase 2 — Android transmitter and receiver running on hardware; protocol v2;
-> no verified transfer on real optics yet.**
+> one verified hand-held transfer on real optics (F59), at 0.9 KB/s.**
 > *Updated 2026-10-23. The previous status ("simulated only … no Android code") had been false
 > since 2026-08-04 — the same stale-status failure the 2026-08-03 update was written to fix.*
 >
@@ -20,14 +20,27 @@ communication protocol.
 > corner alignment, photometric field), a session layer with an **in-band manifest** so a receiver
 > needs only the grid, SHA-256 verification, and an adaptive-code-rate controller. A channel
 > simulator (`sim/`), a capture/replay harness proven bit-identical to live decode that now runs
-> **verified transfers** (`harness/`), libFuzzer targets, 284 tests, CI with 7 jobs. An Android app
+> **verified transfers** (`harness/`), libFuzzer targets, 297 tests, CI with 7 jobs. An Android app
 > (`app/`, `platform/android/`) with a GL transmitter, a Camera2 recorder and an aiming UI.
 >
 > **What has been measured on hardware** (Galaxy S26 Ultra → Pixel 8): camera delivery 59 fps
 > (F28); the density cliff between 5.93 and 7.30 camera px/cell (EXP-001); frame headers read off a
-> real screen, `H` = 0.03–0.38 (F36, F45); cell erasure 0.44 after alignment fixes (F45–F48).
+> real screen, `H` = 0.03–0.38 (F36, F45); cell erasure 0.44 after alignment fixes (F45–F48); live
+> decode cost at 4080-wide capture, searching, 44–55 ms/frame on the Pixel 8 and 31 ms on the S26
+> (F57 — and 140 ms before the native library was built optimised); with parallel decode lanes and
+> 60 fps capture, **~60 frames decoded per second** on the Pixel 8, and its rolling-shutter skew,
+> 9.7 ms at 4032x2268 (F60).
 >
-> **What has not:** a completed transfer, and therefore **any goodput**; and `Fd`. Every goodput
+> **The app** sends a file chosen with the system picker (or shared to it from any app) or a test
+> file, and the receiver finds the sender's grid itself (F58) and saves the verified file to
+> Downloads/FileFlow. The first hand-held two-phone attempt never left the aiming screen (F56, F57).
+>
+> **The first verified transfer** (F59): 195.1 KB, Pixel 8 → S26 Ultra, both hand-held, SHA-256
+> matched — **0.9 KB/s wall-clock goodput**, 216.6 s from pressing Receive. Most of that was spent
+> held too close (12 cm) with the sender at half its intended state rate; moved to ~25 cm it went
+> from 0% to verified in four seconds. One run: a measured goodput, not yet a characterised one.
+>
+> **What has not:** `Fd`, and goodput under conditions anyone would choose. Every other goodput
 > figure in this repository is a simulator or model output, labelled `[HYP]` (RISK-024).
 
 ## The one metric that matters
@@ -120,7 +133,7 @@ docs/            all design documentation (see docs/INDEX.md)
   architecture/  system overview, data flow, component registry
   adr/           architecture decision records
   specifications/ optical frame, modulation, protocol, performance model
-  experiments/   experiment registry, open questions, PHASE1-FINDINGS (F1–F55)
+  experiments/   experiment registry, open questions, PHASE1-FINDINGS (F1–F61)
   testing/       simulator plan, capture harness, benchmark methodology
   planning/      roadmap, feature registry, risk register, device matrix
   security/      threat model, input validation rules
@@ -134,7 +147,7 @@ data/
 
 ```bash
 cmake --preset desktop-release && cmake --build build/desktop-release -j8
-./build/desktop-release/core/tests/fileflow_tests     # 284 tests
+./build/desktop-release/core/tests/fileflow_tests     # 297 tests
 
 cmake --preset core-only && cmake --build build/core-only -j8   # enforces ADR-0010
 python3 tools/check_links.py                                    # every doc link must resolve

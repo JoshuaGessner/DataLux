@@ -161,7 +161,7 @@ std::uint32_t AutoBlockSymbols(std::uint64_t total_symbols) noexcept {
 // ---------------------------------------------------------------- transmitter
 
 std::uint32_t FileTransmitter::AutoManifestInterval(std::uint64_t symbols_needed) noexcept {
-    return static_cast<std::uint32_t>(std::clamp<std::uint64_t>(symbols_needed / 2, 16, 128));
+    return static_cast<std::uint32_t>(std::clamp<std::uint64_t>(symbols_needed / 8, 8, 32));
 }
 
 FileTransmitter::FileTransmitter(FileManifest m, std::vector<FountainEncoder> enc,

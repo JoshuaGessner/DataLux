@@ -24,6 +24,97 @@ double QuadArea(const std::array<Point2, 4>& q) {
 
 }  // namespace
 
+LitRegion LargestLitRegion(const ImageView8& img, std::uint32_t threshold) {
+    LitRegion out;
+    if (img.empty()) return out;
+    const int w = img.width();
+    const int h = img.height();
+    const int longest = std::max(w, h);
+    const int block = std::max(4, (longest + kLitRegionMaxBlocks - 1) / kLitRegionMaxBlocks);
+    const int bw = (w + block - 1) / block;
+    const int bh = (h + block - 1) / block;
+
+    // Lit samples per block, on a stride of 2. The structure that matters -- the boundary ring --
+    // is a cell wide, and a cell is several pixels at any density that can be decoded at all, so
+    // the stride cannot miss it.
+    std::vector<std::uint32_t> lit(static_cast<std::size_t>(bw) * static_cast<std::size_t>(bh), 0);
+    for (int y = 0; y < h; y += 2) {
+        std::uint32_t* row = &lit[static_cast<std::size_t>(y / block) * static_cast<std::size_t>(bw)];
+        for (int x = 0; x < w; x += 2) {
+            if (img.At(x, y) > threshold) ++row[x / block];
+        }
+    }
+    // A few stray hot pixels must not bridge two separate objects.
+    const std::uint32_t samples = static_cast<std::uint32_t>((block / 2) * (block / 2));
+    const std::uint32_t min_lit = std::max<std::uint32_t>(2, samples / 64);
+
+    // 8-connected components over marked blocks; keep the one with the most lit samples.
+    std::vector<int> label(lit.size(), -1);
+    std::vector<int> stack;
+    std::uint64_t best_weight = 0;
+    std::uint64_t best_extent = 0;
+    int bx0 = 0, by0 = 0, bx1 = -1, by1 = -1;
+    int next = 0;
+    for (int sy = 0; sy < bh; ++sy) {
+        for (int sx = 0; sx < bw; ++sx) {
+            const std::size_t s = static_cast<std::size_t>(sy) * static_cast<std::size_t>(bw) +
+                                  static_cast<std::size_t>(sx);
+            if (lit[s] < min_lit || label[s] >= 0) continue;
+            std::uint64_t weight = 0;
+            int cx0 = sx, cy0 = sy, cx1 = sx, cy1 = sy;
+            label[s] = next;
+            stack.assign(1, static_cast<int>(s));
+            while (!stack.empty()) {
+                const int i = stack.back();
+                stack.pop_back();
+                const int ix = i % bw;
+                const int iy = i / bw;
+                weight += lit[static_cast<std::size_t>(i)];
+                cx0 = std::min(cx0, ix);
+                cx1 = std::max(cx1, ix);
+                cy0 = std::min(cy0, iy);
+                cy1 = std::max(cy1, iy);
+                for (int dy = -1; dy <= 1; ++dy) {
+                    for (int dx = -1; dx <= 1; ++dx) {
+                        const int nx = ix + dx;
+                        const int ny = iy + dy;
+                        if (nx < 0 || ny < 0 || nx >= bw || ny >= bh) continue;
+                        const std::size_t n = static_cast<std::size_t>(ny) *
+                                                  static_cast<std::size_t>(bw) +
+                                              static_cast<std::size_t>(nx);
+                        if (lit[n] < min_lit || label[n] >= 0) continue;
+                        label[n] = next;
+                        stack.push_back(static_cast<int>(n));
+                    }
+                }
+            }
+            ++next;
+            // Ranked by EXTENT, not by how much of it is lit. A frame of zeros lights little more
+            // than its ring and pilots, and a solid window would outweigh it by lit count; by
+            // extent the screen wins, because it is the thing the person has filled the view with.
+            const std::uint64_t extent = static_cast<std::uint64_t>(cx1 - cx0 + 1) *
+                                         static_cast<std::uint64_t>(cy1 - cy0 + 1);
+            if (extent > best_extent || (extent == best_extent && weight > best_weight)) {
+                best_extent = extent;
+                best_weight = weight;
+                bx0 = cx0;
+                by0 = cy0;
+                bx1 = cx1;
+                by1 = cy1;
+            }
+        }
+    }
+    if (best_weight == 0) return out;
+    // Padded by one block. The tip of a rotated screen's corner is a sliver that can fall below
+    // `min_lit` in its block, and the corner extremes need exactly that sliver.
+    out.x0 = std::max(0, (bx0 - 1) * block);
+    out.y0 = std::max(0, (by0 - 1) * block);
+    out.x1 = std::min(w - 1, (bx1 + 2) * block - 1);
+    out.y1 = std::min(h - 1, (by1 + 2) * block - 1);
+    out.valid = true;
+    return out;
+}
+
 std::uint32_t ScreenDetector::OtsuThreshold(const ImageView8& img, std::uint32_t stride) {
     std::array<std::uint64_t, 256> hist{};
     if (img.empty()) return 128;
@@ -118,9 +209,14 @@ Result<Detection> ScreenDetector::Detect(const ImageView8& img) const {
     // (docs/research/android-camera-pipeline.md), which under-exposes the surroundings.
     // This is a stated assumption, not a universal truth: a screen against a brightly lit
     // background is the known failure case and is why verification below is mandatory.
+    //
+    // Confined to the largest connected lit structure, so a lamp or window elsewhere in the frame
+    // cannot drag a corner out to itself (F56).
+    const LitRegion region = LargestLitRegion(img, thr);
+    if (!region.valid) return Error::kMarkersNotFound;
     CornerExtremes e;
-    for (int y = 0; y < img.height(); ++y) {
-        for (int x = 0; x < img.width(); ++x) {
+    for (int y = region.y0; y <= region.y1; ++y) {
+        for (int x = region.x0; x <= region.x1; ++x) {
             if (img.At(x, y) > thr) {
                 e.Add(static_cast<double>(x), static_cast<double>(y));
             }

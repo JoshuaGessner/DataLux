@@ -23,6 +23,7 @@
 #include <cstdint>
 #include <deque>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <utility>
@@ -58,8 +59,24 @@ struct LiveConfig {
     double max_blur_cells = 0.75;
     double steady_read_fraction = 0.8;
     double severe_blur_cells = 1.5;
-    // Progress-rate history behind the time-remaining estimate.
+    // The speed and time-left estimates (TransferRate): the window of progress history behind
+    // them, and the time constants of the smoothing on top.
     double eta_window_s = 4.0;
+    double rate_smoothing_s = 2.0;
+    double eta_smoothing_s = 2.0;
+
+    // Decode LANES: independent pipelines (tracker, alignment, sampler) that may run on separate
+    // threads at once, feeding one session. One phone core decodes 20-50 ms of a 4080-wide frame
+    // (F57), so a single lane cannot keep up with a 60 fps camera; three can (F60). Each lane sees
+    // only the frames given to it, so its tracker searches over a longer gap -- which it handles,
+    // because a frame it cannot track is simply reacquired.
+    std::size_t lanes = 1;
+
+    // Consecutive readable frames from a DIFFERENT session before this receiver abandons its
+    // transfer and starts on the new one: about a second at 30 fps. Longer than any stray frame
+    // from a second sender in view; short enough that a person who switched files on the sender
+    // is not left watching a frozen bar.
+    int switch_after_foreign_frames = 30;
 };
 
 enum class LivePhase : std::uint8_t {
@@ -88,53 +105,124 @@ struct LiveStatus {
 
     double progress = 0.0;            // 0..1, never decreases
     double seconds_remaining = -1.0;  // < 0 = no estimate yet
+    // Verified-file bytes per second right now, smoothed: goodput's rate over the last few seconds
+    // (README). 0 until the manifest is in, because before it nothing knows the file's size.
+    double bytes_per_second = 0.0;
     double motion_blur_cells = 0.0;   // screen motion during one exposure, in cells
     double recent_read_fraction = 0.0;  // frames in the window whose header decoded
     bool screen_in_view = false;
     std::uint64_t frames = 0;
+    // Frames whose PAYLOAD decoded: intra-frame FEC succeeded and the CRC over it matched. The
+    // proof that this receiver has the sender's grid. A decoded header is not: the header band is a
+    // few rows at the top, and a near-miss grid (120x208 against 120x200) puts those rows in nearly
+    // the same place and reads them (F58). The payload spans every cell, so a wrong grid cannot.
+    std::uint64_t payload_frames = 0;
+    // Times the sender switched to a different file and this receiver started over on it.
+    std::uint32_t sender_switches = 0;
 
     std::string file_name;            // a display hint (sanitised), once the manifest is in
     std::uint64_t file_size = 0;
 };
 
+// The speed and the time left of a transfer in progress, from its verified progress over time.
+//
+// The rate over the last few seconds is ACCURATE but not steady: payloads arrive in bursts as the
+// hand moves, and on the first 2.2 MB transfer the estimate made from it went
+// 2 min -> 4 -> 6 -> 12 -> 9 -> 2 min -> 81 s in under ten seconds. Here the speed follows that
+// windowed rate through a first-order filter, and the time left counts down by the clock and glides
+// to each new estimate -- so a real change of speed shows within a few seconds, without a jump.
+class TransferRate {
+  public:
+    struct Config {
+        double window_s = 4.0;
+        double max_window_s = 20.0;  // the window stretches to this to hold...
+        double min_progress = 0.02;  // ...at least this much of the file
+        double rate_smoothing_s = 2.0;
+        double eta_smoothing_s = 2.0;
+    };
+
+    TransferRate() noexcept = default;
+    explicit TransferRate(Config cfg) noexcept : cfg_(cfg) {}
+
+    // Progress (0..1) at `timestamp_ns`; `paused` while nothing is arriving. `started_ns` is when
+    // the first data arrived, 0 if unknown: progress already made at the first call is spread
+    // over the time since then. Calls older than one already seen are ignored, because decode
+    // lanes finish out of order.
+    void Update(std::int64_t timestamp_ns, double progress, bool paused,
+                std::int64_t started_ns = 0);
+    void Reset() noexcept { *this = TransferRate(cfg_); }
+
+    // Progress per second right now: 0 before the first measurement and while paused.
+    [[nodiscard]] double rate() const noexcept { return paused_ || !valid_ ? 0.0 : rate_; }
+    // Seconds left as they should be SHOWN; < 0 when there is no honest estimate.
+    [[nodiscard]] double seconds_remaining() const noexcept { return eta_s_; }
+
+  private:
+    Config cfg_;
+    std::deque<std::pair<std::int64_t, double>> history_;
+    std::int64_t last_ns_ = 0;
+    bool seeded_ = false;  // the first call, and the progress made before it, accounted for
+    bool valid_ = false;   // `rate_` rests on a measurement rather than its zero start
+    bool paused_ = false;
+    double rate_ = 0.0;
+    double eta_s_ = -1.0;
+};
+
 class LiveReceiver {
   public:
+    static constexpr std::size_t kMaxLanes = 8;
+
     static Result<LiveReceiver> Create(GridGeometry grid, LiveConfig cfg = {});
 
     // One camera frame. Frames may be skipped freely -- a receiver too slow to process every frame
     // just reads fewer of them -- because nothing depends on seeing consecutive ones.
-    const LiveStatus& Ingest(const ImageView8& img, std::int64_t timestamp_ns);
+    //
+    // THREAD-SAFE across lanes: up to `cfg.lanes` threads may call this at once, each with its own
+    // `lane`. The image work runs in the lane, unlocked; only the session and the status are
+    // serialised. Returns a COPY of the status, because another lane may be changing it.
+    LiveStatus Ingest(const ImageView8& img, std::int64_t timestamp_ns, std::size_t lane = 0);
 
+    // Not for use while another thread may be in Ingest.
     [[nodiscard]] const LiveStatus& status() const noexcept { return status_; }
 
     // The verified file, once `status().phase == kVerified`. kFountainIncomplete before then, and
     // kHashMismatch after a failed verification -- never partial or unverified bytes.
     [[nodiscard]] Result<std::vector<std::uint8_t>> File() const;
 
-    [[nodiscard]] const FramePipeline& pipeline() const noexcept { return *pipeline_; }
+    [[nodiscard]] const FramePipeline& pipeline() const noexcept { return *pipelines_.front(); }
     [[nodiscard]] const ReceiveSession& session() const noexcept { return *session_; }
+    [[nodiscard]] std::size_t lanes() const noexcept { return pipelines_.size(); }
 
   private:
-    LiveReceiver(std::unique_ptr<FrameLayout> layout, std::unique_ptr<FramePipeline> pipeline,
+    LiveReceiver(std::unique_ptr<FrameLayout> layout,
+                 std::vector<std::unique_ptr<FramePipeline>> pipelines,
                  std::unique_ptr<ReceiveSession> session, LiveConfig cfg)
         : layout_(std::move(layout)),
-          pipeline_(std::move(pipeline)),
+          pipelines_(std::move(pipelines)),
           session_(std::move(session)),
-          cfg_(cfg) {}
+          cfg_(cfg),
+          mu_(std::make_unique<std::mutex>()),
+          rate_(TransferRate::Config{.window_s = cfg.eta_window_s,
+                                     .rate_smoothing_s = cfg.rate_smoothing_s,
+                                     .eta_smoothing_s = cfg.eta_smoothing_s}) {}
 
-    void Decide(std::int64_t timestamp_ns);
+    void Decide(std::int64_t timestamp_ns, const FramePipeline& lane);
 
-    // Heap-held so their addresses survive moves: the pipeline and the session keep pointers to
+    // Heap-held so their addresses survive moves: the pipelines and the session keep pointers to
     // the layout.
     std::unique_ptr<FrameLayout> layout_;
-    std::unique_ptr<FramePipeline> pipeline_;
+    std::vector<std::unique_ptr<FramePipeline>> pipelines_;
     std::unique_ptr<ReceiveSession> session_;
     LiveConfig cfg_;
+    // Guards everything below it and the session. Heap-held so the receiver stays movable.
+    std::unique_ptr<std::mutex> mu_;
 
     LiveStatus status_;
     std::deque<bool> read_window_;
     int frames_without_screen_ = 0;
-    std::deque<std::pair<std::int64_t, double>> progress_history_;
+    int foreign_run_ = 0;
+    TransferRate rate_;
+    std::int64_t first_payload_ns_ = 0;  // when this session's first payload frame arrived
     std::optional<Result<std::vector<std::uint8_t>>> result_;
 };
 

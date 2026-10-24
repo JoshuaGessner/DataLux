@@ -291,6 +291,40 @@ TEST(AimAnalysis, AcceptsAWellFramedSharpScreen) {
     EXPECT_LT(a.mid_fraction, 0.45);
 }
 
+TEST(AimAnalysis, ALampElsewhereInTheViewIsNotTheScreen) {
+    // F56. A well-framed screen with a light source at the edge of the view: a window, a desk
+    // lamp, a ceiling light. Taking the bounding box of every lit pixel stretched the "screen" to
+    // the lamp and reported it clipped at an edge it was nowhere near -- so a person holding the
+    // phone perfectly was told to move back, indefinitely.
+    Image8 img = Screen(2400, 2400, 1200, 1200, 1950, 0.0, 6);
+    for (int y = 60; y < 320; ++y) {
+        for (int x = 2290; x < 2400; ++x) img.set(x, y, 250);
+    }
+    auto r = AnalyseAim(img.view(), kGrid);
+    ASSERT_TRUE(r.ok());
+    const AimAdvice& a = r.value();
+    EXPECT_FALSE(a.clipped()) << a.guidance;
+    EXPECT_EQ(a.verdict, AimVerdict::kReady) << a.guidance;
+    EXPECT_NEAR(a.bbox_w, 1950, 12);
+}
+
+TEST(AimAnalysis, ReportsBothLevelsForExposureControl) {
+    Image8 img = Screen(2400, 2400, 1200, 1200, 1950, 0.0, 6, 200, 20);
+    auto r = AnalyseAim(img.view(), kGrid);
+    ASSERT_TRUE(r.ok());
+    EXPECT_NEAR(r.value().bright_level, 200.0, 3.0);
+    EXPECT_NEAR(r.value().dark_level, 20.0, 3.0);
+
+    // A saturated lamp elsewhere in the view must not move them: exposure control would chase it.
+    for (int y = 0; y < 220; ++y) {
+        for (int x = 2200; x < 2400; ++x) img.set(x, y, 255);
+    }
+    auto lamp = AnalyseAim(img.view(), kGrid);
+    ASSERT_TRUE(lamp.ok());
+    EXPECT_NEAR(lamp.value().bright_level, 200.0, 3.0);
+    EXPECT_NEAR(lamp.value().dark_level, 20.0, 3.0);
+}
+
 TEST(AimAnalysis, IsStrideSafe) {
     // Fed from a camera Y plane whose stride is chosen by the driver and is very often not the
     // width. Code assuming stride == width works on one device and shears on the next (image.h).
