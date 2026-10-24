@@ -143,7 +143,15 @@ class LiveDecoder(
         var chromaRowStride = 0
         var chromaPixelStride = 0
         val worker = Executors.newSingleThreadExecutor { r ->
-            Thread(r, "ff-live-decode-$index").apply { priority = Thread.MAX_PRIORITY - 1 }
+            // Off the slow cores first: a Pixel 8's little cores decode a frame 6x slower than
+            // its others, and the scheduler put lanes there often enough to halve the rate.
+            Thread({
+                val n = runCatching { NativeReceiver.pinToFastCores() }.getOrDefault(0)
+                if (index == 0) {
+                    SessionLog.i(TAG, if (n > 0) "decode lanes on the $n fast cores" else "decode lanes on any core")
+                }
+                r.run()
+            }, "ff-live-decode-$index").apply { priority = Thread.MAX_PRIORITY - 1 }
         }
     }
     private val laneList = List(lanes.coerceIn(1, MAX_LANES)) { Lane(it) }
@@ -534,6 +542,8 @@ internal object NativeReceiver {
     }
 
     @JvmStatic external fun slotCount(): Int
+    /** Confines the calling thread to the fast cores; how many, 0 = left alone (all are fast). */
+    @JvmStatic external fun pinToFastCores(): Int
     @JvmStatic external fun open(cols: Int, rows: Int, exposureNs: Long, lanes: Int): Long
     @JvmStatic external fun ingest(
         handle: Long, y: ByteBuffer, width: Int, height: Int, rowStride: Int,

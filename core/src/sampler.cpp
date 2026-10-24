@@ -38,6 +38,53 @@ double CellSampler::SampleCell(const ImageView8& img, const Homography& grid_to_
                                std::uint32_t col, std::uint32_t row) const {
     if (img.empty()) return std::nan("");
     const auto n = static_cast<std::size_t>(cfg_.samples_per_axis);
+
+    // Fast path: project the window's centre once and walk the sub-samples along the
+    // homography's derivative there -- one divide per cell rather than one per sample, and no
+    // per-sample bounds checks. This is most of a phone's decode time: alignment alone samples
+    // ~2.8 million points a frame, and a Pixel 8's mid cores took 60 ms a frame doing it point
+    // by point.
+    //
+    // Exact for an affine view; under perspective the error is second order in how much the
+    // projective divisor changes across the window, so the path is taken only when that is under
+    // a part in a thousand -- a few thousandths of a pixel. Anything else, and any window not
+    // wholly inside the frame, takes the exact per-sample path below.
+    {
+        const auto& m = grid_to_image.m();
+        const double mid = 0.5 * (offsets_.front() + offsets_.back());
+        const double half = 0.5 * (offsets_.back() - offsets_.front());
+        const double cx = static_cast<double>(col) + mid;
+        const double cy = static_cast<double>(row) + mid;
+        const double w = m[6] * cx + m[7] * cy + m[8];
+        const double dw = (std::fabs(m[6]) + std::fabs(m[7])) * half;
+        if (std::fabs(w) > 1e-12 && dw < 1e-3 * std::fabs(w)) {
+            const double inv = 1.0 / w;
+            const double x = (m[0] * cx + m[1] * cy + m[2]) * inv;
+            const double y = (m[3] * cx + m[4] * cy + m[5]) * inv;
+            const double xu = (m[0] - x * m[6]) * inv;  // d(image x) / d(grid x)
+            const double xv = (m[1] - x * m[7]) * inv;  // d(image x) / d(grid y)
+            const double yu = (m[3] - y * m[6]) * inv;
+            const double yv = (m[4] - y * m[7]) * inv;
+            // Affine, so the window's extremes are at its corners.
+            const double ex = (std::fabs(xu) + std::fabs(xv)) * half;
+            const double ey = (std::fabs(yu) + std::fabs(yv)) * half;
+            if (x - ex >= 0.0 && y - ey >= 0.0 && x + ex < static_cast<double>(img.width() - 1) &&
+                y + ey < static_cast<double>(img.height() - 1)) {
+                double sum = 0.0;
+                for (std::size_t oy = 0; oy < n; ++oy) {
+                    const double dv = offsets_[oy] - mid;
+                    const double rx = x + xv * dv;
+                    const double ry = y + yv * dv;
+                    for (std::size_t ox = 0; ox < n; ++ox) {
+                        const double du = offsets_[ox] - mid;
+                        sum += img.SampleBilinearInside(rx + xu * du, ry + yu * du);
+                    }
+                }
+                return sum / static_cast<double>(n * n);
+            }
+        }
+    }
+
     double sum = 0.0;
     int hits = 0;
     for (std::size_t oy = 0; oy < n; ++oy) {

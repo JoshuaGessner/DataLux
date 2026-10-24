@@ -87,6 +87,21 @@ class ImageView8 {
         return top * (1.0 - fy) + bot * fy;
     }
 
+    // [SampleBilinear] without its checks, for a caller that has already proved the point lies in
+    // [0, width-1) x [0, height-1) -- the cell sampler does, once per cell for all its samples.
+    [[nodiscard]] double SampleBilinearInside(double x, double y) const noexcept {
+        const int x0 = static_cast<int>(x);
+        const int y0 = static_cast<int>(y);
+        const double fx = x - static_cast<double>(x0);
+        const double fy = y - static_cast<double>(y0);
+        const std::uint8_t* p = data_ + static_cast<std::size_t>(y0) * static_cast<std::size_t>(stride_) +
+                                static_cast<std::size_t>(x0);
+        const double top = static_cast<double>(p[0]) * (1.0 - fx) + static_cast<double>(p[1]) * fx;
+        const double bot = static_cast<double>(p[stride_]) * (1.0 - fx) +
+                           static_cast<double>(p[stride_ + 1]) * fx;
+        return top * (1.0 - fy) + bot * fy;
+    }
+
   private:
     const std::uint8_t* data_ = nullptr;
     int w_ = 0;

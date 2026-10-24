@@ -202,6 +202,16 @@ int main(int argc, char** argv) {
     std::printf("header: session %08x sequence %u profile %u nsym %u%s\n", hd.session_id, hd.sequence,
                 static_cast<unsigned>(hd.profile), hd.fec_nsym, hd.is_manifest() ? " (manifest)" : "");
 
+    // ---- whether it decodes: any frame, no truth needed ----
+    ReceiveSession rs = ReceiveSession::Create(layout).value();
+    const auto t3 = Clock::now();
+    const FrameOutcome outcome = rs.Ingest(cf.cell_samples, cf.cell_rgb, 1);
+    std::printf("timing (this host): session %.1f ms (header, demodulation, FEC)\n",
+                ms(t3, Clock::now()));
+    const IntraFec::Stats fs = rs.last_fec_stats();
+    std::printf("decode: %s; FEC worst codeword used %zu of %u parity bytes\n",
+                std::string(FrameOutcomeName(outcome)).c_str(), fs.worst_budget_used, hd.fec_nsym);
+
     // ---- what the sender drew ----
     std::vector<std::uint8_t> file(test_bytes);
     JavaRandom(5).NextBytes(&file);
@@ -231,16 +241,7 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    // ---- decode and compare ----
-    ReceiveSession rs = ReceiveSession::Create(layout).value();
-    const auto t3 = Clock::now();
-    const FrameOutcome outcome = rs.Ingest(cf.cell_samples, cf.cell_rgb, 1);
-    std::printf("timing (this host): session %.1f ms (header, demodulation, FEC)\n",
-                ms(t3, Clock::now()));
-    const IntraFec::Stats fs = rs.last_fec_stats();
-    std::printf("decode: %s; FEC worst codeword used %zu of %u parity bytes\n",
-                std::string(FrameOutcomeName(outcome)).c_str(), fs.worst_budget_used, hd.fec_nsym);
-
+    // ---- compare ----
     const ColorModulator mod(layout, hd.profile);
     const std::size_t bits = mod.bits_per_cell();
     SoftSymbolBuffer soft;

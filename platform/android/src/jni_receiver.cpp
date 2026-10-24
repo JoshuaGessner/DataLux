@@ -15,8 +15,11 @@
 #include <fileflow/result.h>
 
 #include <jni.h>
+#include <sched.h>
+#include <unistd.h>
 
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <new>
 #include <string>
@@ -79,9 +82,65 @@ bool Unpack(JNIEnv* env, jobject plane, int w, int h, jint row_stride, jint pixe
     return true;
 }
 
+// One number from a sysfs file, or -1.
+long ReadSysfs(const char* path) {
+    std::FILE* f = std::fopen(path, "re");
+    if (f == nullptr) return -1;
+    long v = -1;
+    if (std::fscanf(f, "%ld", &v) != 1) v = -1;
+    std::fclose(f);
+    return v;
+}
+
+// The cores worth decoding on: those the kernel rates at least half as capable as its best
+// (cpu_capacity, or the top clock where that is missing). Empty when every core qualifies --
+// then there is nothing to avoid -- or when nothing can be read.
+//
+// A Pixel 8's four little cores rate 182 of 1024 and decode a frame in ~190 ms against ~33 ms on
+// its mid and big cores; left to the scheduler, decode lanes landed on them often enough to
+// average 110 ms a frame and miss a third of the sender's frames. The Galaxy (SM-S948U1) rates
+// its slowest cores 741 of 1024, so it is left alone.
+std::vector<int> FastCores() {
+    const long n = sysconf(_SC_NPROCESSORS_CONF);
+    if (n <= 1 || n > CPU_SETSIZE) return {};
+    std::vector<long> cap(static_cast<std::size_t>(n), -1);
+    long best = 0;
+    for (long i = 0; i < n; ++i) {
+        char path[96];
+        std::snprintf(path, sizeof path, "/sys/devices/system/cpu/cpu%ld/cpu_capacity", i);
+        long v = ReadSysfs(path);
+        if (v <= 0) {
+            std::snprintf(path, sizeof path, "/sys/devices/system/cpu/cpu%ld/cpufreq/cpuinfo_max_freq", i);
+            v = ReadSysfs(path);
+        }
+        cap[static_cast<std::size_t>(i)] = v;
+        if (v > best) best = v;
+    }
+    if (best <= 0) return {};
+    std::vector<int> fast;
+    for (long i = 0; i < n; ++i) {
+        if (cap[static_cast<std::size_t>(i)] * 2 >= best) fast.push_back(static_cast<int>(i));
+    }
+    if (fast.size() == static_cast<std::size_t>(n)) return {};
+    return fast;
+}
+
 }  // namespace
 
 extern "C" {
+
+// Confines the CALLING thread to the fast cores; returns how many that is, 0 when it was left
+// alone (every core is fast, or the kernel would not say). A decode lane calls it once, first.
+JNIEXPORT jint JNICALL
+Java_dev_fileflow_rx_NativeReceiver_pinToFastCores(JNIEnv* /*env*/, jclass /*unused*/) {
+    static const std::vector<int> fast = FastCores();
+    if (fast.empty()) return 0;
+    cpu_set_t set;
+    CPU_ZERO(&set);
+    for (const int c : fast) CPU_SET(c, &set);
+    if (sched_setaffinity(0, sizeof set, &set) != 0) return 0;
+    return static_cast<jint>(fast.size());
+}
 
 JNIEXPORT jint JNICALL
 Java_dev_fileflow_rx_NativeReceiver_slotCount(JNIEnv* /*env*/, jclass /*unused*/) {
