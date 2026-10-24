@@ -47,6 +47,7 @@ enum Slot : int {
     kLevelSeparation,
     kDarkLevel,
     kBrightLevel,
+    kWhiteLevel,
     kSlotCount,
 };
 
@@ -129,6 +130,7 @@ Java_dev_fileflow_aim_NativeAim_analyse(JNIEnv* env, jclass /*unused*/, jobject 
     v[kLevelSeparation] = a.level_separation;
     v[kDarkLevel] = a.dark_level;
     v[kBrightLevel] = a.bright_level;
+    v[kWhiteLevel] = a.white_level;
     env->SetDoubleArrayRegion(out, 0, static_cast<jsize>(kSlotCount), v);
 
     // The coverage map travels in its own array rather than as extra slots: the slot enum is

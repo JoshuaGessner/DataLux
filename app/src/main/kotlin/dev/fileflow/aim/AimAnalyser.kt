@@ -45,6 +45,8 @@ data class Aim(
     /** The two class means, in sensor counts. What exposure control steers on. */
     val darkLevel: Double,
     val brightLevel: Double,
+    /** The screen's white, 97th percentile of its own cells: what exposure steers on (F62). */
+    val whiteLevel: Double,
     /**
      * Level separation per tile across the screen, row-major, [tileCols] wide.
      *
@@ -108,6 +110,7 @@ class AimAnalyser {
             levelSeparation = slots[Slot.LevelSeparation.ordinal],
             darkLevel = slots[Slot.DarkLevel.ordinal],
             brightLevel = slots[Slot.BrightLevel.ordinal],
+            whiteLevel = slots[Slot.WhiteLevel.ordinal],
             tiles = tiles.copyOf(),
             tileCols = TILE_COLS,
         )
@@ -118,7 +121,7 @@ class AimAnalyser {
         Verdict, LitFraction, BboxX, BboxY, BboxW, BboxH,
         ClippedLeft, ClippedTop, ClippedRight, ClippedBottom,
         RotationDeg, PxPerCell, BboxInflation, MidFraction, MeanLuminance, Threshold,
-        LevelSeparation, DarkLevel, BrightLevel,
+        LevelSeparation, DarkLevel, BrightLevel, WhiteLevel,
     }
 }
 

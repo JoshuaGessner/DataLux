@@ -133,7 +133,7 @@ docs/            all design documentation (see docs/INDEX.md)
   architecture/  system overview, data flow, component registry
   adr/           architecture decision records
   specifications/ optical frame, modulation, protocol, performance model
-  experiments/   experiment registry, open questions, PHASE1-FINDINGS (F1–F62)
+  experiments/   experiment registry, open questions, PHASE1-FINDINGS (F1–F63)
   testing/       simulator plan, capture harness, benchmark methodology
   planning/      roadmap, feature registry, risk register, device matrix
   security/      threat model, input validation rules

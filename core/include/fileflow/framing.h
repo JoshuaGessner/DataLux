@@ -106,6 +106,11 @@ struct AimAdvice {
     // level away from clipping, the dark level down to black (C05).
     double dark_level = 0.0;
     double bright_level = 0.0;
+    // The screen's WHITE: the 97th percentile of its own cells. What exposure steers on now. Under
+    // M0 it sits a little above `bright_level`; under M5 the bright class is white, yellow, cyan and
+    // green together, its mean far below white, and steering on it raised the Pixel's ISO from 60
+    // to 121 for a screen that was already bright enough -- noise for nothing (F62).
+    double white_level = 0.0;
 
     /**
      * Level separation measured per TILE over the screen's bounding box, row-major.

@@ -543,6 +543,10 @@ TEST(LiveReceiver, LosingTheScreenPausesAndNothingIsLost) {
     }
     ASSERT_EQ(rx.value().status().phase, LivePhase::kVerified) << rx.value().status().message;
     EXPECT_EQ(rx.value().File().value(), rig.file);
+    // The link's own time: from the first data, so less than the whole run, which began with the
+    // screen in view -- and, here, includes the second spent pointed at the floor.
+    EXPECT_GT(rx.value().status().transfer_seconds, 1.0);
+    EXPECT_LT(rx.value().status().transfer_seconds, rig.t());
 }
 
 TEST(LiveReceiver, FastMotionAsksToHoldSteadier) {

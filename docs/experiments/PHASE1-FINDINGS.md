@@ -2521,6 +2521,53 @@ Sources: [libcimbar](https://github.com/sz3/libcimbar),
 
 ---
 
+## F63 — Colour on real phones: 267 KB/s, and what the result screen was measuring `[FACT]`
+
+**Measured** `[FACT]` (2026-10-23, Pixel 8 sending, S26 Ultra receiving at 50 fps, phones fixed
+~10 cm apart, receiver px/cell 10-13, 2.9 MB generated test file unless noted):
+
+| Sender | Transfer (first data to verified) | Live card | States/s seen | Colours apart / noise |
+| --- | --- | --- | --- | --- |
+| M5, 20 states/s (2.2 MB photo, hand-held) | 12.9 s, ~175 KB/s | 176-182 KB/s | 20.0 | ~190 / ~30 |
+| M5, 30 states/s | 11.1 s, **262.9 KB/s** | 262-265 KB/s | 30.0 | ~180 / 30-44 |
+| M5, 30 states/s, after F63's fixes | 11.0 s, **266.6 KB/s** | -- | 30.0 | -- |
+| M5, 30/s, 144x312 grid | 48.1 s, 60.9 KB/s | -- | ~29 | ~177 / ~35 |
+| M5, 30/s, 180x390 grid | failed: the bigger pattern is clipped at 10 cm | -- | -- | -- |
+
+**266.6 KB/s is 2.1 Mbit/s**, 2.5x libcimbar's published ~850 kbit/s (F62), from the same
+120x260 grid and 30 states/s that carried ~40 KB/s in black and white (F61). Every state the sender
+drew was read (30.0 seen of 30 drawn), so at a 60 Hz sender this is the state-rate ceiling: the
+next is 60/s, faster than the 50 fps camera. More cells did not help at this distance (144x312
+decoded intermittently; 180x390 overflowed the view). The S26 throttled on the longest runs (AP
+49 °C, decode 20 -> 64 ms a frame) and still kept ~47 decoded/s.
+
+**The result screen measured something else.** The 2.2 MB photo read 178 KB/s on the card for
+13 s and finished as "94.3 KB/s": the clock had started at Receive, 11 s before the sender was in
+view. The card was right -- 2.2 MB / 12.9 s from first data. The result now leads with the
+transfer itself (`LiveStatus::transfer_seconds`, first decoded payload to verification) and shows
+the time from Receive beneath it, labelled as including aiming; the report logs both.
+
+**Focus deadlock.** One run sat 33 s unread: the S26's continuous AF had settled at 16 cm on a
+sender 10 cm away, and the automatic refocus only fired once the aim analyser saw a screen -- which
+a screen that far out of focus is not. It now also refocuses every 4 s whenever nothing reads and
+any light is in view; the next run found the sender in 3 s.
+
+**The Pixel 8 as receiver** (operator report, and its session log): headers read on most frames
+but no colour payload decoded. Three causes, each now addressed, none yet verified:
+- **Focus**: filling its view with the S26's 6.9-inch pattern takes ~10.5 cm, its closest focus;
+  the log shows the lens pinned there. It now zooms in steps (to 1.6x, `CONTROL_ZOOM_RATIO`) while
+  pinned with nothing arriving, so moving back keeps the screen filling the picture.
+- **Exposure**: the servo steered on the bright class's mean, which under colour is white,
+  yellow, cyan and green together and sits far below white; it pushed ISO 60 -> 121. It now steers
+  on `white_level`, the screen's 97th percentile.
+- **Colour noise**: 35-190 against the S26's ~30. Chroma is now averaged over 16 points across
+  more of each cell instead of 9.
+
+**Default** sender setting is now Fastest (colour, 30 states/s). Steady (black and white) remains
+for cameras or light that colour does not survive.
+
+---
+
 ## What has NOT been validated
 
 To be explicit, since a working simulator invites over-confidence.

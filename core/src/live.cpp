@@ -266,6 +266,9 @@ void LiveReceiver::Decide(std::int64_t timestamp_ns, const FramePipeline& lane) 
             s.hint = LiveHint::kNone;
             s.progress = 1.0;
             s.seconds_remaining = 0.0;
+            if (first_payload_ns_ > 0 && timestamp_ns > first_payload_ns_) {
+                s.transfer_seconds = static_cast<double>(timestamp_ns - first_payload_ns_) * 1e-9;
+            }
             s.message = "Received " + s.file_name + " (" + Size(s.file_size) + ") — verified.";
         } else {
             s.phase = LivePhase::kFailed;

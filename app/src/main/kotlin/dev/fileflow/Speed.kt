@@ -27,7 +27,8 @@ enum class Speed(
     Fastest("Fastest", 120, 260, 30.0, colour = true);
 
     companion object {
-        val DEFAULT = Fast
+        // Colour at 30/s: 263 KB/s Pixel 8 -> S26 Ultra, against 178 at 20/s (F63).
+        val DEFAULT = Fastest
         fun named(name: String?): Speed = entries.firstOrNull { it.name == name } ?: DEFAULT
     }
 }

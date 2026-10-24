@@ -42,6 +42,7 @@ enum Slot : int {
     kDistinctStates,
     kColorSpread,
     kColorNoise,
+    kTransferSeconds,
     kSlotCount,
 };
 
@@ -172,6 +173,7 @@ Java_dev_fileflow_rx_NativeReceiver_ingest(JNIEnv* env, jclass /*unused*/, jlong
     v[kDistinctStates] = static_cast<jdouble>(s.distinct_states);
     v[kColorSpread] = s.color_spread;
     v[kColorNoise] = s.color_noise;
+    v[kTransferSeconds] = s.transfer_seconds;
     env->SetDoubleArrayRegion(out, 0, static_cast<jsize>(kSlotCount), v);
     return env->NewStringUTF(s.message.c_str());
 }

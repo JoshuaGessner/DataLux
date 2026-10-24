@@ -181,6 +181,29 @@ class CameraRecorder(private val context: Context) {
     /** Refocus on the centre of the view. */
     fun refocus(): Boolean = focusAt(0.5f, 0.5f)
 
+    /** Zoom currently requested; 1 = the whole sensor. */
+    @Volatile
+    var zoom: Float = 1f
+        private set
+
+    /**
+     * Zooms by `CONTROL_ZOOM_RATIO`, clamped to what the camera offers and to [MAX_LIVE_ZOOM].
+     * Returns false when the camera cannot zoom or is already there.
+     */
+    fun setZoom(ratio: Float): Boolean {
+        val c = control ?: return false
+        val range = c.chars.get(CameraCharacteristics.CONTROL_ZOOM_RATIO_RANGE) ?: return false
+        val clamped = ratio.coerceIn(maxOf(1f, range.lower), minOf(range.upper, MAX_LIVE_ZOOM))
+        if (kotlin.math.abs(clamped - zoom) < 0.01f) return false
+        zoom = clamped
+        c.handler.post {
+            if (control !== c) return@post
+            c.builder.set(CaptureRequest.CONTROL_ZOOM_RATIO, clamped)
+            c.repeat()
+        }
+        return true
+    }
+
     /** Sets sensor sensitivity, clamped to what the sensor accepts. No-op without manual control. */
     fun setIso(value: Int) {
         val c = control ?: return
@@ -1019,6 +1042,12 @@ class CameraRecorder(private val context: Context) {
 
     companion object {
         private const val TAG = "FileFlow.Capture"
+        /**
+         * Most a live receive zooms. Zoom here is a crop, not optics: it lets the person stand back to
+         * where the lens focuses while the screen still fills the picture, and costs nothing until
+         * the sensor pixels per cell run short -- 1.6x keeps ~8 of them at the distance it is for.
+         */
+        const val MAX_LIVE_ZOOM = 1.6f
         private const val IMAGE_BUFFERS = 6
         /** Side of the tap-to-focus region, and of the standing centre region, as array fractions. */
         private const val AF_TAP_FRACTION = 0.15f

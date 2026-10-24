@@ -287,6 +287,19 @@ Result<AimAdvice> AnalyseAim(const ImageView8& img, const GridGeometry& grid, Ai
         a.dark_level = inner.dark_mean;
         a.bright_level = inner.bright_mean;
     }
+    std::uint64_t inner_total = 0;
+    for (const std::uint64_t n : inner_hist) inner_total += n;
+    if (inner_total > 0) {
+        const std::uint64_t want = inner_total - inner_total * 3 / 100;  // 97th percentile
+        std::uint64_t seen = 0;
+        for (int v = 0; v < 256; ++v) {
+            seen += inner_hist[static_cast<std::size_t>(v)];
+            if (seen >= want) {
+                a.white_level = static_cast<double>(v);
+                break;
+            }
+        }
+    }
     const double interior = static_cast<double>(dark + bright + mid);
     a.mid_fraction = interior > 0.0 ? static_cast<double>(mid) / interior : 1.0;
     // Reported, never gated on. It is a property of the PAYLOAD -- a zero fountain symbol renders

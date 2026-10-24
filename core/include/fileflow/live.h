@@ -108,6 +108,13 @@ struct LiveStatus {
     // Verified-file bytes per second right now, smoothed: goodput's rate over the last few seconds
     // (README). 0 until the manifest is in, because before it nothing knows the file's size.
     double bytes_per_second = 0.0;
+    // Seconds from this file's first decoded data to the frame that verified it, once verified.
+    //
+    // The transfer itself, without the time spent pointing the camera: the 2.2 MB photo that
+    // read 178 KB/s on the card for 13 s was reported as 94.3 KB/s because the clock had started
+    // 11 s earlier, at "Receive", before the sender was even in view. Both are true; only one is
+    // the speed of the link, and a result that shows only the other contradicts the card.
+    double transfer_seconds = 0.0;
     double motion_blur_cells = 0.0;   // screen motion during one exposure, in cells
     double recent_read_fraction = 0.0;  // frames in the window whose header decoded
     bool screen_in_view = false;

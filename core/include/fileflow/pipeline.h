@@ -266,12 +266,17 @@ class FramePipeline {
     };
 
     FramePipeline(const FrameLayout& layout, PipelineConfig cfg, CellSampler sampler,
-                  CellSampler align_sampler, ScreenTracker tracker, std::vector<Anchor> anchors);
+                  CellSampler align_sampler, CellSampler chroma_sampler, ScreenTracker tracker,
+                  std::vector<Anchor> anchors);
 
     const FrameLayout* layout_;
     PipelineConfig cfg_;
     CellSampler sampler_;
     CellSampler align_sampler_;  // wide window: the alignment objective only
+    // Colour (M5): more points over more of the cell. Chroma is half resolution and, with the
+    // ISP's noise reduction off, far noisier than luma; averaging is the cheap remedy, and the
+    // colour of a cell's middle does not depend on exactly where its edges are.
+    CellSampler chroma_sampler_;
     std::vector<Anchor> anchors_;
     ScreenTracker tracker_;
 

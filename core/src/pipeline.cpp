@@ -161,12 +161,13 @@ double FramePipeline::PilotContrast(const ImageView8& img, const Homography& shi
 }
 
 FramePipeline::FramePipeline(const FrameLayout& layout, PipelineConfig cfg, CellSampler sampler,
-                             CellSampler align_sampler, ScreenTracker tracker,
-                             std::vector<Anchor> anchors)
+                             CellSampler align_sampler, CellSampler chroma_sampler,
+                             ScreenTracker tracker, std::vector<Anchor> anchors)
     : layout_(&layout),
       cfg_(cfg),
       sampler_(std::move(sampler)),
       align_sampler_(std::move(align_sampler)),
+      chroma_sampler_(std::move(chroma_sampler)),
       anchors_(std::move(anchors)),
       tracker_(std::move(tracker)) {}
 
@@ -177,6 +178,10 @@ Result<FramePipeline> FramePipeline::Create(const FrameLayout& layout, PipelineC
         CellSampler::Create(layout.geometry(),
                             SamplerConfig{.interior_margin = cfg.subcell.align_margin,
                                           .samples_per_axis = cfg.subcell.align_samples}));
+    FF_ASSIGN_OR_RETURN(
+        auto chroma_sampler,
+        CellSampler::Create(layout.geometry(),
+                            SamplerConfig{.interior_margin = 0.25, .samples_per_axis = 4}));
     FF_ASSIGN_OR_RETURN(auto tracker, ScreenTracker::Create(layout, cfg.tracker));
 
     // The known cells, levels taken from the modulator's own render of the structure so they can
@@ -210,7 +215,7 @@ Result<FramePipeline> FramePipeline::Create(const FrameLayout& layout, PipelineC
     }
 
     return FramePipeline(layout, cfg, std::move(sampler), std::move(align_sampler),
-                         std::move(tracker), std::move(anchors));
+                         std::move(chroma_sampler), std::move(tracker), std::move(anchors));
 }
 
 
@@ -230,8 +235,8 @@ std::vector<double> FramePipeline::SampleColor(const ChromaPlanes& chroma, const
         cm[6 + k] = m[6 + k];
     }
     const Homography hc(cm);
-    const std::vector<double> u = sampler_.Sample(chroma.u, hc);
-    const std::vector<double> v = sampler_.Sample(chroma.v, hc);
+    const std::vector<double> u = chroma_sampler_.Sample(chroma.u, hc);
+    const std::vector<double> v = chroma_sampler_.Sample(chroma.v, hc);
     if (u.size() != n || v.size() != n) return rgb;
 
     // Camera RGB, BT.601 full range -- what Camera2's YUV_420_888 carries. Exactness does not

@@ -59,6 +59,8 @@ data class LiveStatus(
     /** Last colour frame: distance between its two closest colours, and their noise (0..255). */
     val colorSpread: Double,
     val colorNoise: Double,
+    /** Once verified: seconds from the file's first data to verification (the link's own time). */
+    val transferSeconds: Double,
     /** The grid this status was decoded against: the detected one once [gridKnown]. */
     val cols: Int,
     val rows: Int,
@@ -332,6 +334,7 @@ class LiveDecoder(
             distinctStates = slots[Slot.DistinctStates.ordinal].toLong(),
             colorSpread = slots[Slot.ColorSpread.ordinal],
             colorNoise = slots[Slot.ColorNoise.ordinal],
+            transferSeconds = slots[Slot.TransferSeconds.ordinal],
             cols = c.cols,
             rows = c.rows,
             gridKnown = committed === c,
@@ -452,7 +455,7 @@ class LiveDecoder(
     private enum class Slot {
         Phase, Hint, Progress, SecondsRemaining, MotionBlurCells, RecentReadFraction,
         ScreenInView, Frames, FileSize, PayloadFrames, BytesPerSecond, DistinctStates,
-        ColorSpread, ColorNoise,
+        ColorSpread, ColorNoise, TransferSeconds,
     }
 
     companion object {

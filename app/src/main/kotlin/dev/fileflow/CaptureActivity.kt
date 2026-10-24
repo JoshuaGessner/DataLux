@@ -686,7 +686,33 @@ class CaptureActivity : AppCompatActivity() {
                 rec.setIso(baseIso)
                 rec.setExposure(baseExposureNs)
             }
-            if (a == null || a.verdict == AimVerdict.NoScreenFound) return
+            if (a == null) return
+            // Refocus whether or not the analyser sees a screen. A screen far enough out of focus
+            // is NOT a screen to it, so gating the scan on one waited for focus before fixing
+            // focus: the S26's continuous AF settled at 16 cm on a sender 10 cm away and sat there
+            // for 33 s, unread, until something else broke the deadlock (F63). A scan every few
+            // seconds while nothing reads costs nothing when the camera is pointed at the room.
+            if (a.verdict == AimVerdict.NoScreenFound) {
+                if (now - lastReadMs > REFOCUS_AFTER_MS && now - lastRefocusMs > REFOCUS_EVERY_MS &&
+                    a.litFraction > 0.02 && rec.refocus()
+                ) {
+                    lastRefocusMs = now
+                    SessionLog.i(LIVE_TAG, "nothing read, no screen found: refocusing")
+                }
+                return
+            }
+            // The lens is as close as it goes and nothing is arriving: the sender's screen is too
+            // big to fill this camera's view at a distance it can focus -- a 6.9-inch sender in a
+            // Pixel 8, whose closest focus is ~10.5 cm, which is just where that screen fills it.
+            // Zoom in a step, so moving back (which the card now asks) keeps the screen filling the
+            // picture at a distance the lens can reach.
+            if (pinnedAtClosest() && now - lastPayloadMs > PRODUCTIVE_WINDOW_MS &&
+                now - lastZoomMs > ZOOM_EVERY_MS && rec.setZoom(rec.zoom * ZOOM_STEP)
+            ) {
+                lastZoomMs = now
+                SessionLog.i(LIVE_TAG, "lens at its closest focus, nothing arriving: zoom %.2fx"
+                    .format(rec.zoom))
+            }
             if (now - lastReadMs > REFOCUS_AFTER_MS && now - lastRefocusMs > REFOCUS_EVERY_MS &&
                 !pinnedAtClosest()
             ) {
@@ -707,9 +733,12 @@ class CaptureActivity : AppCompatActivity() {
             // On the BRIGHT level only. A raised dark level was also treated as overexposure, and on
             // the first hand-held transfer it drove ISO from 60 to 9, the sensor's floor -- but
             // the dark cells were lifted by defocus at 12 cm, not by light, and less light does
-            // not fix blur (F59).
-            val tooBright = a.brightLevel > BRIGHT_CEILING
-            val tooDark = a.brightLevel < BRIGHT_FLOOR
+            // not fix blur (F59). And on the screen's WHITE, not the bright class's mean: under
+            // colour that class is white, yellow, cyan and green, and its mean sits far below
+            // white, so steering on it pushed ISO up on a screen already bright enough (F62).
+            val white = if (a.whiteLevel > 0.0) a.whiteLevel else a.brightLevel
+            val tooBright = white > WHITE_CEILING
+            val tooDark = white < WHITE_FLOOR
             when {
                 tooBright && iso > rec.isoRange.lower -> rec.setIso((iso * 0.8).toInt())
                 tooBright -> rec.setExposure((exp * 0.8).toLong().coerceAtLeast(MIN_EXPOSURE_NS))
@@ -718,8 +747,8 @@ class CaptureActivity : AppCompatActivity() {
                 else -> return
             }
             if (rec.iso != iso || rec.exposureNs != exp) {
-                SessionLog.i(LIVE_TAG, "exposure: levels %.0f/%.0f, ISO %d -> %d, %.1f -> %.1f ms".format(
-                    a.darkLevel, a.brightLevel, iso, rec.iso, exp / 1e6, rec.exposureNs / 1e6))
+                SessionLog.i(LIVE_TAG, "exposure: levels %.0f/%.0f white %.0f, ISO %d -> %d, %.1f -> %.1f ms".format(
+                    a.darkLevel, a.brightLevel, white, iso, rec.iso, exp / 1e6, rec.exposureNs / 1e6))
             }
         }
 
@@ -747,6 +776,7 @@ class CaptureActivity : AppCompatActivity() {
                 else -> "    undistort on"
             }
             return "focus $focus    ISO ${rec.iso}    exp ${"%.1f".format(rec.exposureNs / 1e6)} ms" +
+                (if (rec.zoom > 1.01f) "    zoom ${"%.2f".format(rec.zoom)}x" else "") +
                 (if (skew > 0) "    skew ${"%.1f".format(skew / 1e6)} ms" else "") + lens
         }
 
@@ -810,6 +840,7 @@ class CaptureActivity : AppCompatActivity() {
         private var lastFrames = 0L
         private var lastGridKnown = false
         @Volatile private var lastPayloadMs = 0L
+        @Volatile private var lastZoomMs = 0L
         private var lastPayloadFrames = 0L
         private var shown: Shown? = null
         private var shownKind = ""
@@ -866,6 +897,9 @@ class CaptureActivity : AppCompatActivity() {
                 runCatching { decoder.saveVerified(this) }.getOrNull()
             } else null
             val seconds = elapsedMs / 1000.0
+            // The link's own time, first data to verified; the whole time from Receive includes
+            // finding the sender, which is the person's, not the link's.
+            val link = if (s.transferSeconds > 0.0) s.transferSeconds else seconds
             val report = buildString {
                 if (s.phase == LivePhase.Verified && saved != null) {
                     appendLine("RECEIVED — verified")
@@ -873,9 +907,11 @@ class CaptureActivity : AppCompatActivity() {
                     appendLine("  file        ${saved.name}")
                     appendLine("  size        ${TransmitActivity.formatBytes(saved.bytes)}")
                     appendLine("  integrity   SHA-256 matched the sender's")
-                    appendLine("  time        ${"%.1f".format(seconds)} s")
-                    appendLine("  goodput     ${"%.1f".format(saved.bytes / 1024.0 / seconds)} KB/s" +
-                               "  (wall clock, from Receive)")
+                    appendLine("  transfer    ${"%.1f".format(link)} s, first data to verified")
+                    appendLine("  goodput     ${"%.1f".format(saved.bytes / 1024.0 / link)} KB/s")
+                    appendLine("  from Receive ${"%.1f".format(seconds)} s, " +
+                               "${"%.1f".format(saved.bytes / 1024.0 / seconds)} KB/s " +
+                               "(includes finding the sender)")
                     appendLine("  grid        ${s.cols}x${s.rows}")
                     appendLine()
                     appendLine("  saved to    ${saved.location}")
@@ -890,7 +926,7 @@ class CaptureActivity : AppCompatActivity() {
                 appendLine("  frames read ${s.frames}")
             }
             report.lineSequence().forEach { SessionLog.i(LOG_TAG, it) }
-            runOnUiThread { showResult(report, saved, s, seconds) }
+            runOnUiThread { showResult(report, saved, s, link, seconds) }
         }.start()
     }
 
@@ -900,7 +936,9 @@ class CaptureActivity : AppCompatActivity() {
      * One icon, the file's name, one line of numbers, and the actions. The full report -- grid,
      * frames, the exact goodput definition -- is behind the info button, not on the screen.
      */
-    private fun showResult(report: String, saved: LiveDecoder.SavedFile?, s: LiveStatus, seconds: Double) {
+    private fun showResult(
+        report: String, saved: LiveDecoder.SavedFile?, s: LiveStatus, link: Double, seconds: Double,
+    ) {
         text.text = report
         statusCard = null
         aimView = null
@@ -935,12 +973,17 @@ class CaptureActivity : AppCompatActivity() {
         if (saved != null) {
             col.addView(text(saved.name, 18f, com.google.android.material.R.attr.colorOnSurface, bold = true)
                 .apply { gravity = Gravity.CENTER })
-            col.addView(space(4))
-            val rate = saved.bytes / 1024.0 / seconds
+            col.addView(space(12))
+            // The speed of the link -- what the card showed while it ran -- and, smaller, the
+            // whole time from pressing Receive, which also counts finding the sender.
+            col.addView(title(formatRate(saved.bytes / link), 34f).apply { gravity = Gravity.CENTER })
             col.addView(text(
-                "${TransmitActivity.formatBytes(saved.bytes)} · ${"%.1f".format(seconds)} s · " +
-                    "${"%.1f".format(rate)} KB/s",
+                "${TransmitActivity.formatBytes(saved.bytes)} in ${"%.1f".format(link)} s",
             ).apply { gravity = Gravity.CENTER })
+            if (seconds - link >= 1.0) {
+                col.addView(text("${"%.0f".format(seconds)} s from Receive, including aiming", 13f)
+                    .apply { gravity = Gravity.CENTER; setPadding(0, dp(2), 0, 0) })
+            }
             col.addView(text("Verified · saved to ${saved.location.substringBeforeLast('/')}", 13f)
                 .apply { gravity = Gravity.CENTER; setPadding(0, dp(6), 0, 0) })
         } else {
@@ -1135,8 +1178,11 @@ class CaptureActivity : AppCompatActivity() {
          * Exposure target, in 8-bit sensor counts on the screen's own cells: bright cells below
          * clipping, dark cells near black. Inside the band nothing moves, so it does not hunt.
          */
-        private const val BRIGHT_CEILING = 235.0
-        private const val BRIGHT_FLOOR = 150.0
+        /** Auto-zoom when the lens is pinned: one step this often, this big (MAX_LIVE_ZOOM caps). */
+        private const val ZOOM_EVERY_MS = 1500L
+        private const val ZOOM_STEP = 1.2f
+        private const val WHITE_CEILING = 245.0
+        private const val WHITE_FLOOR = 170.0
         /** A payload decoded this recently counts as data arriving. */
         private const val PRODUCTIVE_WINDOW_MS = 2500L
         /** Shortest time a message of one kind stays up before a different kind replaces it. */
