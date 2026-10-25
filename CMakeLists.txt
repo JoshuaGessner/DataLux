@@ -17,6 +17,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 option(FILEFLOW_BUILD_TESTS "Build unit tests" ON)
 option(FILEFLOW_BUILD_SIM   "Build the offline channel simulator" ON)
 option(FILEFLOW_BUILD_FUZZ  "Build libFuzzer targets (needs a toolchain shipping libFuzzer)" OFF)
+option(FILEFLOW_BUILD_DESKTOP "Build the desktop sender (fetches SDL3)" OFF)
 
 # Shared with platform/android/CMakeLists.txt, which the Gradle build drives. One copy, so the
 # Android build cannot quietly enforce less than CI does.
@@ -46,4 +47,8 @@ endif()
 
 if(FILEFLOW_BUILD_FUZZ)
     add_subdirectory(fuzz)
+endif()
+
+if(FILEFLOW_BUILD_DESKTOP)
+    add_subdirectory(desktop)
 endif()

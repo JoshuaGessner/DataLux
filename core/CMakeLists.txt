@@ -50,6 +50,7 @@ add_library(fileflow_core STATIC
     src/device.cpp
     src/framing.cpp
     src/compress.cpp
+    src/envelope.cpp
 )
 
 target_include_directories(fileflow_core PUBLIC

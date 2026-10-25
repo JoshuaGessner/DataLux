@@ -26,6 +26,7 @@
 #include <set>
 #include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace fileflow {
@@ -47,6 +48,17 @@ struct TransmitConfig {
     // original_size 0 = say nothing (an encrypted transfer).
     ContentHint content{};
 };
+
+// A transfer's session id, from the FILE: not a constant and not a random number.
+//
+// A constant meant two different files were the same session to a receiver: one that had started on
+// the first kept going on frames of the second, and the fountain decoder mixed them into a file
+// that could only fail verification. A random id per Send fixes that and breaks the opposite case --
+// pressing Send again for the SAME file (the sender timed out, or the app was reopened) would strand
+// a receiver half-way through, because every new frame would belong to a "different" transfer.
+// Hashing the content and name gives both: same file, same session, the receiver carries on; any
+// other file, a different session. Never 0.
+[[nodiscard]] std::uint32_t SessionIdFor(std::span<const std::uint8_t> payload, std::string_view name);
 
 class TransmitSession {
   public:

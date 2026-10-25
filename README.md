@@ -47,6 +47,27 @@ transfer pauses; aim back and it carries on from where it was. Nothing received 
 
 Received files are saved to **Downloads › FileFlow** and listed in the **Received** tab.
 
+## Sending from a computer
+
+`fileflow-send` turns a laptop, monitor, TV or projector into the sending screen, for any phone
+running FileFlow. A bigger screen means bigger cells, so phones can read from further back and
+further to the side — one screen, a room full of receivers, each at its own pace.
+
+```sh
+cmake --preset desktop-app && cmake --build build/desktop-app
+build/desktop-app/desktop/fileflow-send report.pdf photos/*.jpg
+```
+
+It opens full screen and sends until you press **Esc**. Start it with no files and drop them on the
+window instead. Several files go as one batch, as on the phone. Options: `--speed steady|fast|fastest`
+(default fast), `--compression off|auto|max` (default auto), `--windowed`. Keys: **1 2 3** change
+speed, **F** toggles full screen. While sending, the screen shows only the code: the status line
+comes back when you press a key or move the mouse.
+
+It needs CMake 3.25 and a C++20 compiler; SDL3 is fetched and built in, so the result is a single
+program with nothing to install. Tested on macOS, and it compiles on Linux (GCC 15); Windows is
+next to be checked. Encrypted sending from a computer isn't there yet.
+
 ## Encrypted mode
 
 Turn on **Encrypted** on both phones (the switch is on the Send and Receive tabs). The first time,

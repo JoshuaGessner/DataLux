@@ -448,4 +448,15 @@ Result<std::vector<std::uint8_t>> ReceiveSession::Finish() {
     return rx_->Finish();
 }
 
+std::uint32_t SessionIdFor(std::span<const std::uint8_t> payload, std::string_view name) {
+    Sha256 h;
+    h.Update(payload);
+    h.Update({reinterpret_cast<const std::uint8_t*>(name.data()), name.size()});
+    const auto d = h.Finish();
+    const std::uint32_t id = (static_cast<std::uint32_t>(d[0]) << 24) |
+                             (static_cast<std::uint32_t>(d[1]) << 16) |
+                             (static_cast<std::uint32_t>(d[2]) << 8) | d[3];
+    return id != 0 ? id : 1U;
+}
+
 }  // namespace fileflow

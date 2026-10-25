@@ -59,26 +59,6 @@ struct TxHandle {
 
 TxHandle* FromJLong(jlong h) { return reinterpret_cast<TxHandle*>(h); }
 
-// Session id from the FILE, not a constant and not a random number.
-//
-// A constant meant two different files were the same session to a receiver: one that had started on
-// the first kept going on frames of the second, and the fountain decoder mixed them into a file
-// that could only fail verification. A random id per Send fixes that and breaks the opposite case --
-// pressing Send again for the SAME file (the sender timed out, or the app was reopened) would strand
-// a receiver half-way through, because every new frame would belong to a "different" transfer.
-// Hashing the content and name gives both: same file, same session, the receiver carries on; any
-// other file, a different session.
-std::uint32_t SessionIdFor(std::span<const std::uint8_t> payload, const std::string& name) {
-    fileflow::Sha256 h;
-    h.Update(payload);
-    h.Update({reinterpret_cast<const std::uint8_t*>(name.data()), name.size()});
-    const auto d = h.Finish();
-    const std::uint32_t id = (static_cast<std::uint32_t>(d[0]) << 24) |
-                             (static_cast<std::uint32_t>(d[1]) << 16) |
-                             (static_cast<std::uint32_t>(d[2]) << 8) | d[3];
-    return id != 0 ? id : 1u;
-}
-
 struct Prepared {
     std::unique_ptr<fileflow::FrameLayout> layout;
     fileflow::GridGeometry geom;
@@ -154,7 +134,7 @@ jlong Start(JNIEnv* env, Prepared prep, std::vector<std::uint8_t> payload, std::
         ThrowIllegalState(env, "the file is empty");
         return 0;
     }
-    const std::uint32_t session_id = SessionIdFor(payload, name);
+    const std::uint32_t session_id = fileflow::SessionIdFor(payload, name);
     auto* handle = new (std::nothrow) TxHandle(std::move(prep.layout), prep.geom, std::move(payload));
     if (handle == nullptr) {
         ThrowIllegalState(env, "out of memory opening the transmitter");

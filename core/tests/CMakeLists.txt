@@ -18,6 +18,7 @@ add_executable(fileflow_tests
     test_live.cpp
     test_color.cpp
     test_compress.cpp
+    test_envelope.cpp
     test_geometry.cpp
     test_sampler.cpp
     test_photometric.cpp

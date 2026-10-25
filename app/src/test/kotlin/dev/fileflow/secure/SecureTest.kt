@@ -197,6 +197,21 @@ class EnvelopeTest {
         bad[4 + 1 + 2 + "a.txt".length + 8] = 9  // the codec byte
         expectFailure(Envelope.Failure.UnknownCodec) { Envelope.unpack(bad, null, false) }
     }
+
+    // What the desktop sender's core/src/envelope.cpp makes, from core/tests/test_envelope.cpp: the
+    // two implementations are held to one shared vector.
+    @Test fun desktopEnvelopesOpen() {
+        fun bytes(hex: String) = ByteArray(hex.length / 2) { hex.substring(2 * it, 2 * it + 2).toInt(16).toByte() }
+        val one = Envelope.unpack(bytes("4646453200" + "0005" + "782e747874" + "0000000000000005" + "00" +
+            "00000000" + "68656c6c6f"), null, false)
+        assertEquals("x.txt", one.name)
+        assertEquals("hello", one.data.toString(Charsets.UTF_8))
+        val batch = Envelope.unpack(bytes("4646453204" + "0007" + "322066696c6573" + "0000000000000023" + "00" +
+            "00000000" + "46464231" + "0002" + "0005" + "612e747874" + "0000000000000002" + "6869" +
+            "0001" + "62" + "0000000000000001" + "21"), null, false)
+        assertEquals("2 files", batch.name)
+        assertEquals(listOf("a.txt" to "hi", "b" to "!"), batch.files!!.map { (n, b) -> n to b.toString(Charsets.UTF_8) })
+    }
 }
 
 class PairingTest {
