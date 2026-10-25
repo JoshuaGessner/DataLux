@@ -77,7 +77,7 @@ void App::ReceiveScreen(float x0, float W, float H) {
         if (auto r = receiver_->Result()) {
             rx_result_ = std::move(r);
             StopReceiving();
-            if (rx_result_->ok) received_dirty_ = true;
+            if (!rx_result_->files.empty()) received_dirty_ = true;
             return;
         }
         const LiveStatus s = receiver_->Status();

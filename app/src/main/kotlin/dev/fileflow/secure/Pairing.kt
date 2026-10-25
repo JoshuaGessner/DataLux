@@ -207,13 +207,24 @@ object PairingStore {
     @Volatile
     private var key: PairingKey? = null
 
-    fun current(nowMs: Long = System.currentTimeMillis()): PairingKey? =
-        key?.takeIf { nowMs - it.createdMs < LIFETIME_MS }
+    @Synchronized
+    fun current(nowMs: Long = System.currentTimeMillis()): PairingKey? {
+        val current = key ?: return null
+        // Fail closed if the wall clock moves backwards, and discard an expired key so a later
+        // clock change cannot make it valid again.
+        if (nowMs < current.createdMs || nowMs - current.createdMs >= LIFETIME_MS) {
+            key = null
+            return null
+        }
+        return current
+    }
 
+    @Synchronized
     fun set(k: PairingKey) {
         key = k
     }
 
+    @Synchronized
     fun forget() {
         key = null
     }

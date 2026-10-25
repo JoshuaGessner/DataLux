@@ -965,6 +965,22 @@ class MainActivity : AppCompatActivity() {
         private const val PREF_ENCRYPTED = "encrypted"
         private const val PREF_SEAL_TO = "seal_to"
 
+        /** Share-sheet sends use the same choices as Send, never caller-supplied security extras. */
+        internal fun configureSharedSend(context: android.content.Context, intent: Intent) {
+            val prefs = context.getSharedPreferences(MainActivity::class.java.simpleName, MODE_PRIVATE)
+            val speed = Speed.named(prefs.getString(PREF_SPEED, null))
+            val encrypted = prefs.getBoolean(PREF_ENCRYPTED, false)
+            intent.putExtra("cols", speed.cols)
+                .putExtra("rows", speed.rows)
+                .putExtra("stateRate", speed.statesPerSecond)
+                .putExtra("colours", speed.colours)
+                .putExtra("encrypted", encrypted)
+                .putExtra("team", if (encrypted && Entitlements.has(Entitlements.Feature.Teams)) {
+                    prefs.getString(PREF_SEAL_TO, null)
+                } else null)
+                .putExtra("compression", prefs.getString(PREF_COMPRESSION, null))
+        }
+
         /**
          * A team's key was changed ([Team.rotated]) and with it its id: if files were being sealed to
          * it, they now go to the new key. (MainActivity's preferences: getPreferences names the

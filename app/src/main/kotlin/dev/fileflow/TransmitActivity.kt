@@ -61,6 +61,13 @@ class TransmitActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
+        // A share has no FileFlow settings of its own. In particular, a missing (or supplied)
+        // encryption extra must not override the person's saved Encrypted choice.
+        if (intent.action == android.content.Intent.ACTION_SEND ||
+            intent.action == android.content.Intent.ACTION_SEND_MULTIPLE) {
+            MainActivity.configureSharedSend(this, intent)
+        }
+
         // Turn the screen on and show over the keyguard.
         //
         // Not convenience: Android REFUSES camera access to a background process, and an activity
@@ -256,7 +263,10 @@ class TransmitActivity : AppCompatActivity() {
     private var encrypted = false
 
     /** The generated test file: incompressible, the same every time for a given size. */
-    private fun testBytes(n: Int): ByteArray = ByteArray(n).also { java.util.Random(5L).nextBytes(it) }
+    private fun testBytes(n: Int): ByteArray {
+        require(n.toLong() in 1..MAX_FILE_BYTES) { "The test file is too large." }
+        return ByteArray(n).also { java.util.Random(5L).nextBytes(it) }
+    }
 
     /**
      * Several documents for one batch, within one size bound for them all; names made unique, so
@@ -285,6 +295,9 @@ class TransmitActivity : AppCompatActivity() {
         uri: android.net.Uri, limit: Long = MAX_FILE_BYTES, allowEmpty: Boolean = false,
         total: Boolean = false,
     ): Pair<String, ByteArray> {
+        // This activity is exported. A file:// supplied by another app would otherwise be read
+        // with FileFlow's privileges, including files inside its private data directory.
+        require(uri.scheme == "content") { "Choose a document or share it from a file app." }
         val (name, size) = describe(uri)
         val tooBig = if (total) "Together the files are more than ${formatBytes(MAX_FILE_BYTES)}. " +
             "Send fewer at once — at optical speeds a bigger transfer would take too long to be practical."

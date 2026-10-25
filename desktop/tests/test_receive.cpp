@@ -68,7 +68,8 @@ std::optional<ReceiveResult> Transfer(const std::vector<std::uint8_t>& envelope,
 class ReceiveTest : public ::testing::Test {
   protected:
     void SetUp() override {
-        dir_ = std::filesystem::path(::testing::TempDir()) / ("ff-receive-" + std::to_string(::getpid()));
+        dir_ = std::filesystem::path(::testing::TempDir()) /
+               ("ff-receive-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
         std::filesystem::remove_all(dir_);
         std::filesystem::create_directories(dir_);
     }
@@ -113,6 +114,49 @@ TEST_F(ReceiveTest, AFileInTheClearIsRefusedInEncryptedMode) {
     ASSERT_TRUE(r.has_value());
     EXPECT_FALSE(r->ok);
     EXPECT_TRUE(std::filesystem::is_empty(dir_));  // nothing written
+}
+
+TEST_F(ReceiveTest, ExistingFilesAreNeverOverwritten) {
+    { std::ofstream existing(dir_ / "notes.txt"); existing << "keep me"; }
+    const auto env = PackEnvelope(Text(2000), "notes.txt", CompressionMode::kOff).value().bytes;
+    const auto r = Transfer(env, "notes.txt", {}, false, dir_);
+    ASSERT_TRUE(r.has_value());
+    ASSERT_TRUE(r->ok) << r->problem;
+    ASSERT_EQ(r->files.size(), 1U);
+    EXPECT_EQ(r->files[0].name, "notes (1).txt");
+    std::ifstream in(dir_ / "notes.txt");
+    std::string original;
+    std::getline(in, original);
+    EXPECT_EQ(original, "keep me");
+}
+
+TEST_F(ReceiveTest, WindowsPathsStreamsAndDevicesBecomeOrdinaryFiles) {
+    const std::vector<std::pair<std::string, std::vector<std::uint8_t>>> files = {
+        {"C:escape.txt", Text(50)}, {"file.txt:stream", Text(50)}, {"NUL.txt", Text(50)}};
+    const auto env = PackBatchEnvelope(files, "3 files", CompressionMode::kOff).value().bytes;
+    const auto r = Transfer(env, "3 files", {}, false, dir_);
+    ASSERT_TRUE(r.has_value());
+    ASSERT_TRUE(r->ok) << r->problem;
+    ASSERT_EQ(r->files.size(), 3U);
+    EXPECT_EQ(r->files[0].name, "C_escape.txt");
+    EXPECT_EQ(r->files[1].name, "file.txt_stream");
+    EXPECT_EQ(r->files[2].name, "_NUL.txt");
+    for (const auto& file : r->files) EXPECT_EQ(file.path.parent_path(), dir_);
+}
+
+TEST_F(ReceiveTest, DanglingSymlinksAreNotFollowed) {
+    const auto target = dir_ / "must-not-be-created.txt";
+    std::error_code ec;
+    std::filesystem::create_symlink(target, dir_ / "notes.txt", ec);
+    if (ec) GTEST_SKIP() << "Symlinks unavailable: " << ec.message();
+    const auto env = PackEnvelope(Text(2000), "notes.txt", CompressionMode::kOff).value().bytes;
+    const auto r = Transfer(env, "notes.txt", {}, false, dir_);
+    ASSERT_TRUE(r.has_value());
+    ASSERT_TRUE(r->ok) << r->problem;
+    ASSERT_EQ(r->files.size(), 1U);
+    EXPECT_EQ(r->files[0].name, "notes (1).txt");
+    EXPECT_FALSE(std::filesystem::exists(target));
+    EXPECT_TRUE(std::filesystem::is_symlink(dir_ / "notes.txt"));
 }
 
 }  // namespace

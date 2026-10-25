@@ -44,7 +44,7 @@ bool DrawQr(SDL_Renderer* r, const std::string& text, float x, float y, float si
 
 std::optional<std::string> ReadQr(const std::uint8_t* luma, int w, int h) {
     static quirc* q = quirc_new();
-    if (q == nullptr || w <= 0 || h <= 0) return std::nullopt;
+    if (q == nullptr || luma == nullptr || w <= 0 || h <= 0 || w > 4096 || h > 4096) return std::nullopt;
     if (quirc_resize(q, w, h) < 0) return std::nullopt;
     int qw = 0;
     int qh = 0;

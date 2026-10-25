@@ -1,0 +1,74 @@
+name: desktop-builds
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install desktop build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build libasound2-dev libpulse-dev libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev libxfixes-dev libxss-dev libxtst-dev libwayland-dev libxkbcommon-dev libdrm-dev libgbm-dev libegl1-mesa-dev libgl1-mesa-dev libudev-dev
+      - name: Configure and build
+        run: |
+          cmake --preset desktop-app -G Ninja -DFILEFLOW_BUILD_TESTS=ON -DFILEFLOW_BUILD_SIM=ON
+          cmake --build build/desktop-app -j 4
+      - name: Test
+        run: ctest --test-dir build/desktop-app --output-on-failure -j 4
+      - name: Launch smoke test
+        env:
+          SDL_VIDEODRIVER: dummy
+          SDL_RENDER_DRIVER: software
+        run: build/desktop-app/desktop/fileflow-send --windowed --no-camera --seconds 2
+      - name: Package
+        run: |
+          mkdir -p dist/FileFlow-linux-x86_64
+          cp build/desktop-app/desktop/fileflow-send LICENSE README.md dist/FileFlow-linux-x86_64/
+          git rev-parse HEAD > dist/FileFlow-linux-x86_64/SOURCE_REVISION.txt
+          tar -C dist -czf dist/FileFlow-linux-x86_64.tar.gz FileFlow-linux-x86_64
+      - uses: actions/upload-artifact@v7
+        with:
+          name: FileFlow-linux-x86_64
+          path: dist/FileFlow-linux-x86_64.tar.gz
+          if-no-files-found: error
+
+  windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            git
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-ninja
+      - name: Configure and build
+        run: |
+          cmake --preset desktop-app -G Ninja -DCMAKE_EXE_LINKER_FLAGS="-static -static-libgcc -static-libstdc++"
+          cmake --build build/desktop-app -j 4
+      - name: Launch smoke test
+        run: build/desktop-app/desktop/FileFlow.exe --windowed --no-camera --seconds 2
+      - name: Package
+        run: |
+          mkdir -p dist/FileFlow-windows-x86_64
+          cp build/desktop-app/desktop/FileFlow.exe LICENSE README.md dist/FileFlow-windows-x86_64/
+          git rev-parse HEAD > dist/FileFlow-windows-x86_64/SOURCE_REVISION.txt
+      - uses: actions/upload-artifact@v7
+        with:
+          name: FileFlow-windows-x86_64
+          path: dist/FileFlow-windows-x86_64/
+          if-no-files-found: error

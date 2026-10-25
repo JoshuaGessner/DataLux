@@ -63,10 +63,11 @@ std::string App::MyName() const {
     return secure::Team::CleanName(u + "'s computer");
 }
 
-const secure::PairingKey* App::Paired() const {
+const secure::PairingKey* App::Paired() {
     if (!paired_) return nullptr;
     const auto age = std::chrono::milliseconds(secure::NowMs() - paired_->created_ms);
-    return age < kPairingLifetime ? &*paired_ : nullptr;
+    if (age < std::chrono::milliseconds(0) || age >= kPairingLifetime) paired_.reset();
+    return paired_ ? &*paired_ : nullptr;
 }
 
 std::optional<secure::SealKey> App::SealTarget() {
@@ -88,10 +89,11 @@ std::vector<secure::SealKey> App::Keys() {
 }
 
 void App::StartPairing(secure::PairingFlow::Mode mode, std::optional<secure::Team> team) {
-    pair_ = std::make_unique<PairState>();
-    pair_->mode = mode;
-    pair_->team = team;
-    pair_->flow = std::make_unique<secure::PairingFlow>(mode, MyName(), std::move(team));
+    auto next = std::make_unique<PairState>();
+    next->mode = mode;
+    next->team = team;
+    next->flow = std::make_unique<secure::PairingFlow>(mode, MyName(), std::move(team));
+    pair_ = std::move(next);
     if (!options_.no_camera) pair_->camera.Open();
     ui_.Unfocus();
 }

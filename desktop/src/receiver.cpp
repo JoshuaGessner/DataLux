@@ -4,7 +4,8 @@
 
 #include <fileflow/transfer.h>
 
-#include <fstream>
+#include <cerrno>
+#include <cstdio>
 
 namespace fileflow::desktop {
 
@@ -13,26 +14,57 @@ namespace {
 // The grids a sender might be using (the app's Grids.ALL), most likely first.
 constexpr GridGeometry kGrids[] = {{120, 260}, {144, 240}, {180, 390}};
 
-// [name] in [dir], made unique: "photo.jpg", then "photo (1).jpg", ... -- never over a file.
-std::filesystem::path Unique(const std::filesystem::path& dir, const std::string& name) {
-    const std::string safe = SanitiseFileName(name).empty() ? "received.bin" : SanitiseFileName(name);
+std::string SafeReceivedName(const std::string& name) {
+    std::string safe = SanitiseFileName(name);
+    // Also safe on Windows: no drive-qualified path, alternate data stream, or
+    // device name. Apply on all hosts so transferred names behave consistently.
+    for (char& c : safe) {
+        if (std::string_view("<>:\"|?*").find(c) != std::string_view::npos) c = '_';
+    }
+    while (!safe.empty() && (safe.back() == '.' || safe.back() == ' ')) safe.pop_back();
+    if (safe.empty()) return "received.bin";
+    auto stem = safe.substr(0, safe.find('.'));
+    while (!stem.empty() && stem.back() == ' ') stem.pop_back();
+    for (char& c : stem) if (c >= 'a' && c <= 'z') c = static_cast<char>(c - 'a' + 'A');
+    if (stem == "CON" || stem == "PRN" || stem == "AUX" || stem == "NUL" ||
+        (stem.size() == 4 && (stem.starts_with("COM") || stem.starts_with("LPT")) && stem[3] >= '1' && stem[3] <= '9')) {
+        safe.insert(safe.begin(), '_');
+    }
+    return safe;
+}
+
+// Claim the name atomically: an existence check followed by an ordinary open can overwrite
+// another receiver's file, or follow a dangling symlink outside the downloads folder.
+std::optional<SavedFile> Save(const std::filesystem::path& dir, const std::string& name, const secure::Bytes& data) {
+    const std::string safe = SafeReceivedName(name);
     std::filesystem::path p = dir / std::filesystem::path(std::u8string(safe.begin(), safe.end()));
     const auto stem = p.stem().u8string();
     const auto ext = p.extension().u8string();
-    std::error_code ec;
-    for (int i = 1; std::filesystem::exists(p, ec) && i < 10000; ++i) {
-        p = dir / (stem + u8" (" + std::u8string(reinterpret_cast<const char8_t*>(std::to_string(i).c_str())) + u8")" + ext);
+    for (int i = 0; i < 10000; ++i) {
+        if (i != 0) {
+            const auto suffix = std::to_string(i);
+            p = dir / (stem + u8" (" + std::u8string(suffix.begin(), suffix.end()) + u8")" + ext);
+        }
+#if defined(_WIN32)
+        std::FILE* out = _wfopen(p.c_str(), L"wbx");
+#else
+        std::FILE* out = std::fopen(p.c_str(), "wbx");
+#endif
+        if (out == nullptr) {
+            if (errno == EEXIST) continue;
+            return std::nullopt;
+        }
+        const bool written = data.empty() || std::fwrite(data.data(), 1, data.size(), out) == data.size();
+        const bool closed = std::fclose(out) == 0;  // buffered writes can fail only on close
+        if (!written || !closed) {
+            std::error_code ec;
+            std::filesystem::remove(p, ec);
+            return std::nullopt;
+        }
+        const auto u = p.filename().u8string();
+        return SavedFile{std::string(u.begin(), u.end()), p, data.size()};
     }
-    return p;
-}
-
-std::optional<SavedFile> Save(const std::filesystem::path& dir, const std::string& name, const secure::Bytes& data) {
-    const auto path = Unique(dir, name);
-    std::ofstream out(path, std::ios::binary);
-    out.write(reinterpret_cast<const char*>(data.data()), static_cast<std::streamsize>(data.size()));
-    if (!out) return std::nullopt;
-    const auto u = path.filename().u8string();
-    return SavedFile{std::string(u.begin(), u.end()), path, data.size()};
+    return std::nullopt;
 }
 
 }  // namespace
@@ -53,7 +85,16 @@ Receiver::Receiver(std::vector<secure::SealKey> keys, bool require_encrypted, st
         cfg.exposure_s = 1.0 / 60;  // a webcam's, about; only the blur warning reads it
         if (auto r = LiveReceiver::Create(g, cfg); r.ok()) candidates_.push_back(std::make_unique<LiveReceiver>(std::move(r).value()));
     }
-    worker_ = std::thread([this] { Run(); });
+    worker_ = std::thread([this] {
+        try {
+            Run();
+        } catch (const std::exception&) {
+            std::lock_guard g(mu_);
+            ReceiveResult failed;
+            failed.problem = "Receiving failed. Check available memory and disk space, then try again.";
+            result_ = std::move(failed);
+        }
+    });
 }
 
 Receiver::~Receiver() {
@@ -169,8 +210,10 @@ void Receiver::Finish(const LiveReceiver& rx) {
                 r.bytes = saved->bytes;
                 r.files.push_back(*saved);
             }
-            r.ok = !r.files.empty();
-            if (!r.ok) r.problem = "The file verified, but couldn't be saved to " + dir.string() + ".";
+            const auto expected = o.files ? o.files->size() : 1U;
+            r.ok = r.files.size() == expected;
+            if (!r.ok) r.problem = "Saved " + std::to_string(r.files.size()) + " of " + std::to_string(expected) +
+                                  " files to " + dir.string() + ". Check the folder and available space, then receive again.";
         }
     }
     std::lock_guard g(mu_);

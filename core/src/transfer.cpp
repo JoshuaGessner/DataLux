@@ -23,6 +23,9 @@ Status FileManifest::Validate() const noexcept {
     std::size_t total = 0;
     if (!CheckedMul(block_count, per_block, &total)) return Error::kSizeOverflow;
     if (total < file_size) return Error::kLengthMismatch;
+    // Only the final block may contain padding. Otherwise a tiny declared file can force
+    // allocation and priming of gigabytes of entirely unused decoder blocks.
+    if (total - file_size >= per_block) return Error::kLengthMismatch;
     if (total > kMaxFileSize + per_block) return Error::kPayloadTooLarge;
     return Status::Ok();
 }
@@ -55,9 +58,14 @@ std::vector<std::uint8_t> FileManifest::Encode() const {
     return std::move(w).take();
 }
 
-void FileTransmitter::SetContentHint(const ContentHint& hint) {
-    manifest_.content = hint;
-    manifest_bytes_ = manifest_.Encode();
+Status FileTransmitter::SetContentHint(const ContentHint& hint) {
+    FileManifest updated = manifest_;
+    updated.content = hint;
+    auto bytes = updated.Encode();
+    if (bytes.size() > updated.symbol_size) return Error::kValueOutOfRange;
+    manifest_ = std::move(updated);
+    manifest_bytes_ = std::move(bytes);
+    return Status::Ok();
 }
 
 Result<FileManifest> FileManifest::Decode(std::span<const std::uint8_t> in) {
@@ -319,8 +327,23 @@ FileTransmitter::FramePayload FileTransmitter::NextFrame() {
 
 // ---------------------------------------------------------------- receiver
 
-Result<FileReceiver> FileReceiver::Create(const FileManifest& m) {
+Status FileReceiver::ValidateWorkingSet(const FileManifest& m) noexcept {
     FF_TRY(m.Validate());
+    // All factors are bounded by Validate, so these products fit uint64_t. Account for
+    // the decoder's data, matrix, scratch row/symbol, flags and object, with allocation
+    // overhead rounded up conservatively. Tiny symbols must not hide huge matrices.
+    const std::uint64_t symbols = m.block_symbols;
+    const std::uint64_t words = (symbols + 63) / 64;
+    const std::uint64_t per_block = symbols * m.symbol_size + symbols * words * 8 +
+                                    words * 8 + m.symbol_size + symbols +
+                                    sizeof(FountainDecoder) + 6 * 64;
+    const std::uint64_t working_set = m.block_count * per_block + m.symbol_size;
+    if (working_set > kMaxWorkingSetBytes) return Error::kPayloadTooLarge;
+    return Status::Ok();
+}
+
+Result<FileReceiver> FileReceiver::Create(const FileManifest& m) {
+    FF_TRY(ValidateWorkingSet(m));
 
     FileReceiver rx(m);
     rx.decoders_.reserve(m.block_count);

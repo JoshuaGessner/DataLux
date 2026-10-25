@@ -171,6 +171,49 @@ TEST(FileManifest, TruncationAndCorruptionAreRejected) {
     }
 }
 
+TEST(FileManifest, RejectsEntirelyPaddingBlocksBeforeAllocation) {
+    FileManifest m;
+    m.file_size = 1;
+    m.block_count = 64;
+    m.block_symbols = FountainParams::kMaxSourceSymbols;
+    m.symbol_size = FountainParams::kMaxSymbolSize;
+    // Previously accepted: a one-byte file requested 4 GiB of decoder data.
+    EXPECT_EQ(m.Validate().error(), Error::kLengthMismatch);
+    EXPECT_EQ(FileManifest::Decode(m.Encode()).error(), Error::kLengthMismatch);
+    EXPECT_EQ(FileReceiver::Create(m).error(), Error::kLengthMismatch);
+
+    m.block_symbols = 2;
+    m.symbol_size = 512;
+    m.block_count = 2;
+    m.file_size = 1024;
+    EXPECT_EQ(m.Validate().error(), Error::kLengthMismatch);
+    m.file_size = 1025;
+    EXPECT_TRUE(m.Validate().ok());
+}
+
+TEST(Transfer, ReceiverBoundsDecoderWorkingSetBeforeAllocating) {
+    FileManifest m;
+    m.block_symbols = FountainParams::kMaxSourceSymbols;
+    m.symbol_size = FountainParams::kMaxSymbolSize;
+    m.block_count = 7;
+    m.file_size = std::uint64_t{m.block_count} * m.block_symbols * m.symbol_size;
+    // Validate the acceptance side without actually allocating hundreds of MiB.
+    EXPECT_TRUE(FileReceiver::ValidateWorkingSet(m).ok());
+    ++m.block_count;
+    m.file_size = std::uint64_t{m.block_count} * m.block_symbols * m.symbol_size;
+    EXPECT_TRUE(m.Validate().ok());
+    EXPECT_EQ(FileReceiver::ValidateWorkingSet(m).error(), Error::kPayloadTooLarge);
+    EXPECT_EQ(FileReceiver::Create(m).error(), Error::kPayloadTooLarge);
+
+    // A modest payload can require an enormous matrix when symbols are one byte.
+    m.symbol_size = 1;
+    m.block_count = 4096;
+    m.file_size = std::uint64_t{m.block_count} * m.block_symbols;
+    EXPECT_TRUE(m.Validate().ok());
+    EXPECT_LT(m.file_size, FileReceiver::kMaxWorkingSetBytes);
+    EXPECT_EQ(FileReceiver::Create(m).error(), Error::kPayloadTooLarge);
+}
+
 TEST(FileManifest, ArbitraryGarbageNeverCrashes) {
     SplitMix64 rng(1234);
     for (int trial = 0; trial < 20000; ++trial) {
@@ -404,6 +447,24 @@ TEST(Transfer, ProgressAdvancesMonotonically) {
 
 TEST(Transfer, EmptyPayloadIsRejected) {
     EXPECT_EQ(FileTransmitter::Create({}, "e.bin", 1).error(), Error::kValueOutOfRange);
+}
+
+TEST(Transfer, ContentHintMustFitWithoutChangingAnExistingManifestOnFailure) {
+    const auto payload = Payload(1000);
+    auto tx = FileTransmitter::Create(payload, "x", 1, 79);
+    ASSERT_TRUE(tx.ok());
+    const auto before = tx.value().manifest().Encode();
+    const ContentHint hint{.original_size = 2000, .codec = 2, .compress_ms = 1};
+    EXPECT_EQ(tx.value().SetContentHint(hint).error(), Error::kValueOutOfRange);
+    EXPECT_EQ(tx.value().manifest().Encode(), before);
+    const auto frame = tx.value().NextFrame();
+    EXPECT_EQ(frame.data.size(), 79u);
+    EXPECT_LE(frame.header.payload_bytes, frame.data.size());
+
+    auto roomy = FileTransmitter::Create(payload, "x", 1, 128);
+    ASSERT_TRUE(roomy.ok());
+    ASSERT_TRUE(roomy.value().SetContentHint(hint).ok());
+    EXPECT_EQ(roomy.value().manifest().content.original_size, hint.original_size);
 }
 
 // ---------------------------------------------------------------- protocol v2 (ADR-0015)

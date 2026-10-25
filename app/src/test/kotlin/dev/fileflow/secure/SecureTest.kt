@@ -216,6 +216,24 @@ class EnvelopeTest {
 
 class PairingTest {
 
+    @Test fun expiredPairingsCannotBeRevivedByAClockChange() {
+        val a = Pairing.start()
+        a.read(Pairing.start().qrText())
+        val created = 10_000L
+        val key = a.key(created)!!
+        try {
+            PairingStore.set(key)
+            assertEquals(key, PairingStore.current(created + PairingStore.LIFETIME_MS - 1))
+            assertNull(PairingStore.current(created + PairingStore.LIFETIME_MS))
+            assertNull(PairingStore.current(created))
+            PairingStore.set(key)
+            assertNull(PairingStore.current(created - 1))
+            assertNull(PairingStore.current(created))
+        } finally {
+            PairingStore.forget()
+        }
+    }
+
     @Test fun bothPhonesDeriveTheSameKeyAndCode() {
         val a = Pairing.start()
         val b = Pairing.start()

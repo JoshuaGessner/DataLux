@@ -20,7 +20,7 @@ set(SDL_TEST_LIBRARY OFF CACHE BOOL "" FORCE)
 set(SDL_EXAMPLES OFF CACHE BOOL "" FORCE)
 FetchContent_Declare(SDL3
     GIT_REPOSITORY https://github.com/libsdl-org/SDL.git
-    GIT_TAG        release-3.2.10
+    GIT_TAG        release-3.4.18
     GIT_SHALLOW    TRUE
     SYSTEM  # its headers are not held to this project's warnings
 )
@@ -36,8 +36,8 @@ set(GEN_FILES OFF CACHE BOOL "" FORCE)
 set(MBEDTLS_FATAL_WARNINGS OFF CACHE BOOL "" FORCE)
 set(USE_SHARED_MBEDTLS_LIBRARY OFF CACHE BOOL "" FORCE)
 FetchContent_Declare(mbedtls
-    URL      https://github.com/Mbed-TLS/mbedtls/releases/download/mbedtls-3.6.2/mbedtls-3.6.2.tar.bz2
-    URL_HASH SHA256=8b54fb9bcf4d5a7078028e0520acddefb7900b3e66fec7f7175bb5b7d85ccdca
+    URL      https://github.com/Mbed-TLS/mbedtls/releases/download/mbedtls-3.6.7/mbedtls-3.6.7.tar.bz2
+    URL_HASH SHA256=a7e8bcbec0e6f761b4af24f25677626b35f762f68eef79c08677a363212d11f6
     SYSTEM
 )
 FetchContent_MakeAvailable(SDL3 inter mbedtls)
@@ -55,11 +55,14 @@ FetchContent_Declare(quirc
 )
 # Neither has a CMakeLists of its own, so this only fetches them; the library is built below.
 FetchContent_MakeAvailable(qrcodegen quirc)
+# quirc 1.2 still has unbounded work on degenerate camera images; keep the small
+# downstream guards explicit until upstream releases a fix (quirc issues #159/#162).
+include(${CMAKE_CURRENT_SOURCE_DIR}/harden_quirc.cmake)
 add_library(ff_qr STATIC
     ${qrcodegen_SOURCE_DIR}/cpp/qrcodegen.cpp
     ${quirc_SOURCE_DIR}/lib/decode.c
-    ${quirc_SOURCE_DIR}/lib/identify.c
-    ${quirc_SOURCE_DIR}/lib/quirc.c
+    ${CMAKE_CURRENT_BINARY_DIR}/quirc/identify.c
+    ${CMAKE_CURRENT_BINARY_DIR}/quirc/quirc.c
     ${quirc_SOURCE_DIR}/lib/version_db.c
 )
 target_include_directories(ff_qr SYSTEM PUBLIC ${qrcodegen_SOURCE_DIR}/cpp ${quirc_SOURCE_DIR}/lib)
@@ -70,6 +73,9 @@ target_compile_options(ff_qr PRIVATE -w)
 add_library(fileflow_secure STATIC src/secure.cpp)
 target_include_directories(fileflow_secure PUBLIC src)
 target_link_libraries(fileflow_secure PUBLIC fileflow_core PRIVATE fileflow_warnings mbedcrypto)
+if(WIN32)
+    target_link_libraries(fileflow_secure PRIVATE advapi32)
+endif()
 set_target_properties(fileflow_secure PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
 
 # stb_truetype v1.26, pinned to its commit.
@@ -173,6 +179,14 @@ endif()
 
 # The desktop's own tests: its secure formats held to the phone's vectors, and the rest.
 if(FILEFLOW_BUILD_TESTS)
+    add_executable(quirc_limits_test tests/test_quirc_limits.c
+        ${CMAKE_CURRENT_BINARY_DIR}/quirc/quirc.c ${quirc_SOURCE_DIR}/lib/version_db.c)
+    target_include_directories(quirc_limits_test PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/quirc ${quirc_SOURCE_DIR}/lib)
+    if(UNIX)
+        target_link_libraries(quirc_limits_test PRIVATE m)
+    endif()
+    add_test(NAME Qr.DegenerateTransformHasBoundedWork COMMAND quirc_limits_test)
+    set_tests_properties(Qr.DegenerateTransformHasBoundedWork PROPERTIES TIMEOUT 5)
     add_executable(desktop_tests tests/test_secure.cpp tests/test_qr.cpp tests/test_receive.cpp src/camera.cpp src/receiver.cpp)
     target_link_libraries(desktop_tests PRIVATE fileflow_secure ff_qr SDL3::SDL3-static fileflow_warnings GTest::gtest_main)
     set_target_properties(desktop_tests PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)

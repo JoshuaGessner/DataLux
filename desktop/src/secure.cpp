@@ -11,13 +11,25 @@
 #include <mbedtls/sha256.h>
 
 #include <algorithm>
+#include <cerrno>
 #include <chrono>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <mutex>
+#include <sstream>
+#include <stdexcept>
 
-#if !defined(_WIN32)
+#if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#include <sddl.h>
+#else
+#include <fcntl.h>
 #include <sys/stat.h>
+#include <unistd.h>
 #endif
 
 namespace fileflow::desktop::secure {
@@ -41,12 +53,17 @@ struct Rng {
     std::mutex lock;
     mbedtls_entropy_context entropy;
     mbedtls_ctr_drbg_context drbg;
+    int seed_status = 0;
     Rng() {
         mbedtls_entropy_init(&entropy);
         mbedtls_ctr_drbg_init(&drbg);
         static constexpr char kPersonal[] = "FileFlow desktop";
-        mbedtls_ctr_drbg_seed(&drbg, mbedtls_entropy_func, &entropy, reinterpret_cast<const unsigned char*>(kPersonal),
-                              sizeof kPersonal - 1);
+        seed_status = mbedtls_ctr_drbg_seed(&drbg, mbedtls_entropy_func, &entropy,
+                                           reinterpret_cast<const unsigned char*>(kPersonal), sizeof kPersonal - 1);
+    }
+    ~Rng() {
+        mbedtls_ctr_drbg_free(&drbg);
+        mbedtls_entropy_free(&entropy);
     }
     static Rng& Get() {
         static Rng r;
@@ -57,7 +74,7 @@ struct Rng {
 int DrbgRandom(void* /*unused*/, unsigned char* out, std::size_t n) {
     Rng& r = Rng::Get();
     std::lock_guard g(r.lock);
-    return mbedtls_ctr_drbg_random(&r.drbg, out, n);
+    return r.seed_status != 0 ? r.seed_status : mbedtls_ctr_drbg_random(&r.drbg, out, n);
 }
 
 Bytes Concat(std::initializer_list<const Bytes*> parts) {
@@ -91,25 +108,28 @@ bool EqualCt(const std::uint8_t* a, const std::uint8_t* b, std::size_t n) {
 
 // AES-256-GCM, the tag appended -- as javax.crypto writes it.
 Bytes GcmSeal(const Bytes& key, const std::uint8_t* nonce, const Bytes& aad, const Bytes& plain) {
+    if (key.size() != 32) throw std::invalid_argument("Invalid encryption key.");
     mbedtls_gcm_context g;
     mbedtls_gcm_init(&g);
-    mbedtls_gcm_setkey(&g, MBEDTLS_CIPHER_ID_AES, key.data(), 256);
     Bytes out(plain.size() + kTagBytes);
-    mbedtls_gcm_crypt_and_tag(&g, MBEDTLS_GCM_ENCRYPT, plain.size(), nonce, kNonceBytes, aad.data(), aad.size(),
-                              plain.data(), out.data(), kTagBytes, out.data() + plain.size());
+    int rc = mbedtls_gcm_setkey(&g, MBEDTLS_CIPHER_ID_AES, key.data(), 256);
+    if (rc == 0) rc = mbedtls_gcm_crypt_and_tag(&g, MBEDTLS_GCM_ENCRYPT, plain.size(), nonce, kNonceBytes,
+                                               aad.data(), aad.size(), plain.data(), out.data(), kTagBytes,
+                                               out.data() + plain.size());
     mbedtls_gcm_free(&g);
+    if (rc != 0) throw std::runtime_error("Could not encrypt the file.");
     return out;
 }
 
 std::optional<Bytes> GcmOpen(const Bytes& key, const std::uint8_t* nonce, const Bytes& aad, const std::uint8_t* sealed,
                              std::size_t n) {
-    if (n < kTagBytes) return std::nullopt;
+    if (n < kTagBytes || key.size() != 32) return std::nullopt;
     mbedtls_gcm_context g;
     mbedtls_gcm_init(&g);
-    mbedtls_gcm_setkey(&g, MBEDTLS_CIPHER_ID_AES, key.data(), 256);
     Bytes out(n - kTagBytes);
-    const int rc = mbedtls_gcm_auth_decrypt(&g, out.size(), nonce, kNonceBytes, aad.data(), aad.size(), sealed + out.size(),
-                                            kTagBytes, sealed, out.data());
+    int rc = mbedtls_gcm_setkey(&g, MBEDTLS_CIPHER_ID_AES, key.data(), 256);
+    if (rc == 0) rc = mbedtls_gcm_auth_decrypt(&g, out.size(), nonce, kNonceBytes, aad.data(), aad.size(),
+                                              sealed + out.size(), kTagBytes, sealed, out.data());
     mbedtls_gcm_free(&g);
     if (rc != 0) return std::nullopt;
     return out;
@@ -245,7 +265,9 @@ std::optional<Bytes> UnHex(std::string_view s) {
 
 }  // namespace
 
-void SystemRandom(std::uint8_t* out, std::size_t n) { DrbgRandom(nullptr, out, n); }
+void SystemRandom(std::uint8_t* out, std::size_t n) {
+    if (DrbgRandom(nullptr, out, n) != 0) throw std::runtime_error("Secure random generation failed.");
+}
 
 std::int64_t NowMs() {
     return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
@@ -300,13 +322,14 @@ std::optional<Bytes> UnB64Url(std::string_view s) {
 
 Bytes Sha256(const Bytes& b) {
     Bytes out(32);
-    mbedtls_sha256(b.data(), b.size(), out.data(), 0);
+    if (mbedtls_sha256(b.data(), b.size(), out.data(), 0) != 0) throw std::runtime_error("SHA-256 failed.");
     return out;
 }
 
 Bytes HmacSha256(const Bytes& key, const Bytes& data) {
     Bytes out(32);
-    mbedtls_md_hmac(mbedtls_md_info_from_type(MBEDTLS_MD_SHA256), key.data(), key.size(), data.data(), data.size(), out.data());
+    if (mbedtls_md_hmac(mbedtls_md_info_from_type(MBEDTLS_MD_SHA256), key.data(), key.size(), data.data(), data.size(),
+                        out.data()) != 0) throw std::runtime_error("Key derivation failed.");
     return out;
 }
 
@@ -343,11 +366,17 @@ struct Pairing::Impl {
         mbedtls_ecp_group_init(&grp);
         mbedtls_mpi_init(&d);
         mbedtls_ecp_point_init(&q);
-        mbedtls_ecp_group_load(&grp, MBEDTLS_ECP_DP_SECP256R1);
-        mbedtls_ecp_gen_keypair(&grp, &d, &q, DrbgRandom, nullptr);
         point.resize(kPointBytes);
         std::size_t olen = 0;
-        mbedtls_ecp_point_write_binary(&grp, &q, MBEDTLS_ECP_PF_UNCOMPRESSED, &olen, point.data(), point.size());
+        if (mbedtls_ecp_group_load(&grp, MBEDTLS_ECP_DP_SECP256R1) != 0 ||
+            mbedtls_ecp_gen_keypair(&grp, &d, &q, DrbgRandom, nullptr) != 0 ||
+            mbedtls_ecp_point_write_binary(&grp, &q, MBEDTLS_ECP_PF_UNCOMPRESSED, &olen, point.data(), point.size()) != 0 ||
+            olen != kPointBytes) {
+            mbedtls_ecp_point_free(&q);
+            mbedtls_mpi_free(&d);
+            mbedtls_ecp_group_free(&grp);
+            throw std::runtime_error("Could not create a secure pairing.");
+        }
     }
     ~Impl() {
         mbedtls_ecp_point_free(&q);
@@ -409,8 +438,9 @@ std::optional<PairingKey> Pairing::Key(std::int64_t now_ms) const {
     if (mbedtls_ecp_point_read_binary(&impl_->grp, &p, impl_->peer->data(), impl_->peer->size()) == 0 &&
         mbedtls_ecdh_compute_shared(&impl_->grp, &z, &p, &impl_->d, DrbgRandom, nullptr) == 0) {
         Bytes shared(32);
-        mbedtls_mpi_write_binary(&z, shared.data(), shared.size());
-        out = Derive(shared, impl_->point, *impl_->peer, now_ms);
+        if (mbedtls_mpi_write_binary(&z, shared.data(), shared.size()) == 0) {
+            out = Derive(shared, impl_->point, *impl_->peer, now_ms);
+        }
         std::fill(shared.begin(), shared.end(), 0);
     }
     mbedtls_mpi_free(&z);
@@ -421,6 +451,10 @@ std::optional<PairingKey> Pairing::Key(std::int64_t now_ms) const {
 // ------------------------------------------------------------------------------------ envelopes
 
 Bytes Seal(const Bytes& plain, const SealKey& key, const Random& random) {
+    if (plain.size() < 5 || !std::equal(plain.begin(), plain.begin() + 4, "FFE2") ||
+        (plain[4] & ~kFlagBatch) != 0 || key.key.size() != 32 || key.id.size() != kIdBytes) {
+        throw std::invalid_argument("Invalid envelope or encryption key.");
+    }
     // The plain envelope is "FFE2" | flags | inner; sealed, the header gains the key id and nonce,
     // and inner is encrypted with the whole header as associated data.
     Bytes header(plain.begin(), plain.begin() + 4);
@@ -647,7 +681,14 @@ std::optional<std::string> ReadAck(std::string_view text, const Team& team, cons
 std::vector<Team> TeamStore::All() {
     if (cache_) return *cache_;
     std::vector<Team> out;
-    std::ifstream in(path_);
+    const std::filesystem::path path{std::u8string(path_.begin(), path_.end())};
+    std::ifstream in(path);
+    if (!in) {
+        std::error_code ec;
+        if (std::filesystem::exists(path, ec) || ec) {
+            throw std::runtime_error("Could not read the team keys. Check folder permissions.");
+        }
+    }
     std::string line;
     while (std::getline(in, line)) {
         std::vector<std::string> f;
@@ -670,6 +711,7 @@ std::vector<Team> TeamStore::All() {
         t.members = ReadMembers(&r);
         out.push_back(std::move(t));
     }
+    if (in.bad()) throw std::runtime_error("Could not read the team keys.");
     cache_ = out;
     return out;
 }
@@ -688,18 +730,56 @@ void TeamStore::Remove(const std::string& id_hex) {
 }
 
 void TeamStore::Save(const std::vector<Team>& teams) {
-    {
-        std::ofstream out(path_, std::ios::trunc);
-        for (const auto& t : teams) {
-            Bytes members;
-            PutMembers(&members, t.members);
-            out << Hex(t.id) << '\t' << B64Url(Ascii(t.name)) << '\t' << Hex(t.key) << '\t' << t.created_ms << '\t'
-                << (t.is_leader ? "L" : "M") << '\t' << B64Url(members) << '\n';
-        }
+    std::ostringstream out;
+    for (const auto& t : teams) {
+        Bytes members;
+        PutMembers(&members, t.members);
+        out << Hex(t.id) << '\t' << B64Url(Ascii(t.name)) << '\t' << Hex(t.key) << '\t' << t.created_ms << '\t'
+            << (t.is_leader ? "L" : "M") << '\t' << B64Url(members) << '\n';
     }
-#if !defined(_WIN32)
-    chmod(path_.c_str(), 0600);  // this user's alone
+    const std::string bytes = out.str();
+    Bytes nonce(16);
+    SystemRandom(nonce.data(), nonce.size());
+    const std::filesystem::path target{std::u8string(path_.begin(), path_.end())};
+    auto temp = target;
+    temp += "." + Hex(nonce) + ".tmp";
+    bool ok = false;
+#if defined(_WIN32)
+    PSECURITY_DESCRIPTOR descriptor = nullptr;
+    if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(L"D:P(A;;FA;;;OW)", SDDL_REVISION_1,
+                                                               &descriptor, nullptr)) {
+        throw std::runtime_error("Could not protect the team keys.");
+    }
+    SECURITY_ATTRIBUTES attrs{sizeof(SECURITY_ATTRIBUTES), descriptor, FALSE};
+    HANDLE file = CreateFileW(temp.c_str(), GENERIC_WRITE, 0, &attrs, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
+    LocalFree(descriptor);
+    if (file == INVALID_HANDLE_VALUE) throw std::runtime_error("Could not save the team keys.");
+    DWORD written = 0;
+    ok = bytes.size() <= MAXDWORD && WriteFile(file, bytes.data(), static_cast<DWORD>(bytes.size()), &written, nullptr) &&
+         written == bytes.size() && FlushFileBuffers(file);
+    if (!CloseHandle(file)) ok = false;
+    if (ok) ok = MoveFileExW(temp.c_str(), target.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != 0;
+#else
+    // Exclusive creation with private permissions BEFORE writing any secret. Atomic rename
+    // preserves the old store on failure and replaces symlinks instead of following them.
+    const int fd = ::open(temp.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0600);
+    if (fd < 0) throw std::runtime_error("Could not save the team keys.");
+    std::size_t at = 0;
+    while (at < bytes.size()) {
+        const auto n = ::write(fd, bytes.data() + at, bytes.size() - at);
+        if (n < 0 && errno == EINTR) continue;
+        if (n <= 0) break;
+        at += static_cast<std::size_t>(n);
+    }
+    ok = at == bytes.size() && ::fsync(fd) == 0;
+    if (::close(fd) != 0) ok = false;
+    if (ok) ok = ::rename(temp.c_str(), target.c_str()) == 0;
 #endif
+    if (!ok) {
+        std::error_code ec;
+        std::filesystem::remove(temp, ec);
+        throw std::runtime_error("Could not save the team keys. Check available disk space and folder permissions.");
+    }
     cache_ = teams;
 }
 

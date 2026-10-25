@@ -32,6 +32,7 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <exception>
 #include <string>
 #include <vector>
 
@@ -141,7 +142,7 @@ int main(int argc, char** argv) {
     // Presenting waits for the display's refresh: the clock every frame is counted against.
     SDL_SetRenderVSync(renderer, 1);
 
-    {
+    try {
         App app(window, renderer, settings, options);
         app.pending_files = files.size();
         app.Send(files);
@@ -149,9 +150,19 @@ int main(int argc, char** argv) {
         while (!app.done()) {
             if (seconds > 0.0 && std::chrono::duration<double>(Clock::now() - began).count() > seconds) break;
             SDL_Event e;
-            while (SDL_PollEvent(&e)) app.Event(e);
-            app.Frame();
+            try {
+                while (SDL_PollEvent(&e)) app.Event(e);
+                app.Frame();
+            } catch (const std::exception& error) {
+                app.ReportFailure(error.what());
+            }
         }
+    } catch (const std::exception& error) {
+        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "FileFlow", error.what(), window);
+        SDL_DestroyRenderer(renderer);
+        SDL_DestroyWindow(window);
+        SDL_Quit();
+        return 1;
     }
     SDL_DestroyRenderer(renderer);
     SDL_DestroyWindow(window);

@@ -8,9 +8,18 @@
 
 #include <random>
 #include <string>
+#include <filesystem>
+#include <fstream>
+#include <stdexcept>
+#include <chrono>
 
 namespace fileflow::desktop::secure {
 namespace {
+
+std::filesystem::path TempPath(const char* prefix) {
+    return std::filesystem::path(::testing::TempDir()) /
+           (std::string(prefix) + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+}
 
 // The Kotlin test's Fixed(seed): "random" bytes seed, seed + 1, ...
 Random Fixed(int seed) {
@@ -185,7 +194,7 @@ TEST(Secure, ATeamChangesHandsInAnyOrder) {
 }
 
 TEST(Secure, TeamsAreKeptInTheStore) {
-    const std::string path = ::testing::TempDir() + "teams-test.txt";
+    const std::string path = TempPath("teams-test-").string();
     std::remove(path.c_str());
     Team a = Team::Create("Crew", "Me", 5);
     a = a.WithMember({"Sam", 6});
@@ -205,6 +214,60 @@ TEST(Secure, TeamsAreKeptInTheStore) {
     EXPECT_EQ(TeamStore(path).All().size(), 1U);
     std::remove(path.c_str());
 }
+
+TEST(Secure, InvalidSealInputsAndRandomFailureAreRejected) {
+    const auto team = Team::Create("Crew", "Me", 1);
+    const auto plain = PackEnvelope(Bytes{1, 2, 3}, "x", CompressionMode::kOff).value().bytes;
+    EXPECT_THROW(Seal({}, team.AsSealKey()), std::invalid_argument);
+    auto bad = team.AsSealKey();
+    bad.key.clear();
+    EXPECT_THROW(Seal(plain, bad), std::invalid_argument);
+    const auto sealed = Seal(plain, team.AsSealKey());
+    Opened opened;
+    EXPECT_EQ(Open(sealed, {bad}, true, &opened), OpenFailure::kWrongKey);
+    EXPECT_THROW(Seal(plain, team.AsSealKey(), [](std::uint8_t*, std::size_t) {
+        throw std::runtime_error("random unavailable");
+    }), std::runtime_error);
+}
+
+TEST(Secure, FailedStoreReplacementKeepsCacheAndCleansTemporaryFile) {
+    const auto dir = TempPath("ff-store-failure-");
+    std::filesystem::remove_all(dir);
+    std::filesystem::create_directories(dir);
+    const auto path = dir / "teams.txt";
+    TeamStore store(path.string());
+    const auto team = Team::Create("Crew", "Me", 1);
+    store.Add(team);
+    std::filesystem::rename(path, dir / "original.txt");
+    std::filesystem::create_directory(path);  // makes atomic replacement fail even as root
+    EXPECT_THROW(store.Remove(team.IdHex()), std::runtime_error);
+    ASSERT_EQ(store.All().size(), 1U);
+    EXPECT_EQ(store.All()[0].key, team.key);
+    EXPECT_EQ(TeamStore((dir / "original.txt").string()).All()[0].key, team.key);
+    EXPECT_EQ(std::distance(std::filesystem::directory_iterator(dir), std::filesystem::directory_iterator()), 2);
+    std::filesystem::remove_all(dir);
+}
+
+#if !defined(_WIN32)
+TEST(Secure, StoreIsPrivateAndDoesNotFollowSymlinks) {
+    const auto dir = TempPath("ff-store-private-");
+    std::filesystem::remove_all(dir);
+    std::filesystem::create_directories(dir);
+    const auto path = dir / "teams.txt";
+    const auto target = dir / "unrelated.txt";
+    { std::ofstream file(target); file << "unchanged"; }
+    std::filesystem::create_symlink(target, path);
+    TeamStore(path.string()).Add(Team::Create("Crew", "Me", 1));
+    EXPECT_FALSE(std::filesystem::is_symlink(path));
+    const auto perms = std::filesystem::status(path).permissions();
+    EXPECT_EQ(perms & (std::filesystem::perms::group_all | std::filesystem::perms::others_all), std::filesystem::perms::none);
+    std::ifstream file(target);
+    std::string contents;
+    std::getline(file, contents);
+    EXPECT_EQ(contents, "unchanged");
+    std::filesystem::remove_all(dir);
+}
+#endif
 
 }  // namespace
 }  // namespace fileflow::desktop::secure

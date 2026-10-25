@@ -187,6 +187,15 @@ App::~App() {
     if (preview_ != nullptr) SDL_DestroyTexture(preview_);
 }
 
+void App::ReportFailure(const std::string& message) {
+    Stop();
+    StopReceiving();
+    pair_.reset();
+    prepared_.reset();
+    tab_ = Tab::kSend;
+    problem_ = message;
+}
+
 void App::Send(std::vector<std::string> paths) {
     if (paths.empty() || phase_ == Phase::kPreparing) return;
     preparing_name_ = paths.size() == 1 ? NameOf(PathOf(paths[0])) : std::to_string(paths.size()) + " files";
@@ -359,14 +368,19 @@ void App::Stop() {
 }
 
 void SDLCALL App::OnChosen(void* self, const char* const* list, int /*filter*/) {
-    auto* app = static_cast<App*>(self);
-    std::lock_guard lock(app->chosen_mutex_);
-    app->chosen_.clear();
-    for (; list != nullptr && *list != nullptr; ++list) app->chosen_.emplace_back(*list);
-    app->chosen_ready_ = true;
+    // The native dialog may finish after the app window is closed. Its callback owns
+    // only the result mailbox, never a pointer into the destroyed App.
+    const std::unique_ptr<std::shared_ptr<ChosenFiles>> owner(static_cast<std::shared_ptr<ChosenFiles>*>(self));
+    const auto& chosen = *owner;
+    std::lock_guard lock(chosen->mutex);
+    chosen->paths.clear();
+    for (; list != nullptr && *list != nullptr; ++list) chosen->paths.emplace_back(*list);
+    chosen->ready = true;
 }
 
-void App::Choose() { SDL_ShowOpenFileDialog(OnChosen, this, window_, nullptr, 0, nullptr, true); }
+void App::Choose() {
+    SDL_ShowOpenFileDialog(OnChosen, new std::shared_ptr<ChosenFiles>(chosen_), window_, nullptr, 0, nullptr, true);
+}
 
 void App::SendAgain(const Recent& r) {
     for (const auto& p : r.paths) {
@@ -396,10 +410,10 @@ void App::Remember() {
 void App::TakeChosenFiles() {
     std::vector<std::string> paths;
     {
-        std::lock_guard lock(chosen_mutex_);
-        if (!chosen_ready_) return;
-        chosen_ready_ = false;
-        paths.swap(chosen_);
+        std::lock_guard lock(chosen_->mutex);
+        if (!chosen_->ready) return;
+        chosen_->ready = false;
+        paths.swap(chosen_->paths);
     }
     Send(std::move(paths));
 }

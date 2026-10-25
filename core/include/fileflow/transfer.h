@@ -104,7 +104,8 @@ class FileTransmitter {
     [[nodiscard]] std::uint32_t manifest_interval() const noexcept { return manifest_interval_; }
 
     // Adds what the payload is (ContentHint) to every manifest frame from now on.
-    void SetContentHint(const ContentHint& hint);
+    // Fails without changing the manifest if the extended manifest cannot fit one symbol.
+    [[nodiscard]] Status SetContentHint(const ContentHint& hint);
 
     // Produces the next frame payload in the transmission schedule: a manifest frame every
     // `manifest_interval()` states, otherwise a fountain symbol, round-robining over blocks so a
@@ -142,6 +143,10 @@ class FileTransmitter {
 
 class FileReceiver {
   public:
+    // Bounds the eagerly allocated decoder working set, including matrices and per-block
+    // overhead. This is a receiver resource limit, separate from the protocol's file-size bound.
+    static constexpr std::uint64_t kMaxWorkingSetBytes = 512ULL * 1024 * 1024;
+    [[nodiscard]] static Status ValidateWorkingSet(const FileManifest& m) noexcept;
     static Result<FileReceiver> Create(const FileManifest& m);
 
     [[nodiscard]] const FileManifest& manifest() const noexcept { return manifest_; }

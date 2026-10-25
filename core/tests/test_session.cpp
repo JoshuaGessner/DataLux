@@ -57,6 +57,15 @@ TEST(Session, ReceiverNeedsOnlyTheGrid) {
     EXPECT_EQ(rx.value().stats().fec_fail, 0u);
 }
 
+TEST(Session, RejectsContentHintThatWouldOverflowTheManifestFrame) {
+    TransmitConfig cfg;
+    cfg.fec_nsym = 0;
+    cfg.symbol_size = 79;
+    cfg.content = ContentHint{.original_size = 2000, .codec = 2, .compress_ms = 1};
+    EXPECT_EQ(TransmitSession::Create(Layout(), Payload(1000), "x", 1, cfg).error(),
+              Error::kValueOutOfRange);
+}
+
 TEST(Session, SymbolsReadBeforeTheManifestAreNotWasted) {
     // The receiver joins AFTER the first manifest frame and before the second. Everything it
     // reads in between must count: on a clean channel the data is all in hand before the second

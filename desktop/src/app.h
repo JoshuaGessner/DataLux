@@ -82,6 +82,7 @@ class App {
     void Send(std::vector<std::string> paths);
     void Event(const SDL_Event& e);
     void Frame();
+    void ReportFailure(const std::string& message);
 
     // Files given on the command line: the home screen is skipped, so a snapshot waits for them.
     std::size_t pending_files = 0;
@@ -125,7 +126,7 @@ class App {
     [[nodiscard]] std::string MyName() const;
     [[nodiscard]] std::optional<secure::SealKey> SealTarget();
     [[nodiscard]] std::vector<secure::SealKey> Keys();
-    [[nodiscard]] const secure::PairingKey* Paired() const;
+    [[nodiscard]] const secure::PairingKey* Paired();
 
     // Actions.
     void SendClipboard();
@@ -176,9 +177,12 @@ class App {
     // Files on their way in.
     std::vector<std::string> dropped_;
     std::optional<Clock::time_point> drag_seen_;
-    std::mutex chosen_mutex_;
-    std::vector<std::string> chosen_;
-    bool chosen_ready_ = false;
+    struct ChosenFiles {
+        std::mutex mutex;
+        std::vector<std::string> paths;
+        bool ready = false;
+    };
+    std::shared_ptr<ChosenFiles> chosen_ = std::make_shared<ChosenFiles>();
     std::future<Prepared> pending_;
     std::string preparing_name_;
     std::string problem_;
