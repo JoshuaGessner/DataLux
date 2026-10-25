@@ -32,3 +32,16 @@ captures/
 *.apk
 *.aab
 *.jar
+
+# Independent website/browser/account Git repository; shared core changes stay here.
+/web/
+# Installable artifacts belong in workflow-created GitHub Releases, not source history.
+*.exe
+*.msi
+*.dmg
+*.pkg
+*.AppImage
+*.deb
+*.rpm
+*.zip
+*.tar.gz

@@ -94,6 +94,18 @@ QR libraries are fetched, pinned, and built in, so the result is a single progra
 install. Tested on macOS, and it builds and passes its tests on Linux (GCC 15); Windows is next to
 be checked. Not yet tried end to end with a phone held to a webcam.
 
+## Website and browser preview
+
+The separate [FileFlow-Web repository](https://github.com/JoshuaGessner/FileFlow-Web)
+contains the marketing website, responsive browser app, optional account service, and Docker setup.
+Files are buffered locally in IndexedDB; the interface and WASM optical core can be cached
+for offline use after an initial online visit. The browser uses a conservative black-and-white
+profile and shares the native protocol. Physical camera compatibility is still being validated;
+encrypted pairing and teams remain native-app features.
+
+Accounts are separate from file contents and are not required for transfers. See the web
+repository's README for setup, tests, offline limits, and the licensing roadmap.
+
 ## Encrypted mode
 
 Turn on **Encrypted** on both phones (the switch is on the Send and Receive tabs). The first time,
@@ -135,6 +147,10 @@ sending screen could read it. See [SECURITY.md](SECURITY.md) for the details.
 - A rear camera for receiving, and a front camera for pairing.
 
 ## Installing
+
+Platform packages are built and attached to GitHub Releases by the owner-run milestone
+workflow; installers are never committed to source history. See
+[NATIVE_RELEASES.md](NATIVE_RELEASES.md) for the build-only and explicit publication flows.
 
 FileFlow is built from source for now. Open the project in a recent Android Studio, let it sync,
 and run the **app** configuration on your phone. (Command line: with Gradle 9.8 and the Android

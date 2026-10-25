@@ -1,0 +1,607 @@
+name: native milestone release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version (prefer vMAJOR.MINOR.PATCH; bare SemVer is also accepted)
+        required: true
+        type: string
+      source_ref:
+        description: Reviewed source branch, tag, or commit; it must be reachable from main
+        required: true
+        default: main
+        type: string
+      publish_release:
+        description: Create and publish a GitHub Release after verification
+        required: true
+        default: false
+        type: boolean
+
+concurrency:
+  group: native-milestone-release
+  cancel-in-progress: false
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  validate:
+    name: authorize and validate release source
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      tag: ${{ steps.release.outputs.tag }}
+      version: ${{ steps.release.outputs.version }}
+      release_date: ${{ steps.release.outputs.release_date }}
+      prerelease: ${{ steps.release.outputs.prerelease }}
+      commit: ${{ steps.source.outputs.commit }}
+    steps:
+      - name: Require the repository owner and an exact SemVer version
+        id: release
+        env:
+          ACTOR: ${{ github.actor }}
+          OWNER: ${{ github.repository_owner }}
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          if [[ "$ACTOR" != "$OWNER" ]]; then
+            echo "::error::Only the repository owner may publish a native milestone."
+            exit 1
+          fi
+          VERSION="${INPUT_VERSION#v}"
+          if [[ ! "$VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]]; then
+            echo "::error::Version must be vMAJOR.MINOR.PATCH (or bare SemVer) without build metadata."
+            exit 1
+          fi
+          if [[ "$VERSION" == *-* ]]; then
+            IFS=. read -ra IDENTIFIERS <<< "${VERSION#*-}"
+            for IDENTIFIER in "${IDENTIFIERS[@]}"; do
+              if [[ "$IDENTIFIER" =~ ^[0-9]+$ && ${#IDENTIFIER} -gt 1 && "$IDENTIFIER" == 0* ]]; then
+                echo "::error::Numeric prerelease identifiers must not contain leading zeroes."
+                exit 1
+              fi
+            done
+          fi
+          echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "release_date=$(date -u +%F)" >> "$GITHUB_OUTPUT"
+          if [[ "$VERSION" == *-* ]]; then
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Check out the requested source
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ inputs.source_ref }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Require a reviewed mainline commit and matching source versions
+        id: source
+        env:
+          EXPECTED_VERSION: ${{ steps.release.outputs.version }}
+          SOURCE_REF: ${{ inputs.source_ref }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin "+refs/heads/main:refs/remotes/origin/main"
+          TAG_COMMIT="$(git rev-parse 'HEAD^{commit}')"
+          if ! git merge-base --is-ancestor "$TAG_COMMIT" refs/remotes/origin/main; then
+            echo "::error::$SOURCE_REF does not resolve to a commit reachable from origin/main."
+            exit 1
+          fi
+          python3 - <<'PY'
+          import os, pathlib, re, sys
+          expected = os.environ["EXPECTED_VERSION"].split("-", 1)[0]
+          files = {
+              "CMakeLists.txt": r"project\(fileflow LANGUAGES CXX VERSION ([0-9]+\.[0-9]+\.[0-9]+)\)",
+              "app/build.gradle.kts": r'versionName\s*=\s*"([0-9]+\.[0-9]+\.[0-9]+)"',
+          }
+          for filename, pattern in files.items():
+              match = re.search(pattern, pathlib.Path(filename).read_text(encoding="utf-8"))
+              if not match or match.group(1) != expected:
+                  actual = match.group(1) if match else "missing"
+                  print(f"::error::{filename} version is {actual}; expected {expected}")
+                  sys.exit(1)
+          PY
+          echo "commit=$TAG_COMMIT" >> "$GITHUB_OUTPUT"
+
+  linux:
+    name: Linux desktop (experimental)
+    needs: validate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ needs.validate.outputs.commit }}
+          persist-credentials: false
+      - name: Verify immutable source
+        env:
+          EXPECTED_COMMIT: ${{ needs.validate.outputs.commit }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_COMMIT"
+      - name: Install desktop build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build libasound2-dev libpulse-dev libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev libxfixes-dev libxss-dev libxtst-dev libwayland-dev libxkbcommon-dev libdrm-dev libgbm-dev libegl1-mesa-dev libgl1-mesa-dev libudev-dev
+      - name: Configure and build
+        run: |
+          cmake --preset desktop-app -G Ninja -DFILEFLOW_BUILD_TESTS=ON -DFILEFLOW_BUILD_SIM=ON
+          cmake --build build/desktop-app -j 4
+      - name: Test
+        run: ctest --test-dir build/desktop-app --output-on-failure -j 4
+      - name: Launch smoke test
+        env:
+          SDL_VIDEODRIVER: dummy
+          SDL_RENDER_DRIVER: software
+        run: build/desktop-app/desktop/fileflow-send --windowed --no-camera --seconds 2
+      - name: Package experimental tarball
+        env:
+          TAG: ${{ needs.validate.outputs.tag }}
+        run: |
+          set -euo pipefail
+          case "$(uname -m)" in
+            x86_64) ARCH=x86_64 ;;
+            aarch64|arm64) ARCH=arm64 ;;
+            *) echo "::error::Unsupported runner architecture: $(uname -m)"; exit 1 ;;
+          esac
+          PACKAGE_BASE="FileFlow-$TAG-linux-$ARCH"
+          mkdir -p "dist/$PACKAGE_BASE/share/icons/hicolor/512x512/apps" "dist/$PACKAGE_BASE/share/applications" release-staging
+          cp build/desktop-app/desktop/fileflow-send LICENSE README.md "dist/$PACKAGE_BASE/"
+          cp build/desktop-app/desktop/icon/fileflow.png "dist/$PACKAGE_BASE/share/icons/hicolor/512x512/apps/"
+          cp desktop/linux/fileflow.desktop "dist/$PACKAGE_BASE/share/applications/"
+          git rev-parse HEAD > "dist/$PACKAGE_BASE/SOURCE_REVISION.txt"
+          tar -C dist -czf "release-staging/$PACKAGE_BASE.tar.gz" "$PACKAGE_BASE"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: release-linux
+          path: release-staging/*
+          if-no-files-found: error
+          retention-days: 7
+
+  windows:
+    name: Windows desktop (experimental)
+    needs: validate
+    runs-on: windows-2025
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ needs.validate.outputs.commit }}
+          persist-credentials: false
+      - uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e # v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            git
+            zip
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-ninja
+      - name: Verify immutable source
+        env:
+          EXPECTED_COMMIT: ${{ needs.validate.outputs.commit }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_COMMIT"
+      - name: Configure and build
+        run: |
+          cmake --preset desktop-app -G Ninja -DCMAKE_EXE_LINKER_FLAGS="-static -static-libgcc -static-libstdc++"
+          cmake --build build/desktop-app -j 4
+      - name: Launch smoke test
+        run: build/desktop-app/desktop/FileFlow.exe --windowed --no-camera --seconds 2
+      - name: Package experimental portable ZIP
+        env:
+          TAG: ${{ needs.validate.outputs.tag }}
+        run: |
+          set -euo pipefail
+          case "$(uname -m)" in
+            x86_64) ARCH=x86_64 ;;
+            aarch64|arm64) ARCH=arm64 ;;
+            *) echo "::error::Unsupported runner architecture: $(uname -m)"; exit 1 ;;
+          esac
+          PACKAGE_BASE="FileFlow-$TAG-windows-$ARCH"
+          mkdir -p "dist/$PACKAGE_BASE" release-staging
+          cp build/desktop-app/desktop/FileFlow.exe LICENSE README.md "dist/$PACKAGE_BASE/"
+          git rev-parse HEAD > "dist/$PACKAGE_BASE/SOURCE_REVISION.txt"
+          (cd dist && zip -9 -r "../release-staging/$PACKAGE_BASE.zip" "$PACKAGE_BASE")
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: release-windows
+          path: release-staging/*
+          if-no-files-found: error
+          retention-days: 7
+
+  macos:
+    name: macOS desktop (experimental, ad-hoc signed)
+    needs: validate
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ needs.validate.outputs.commit }}
+          persist-credentials: false
+      - name: Verify immutable source
+        env:
+          EXPECTED_COMMIT: ${{ needs.validate.outputs.commit }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_COMMIT"
+      - name: Configure and build
+        run: |
+          cmake --preset desktop-app -DFILEFLOW_BUILD_TESTS=ON -DFILEFLOW_BUILD_SIM=ON
+          cmake --build build/desktop-app -j 4
+      - name: Test
+        run: ctest --test-dir build/desktop-app --output-on-failure -j 4
+      - name: Launch smoke test
+        env:
+          SDL_VIDEODRIVER: dummy
+          SDL_RENDER_DRIVER: software
+        run: build/desktop-app/desktop/FileFlow.app/Contents/MacOS/FileFlow --windowed --no-camera --seconds 2
+      - name: Verify ad-hoc signature and package app bundle
+        env:
+          TAG: ${{ needs.validate.outputs.tag }}
+        run: |
+          set -euo pipefail
+          APP=build/desktop-app/desktop/FileFlow.app
+          BINARY="$APP/Contents/MacOS/FileFlow"
+          codesign --verify --deep --strict "$APP"
+          BINARY_ARCHES="$(lipo -archs "$BINARY")"
+          if [[ "$BINARY_ARCHES" == *x86_64* && "$BINARY_ARCHES" == *arm64* ]]; then
+            ARCH=universal2
+          elif [[ "$BINARY_ARCHES" == "x86_64" ]]; then ARCH=x86_64
+          elif [[ "$BINARY_ARCHES" == "arm64" ]]; then ARCH=arm64
+          else echo "::error::Unsupported Mach-O architectures: $BINARY_ARCHES"; exit 1
+          fi
+          PACKAGE_BASE="FileFlow-$TAG-macos-$ARCH"
+          mkdir -p "dist/$PACKAGE_BASE" release-staging
+          ditto "$APP" "dist/$PACKAGE_BASE/FileFlow.app"
+          codesign --verify --deep --strict "dist/$PACKAGE_BASE/FileFlow.app"
+          cp LICENSE README.md "dist/$PACKAGE_BASE/"
+          git rev-parse HEAD > "dist/$PACKAGE_BASE/SOURCE_REVISION.txt"
+          ditto -c -k --sequesterRsrc --keepParent "dist/$PACKAGE_BASE" "release-staging/$PACKAGE_BASE.zip"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: release-macos
+          path: release-staging/*
+          if-no-files-found: error
+          retention-days: 7
+
+  android:
+    name: Android arm64 debug APK (experimental)
+    needs: validate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ needs.validate.outputs.commit }}
+          persist-credentials: false
+      - name: Verify immutable source
+        env:
+          EXPECTED_COMMIT: ${{ needs.validate.outputs.commit }}
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_COMMIT"
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Install the pinned NDK and CMake
+        run: |
+          set -euo pipefail
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          { yes || true; } | "$SDKMANAGER" --licenses > /dev/null
+          "$SDKMANAGER" --install "ndk;29.0.14206865" "cmake;3.22.1" "platforms;android-37.0"
+      - uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6
+        with:
+          gradle-version: '9.8.1'
+      - name: Assemble, unit tests, and lint
+        run: gradle :app:assembleDebug :app:testDebugUnitTest :app:lintDebug --no-daemon
+      - name: Verify target ABI and debug signature
+        run: |
+          set -euo pipefail
+          APK=app/build/outputs/apk/debug/app-debug.apk
+          mapfile -t SOS < <(unzip -Z1 "$APK" | grep -E '^lib/[^/]+/[^/]+\.so$')
+          if [[ "${#SOS[@]}" != 1 || "${SOS[0]}" != "lib/arm64-v8a/libfileflow.so" ]]; then
+            printf 'Found shared libraries:\n%s\n' "${SOS[*]}"
+            echo "::error::The APK must contain only lib/arm64-v8a/libfileflow.so."
+            exit 1
+          fi
+          APKSIGNER="$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -1)"
+          if [[ -z "$APKSIGNER" ]]; then echo "::error::apksigner was not found in the Android SDK."; exit 1; fi
+          "$APKSIGNER" verify --verbose --print-certs "$APK"
+      - name: Package experimental debug APK
+        env:
+          TAG: ${{ needs.validate.outputs.tag }}
+        run: |
+          mkdir -p release-staging
+          cp app/build/outputs/apk/debug/app-debug.apk "release-staging/FileFlow-$TAG-android-arm64-v8a-debug.apk"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: release-android
+          path: release-staging/*
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: verify and publish durable GitHub Release assets
+    needs: [validate, linux, windows, macos, android]
+    if: ${{ inputs.publish_release }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      actions: read
+      contents: write
+    env:
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - name: Download all successful native builds
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          pattern: release-*
+          path: release-staging
+          merge-multiple: true
+
+      - name: Validate package set and archive contents
+        env:
+          COMMIT: ${{ needs.validate.outputs.commit }}
+          TAG: ${{ needs.validate.outputs.tag }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import hashlib, json, os, pathlib, re, sys, tarfile, zipfile
+          root, tag, commit = pathlib.Path("release-staging"), os.environ["TAG"], os.environ["COMMIT"]
+          files = sorted(path for path in root.iterdir() if path.is_file())
+          patterns = {
+              "linux": re.compile(rf"^FileFlow-{re.escape(tag)}-linux-(x86_64|arm64)\.tar\.gz$"),
+              "windows": re.compile(rf"^FileFlow-{re.escape(tag)}-windows-(x86_64|arm64)\.zip$"),
+              "macos": re.compile(rf"^FileFlow-{re.escape(tag)}-macos-(x86_64|arm64|universal2)\.zip$"),
+              "android": re.compile(rf"^FileFlow-{re.escape(tag)}-android-(arm64-v8a)-debug\.apk$"),
+          }
+          found = {}
+          for path in files:
+              matches = [(platform, match) for platform, pattern in patterns.items() if (match := pattern.fullmatch(path.name))]
+              if len(matches) != 1:
+                  raise SystemExit(f"::error::Unexpected release package: {path.name}")
+              platform, match = matches[0]
+              if platform in found:
+                  raise SystemExit(f"::error::Multiple {platform} packages were produced")
+              found[platform] = (path, match.group(1))
+          if set(found) != set(patterns):
+              raise SystemExit(f"::error::Expected {sorted(patterns)}; found {sorted(found)}")
+
+          with tarfile.open(found["linux"][0], "r:gz") as archive:
+              revision = [m for m in archive.getmembers() if m.name.endswith("/SOURCE_REVISION.txt")]
+              binaries = [m for m in archive.getmembers() if m.name.endswith("/fileflow-send")]
+              if len(revision) != 1 or len(binaries) != 1:
+                  raise SystemExit("::error::Linux archive contents are incomplete")
+              if archive.extractfile(revision[0]).read().decode().strip() != commit:
+                  raise SystemExit("::error::Linux SOURCE_REVISION.txt is wrong")
+
+          for platform in ("windows", "macos"):
+              path = found[platform][0]
+              with zipfile.ZipFile(path) as archive:
+                  bad = archive.testzip()
+                  if bad:
+                      raise SystemExit(f"::error::{path.name} has a corrupt member: {bad}")
+                  names = archive.namelist()
+                  revisions = [name for name in names if name.endswith("/SOURCE_REVISION.txt")]
+                  suffix = "/FileFlow.exe" if platform == "windows" else "/FileFlow.app/Contents/MacOS/FileFlow"
+                  binaries = [name for name in names if name.endswith(suffix)]
+                  if len(revisions) != 1 or len(binaries) != 1:
+                      raise SystemExit(f"::error::{platform} archive contents are incomplete")
+                  if archive.read(revisions[0]).decode().strip() != commit:
+                      raise SystemExit(f"::error::{platform} SOURCE_REVISION.txt is wrong")
+
+          with zipfile.ZipFile(found["android"][0]) as archive:
+              bad = archive.testzip()
+              if bad:
+                  raise SystemExit(f"::error::Android APK has a corrupt member: {bad}")
+              shared = sorted(n for n in archive.namelist() if n.startswith("lib/") and n.endswith(".so"))
+              if shared != ["lib/arm64-v8a/libfileflow.so"]:
+                  raise SystemExit("::error::Android APK target ABI changed")
+
+          records = []
+          for platform, (path, arch) in sorted(found.items()):
+              records.append({"name": path.name, "platform": platform, "arch": arch,
+                              "sha256": hashlib.sha256(path.read_bytes()).hexdigest()})
+          pathlib.Path("package-records.json").write_text(json.dumps(records, indent=2) + "\n", encoding="utf-8")
+          PY
+
+      - name: Create or reuse an empty draft release on the validated commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          COMMIT: ${{ needs.validate.outputs.commit }}
+          TAG: ${{ needs.validate.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" > preexisting-tag-ref.json 2> tag-error.txt; then
+            python3 - <<'PY'
+          import json, os, pathlib, subprocess
+          expected = os.environ["COMMIT"]
+          repo = os.environ["GITHUB_REPOSITORY"]
+          obj = json.loads(pathlib.Path("preexisting-tag-ref.json").read_text())["object"]
+          while obj["type"] == "tag":
+              response = subprocess.run(
+                  ["gh", "api", f"repos/{repo}/git/tags/{obj['sha']}"],
+                  check=True, capture_output=True, text=True)
+              obj = json.loads(response.stdout)["object"]
+          if obj["type"] != "commit" or obj["sha"] != expected:
+              raise SystemExit(
+                  f"::error::Existing {os.environ['TAG']} resolves to {obj['sha']}, expected {expected}")
+          PY
+          elif ! grep -q '(HTTP 404)' tag-error.txt; then
+            cat tag-error.txt >&2
+            exit 1
+          fi
+
+          if gh release view "$TAG" --json isDraft,isImmutable,tagName > release-state.json 2>/dev/null; then
+            if [[ "$(jq -r '.isDraft' release-state.json)" != "true" || \
+                  "$(jq -r '.isImmutable' release-state.json)" == "true" ]]; then
+              echo "::error::$TAG is already published and is immutable."
+              exit 1
+            fi
+          else
+            gh release create "$TAG" \
+              --draft \
+              --target "$COMMIT" \
+              --title "FileFlow $TAG" \
+              --notes "Experimental native milestone built from $COMMIT. See NATIVE_RELEASES.md before publishing."
+          fi
+
+          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" > release-before-upload.json
+          if [[ "$(jq -r '.draft' release-before-upload.json)" != "true" ]]; then
+            echo "::error::$TAG is not a draft release."
+            exit 1
+          fi
+          if [[ "$(jq '.assets | length' release-before-upload.json)" != "0" ]]; then
+            echo "::error::The draft already has assets; refusing to overwrite immutable release material."
+            exit 1
+          fi
+
+          gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" > release-tag-ref.json
+          python3 - <<'PY'
+          import json, os, pathlib, subprocess
+          expected = os.environ["COMMIT"]
+          repo = os.environ["GITHUB_REPOSITORY"]
+          obj = json.loads(pathlib.Path("release-tag-ref.json").read_text())["object"]
+          while obj["type"] == "tag":
+              response = subprocess.run(
+                  ["gh", "api", f"repos/{repo}/git/tags/{obj['sha']}"],
+                  check=True, capture_output=True, text=True)
+              obj = json.loads(response.stdout)["object"]
+          if obj["type"] != "commit" or obj["sha"] != expected:
+              raise SystemExit(
+                  f"::error::{os.environ['TAG']} resolves to {obj['sha']}, expected {expected}")
+          PY
+
+      - name: Upload packages to the draft without overwriting assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.validate.outputs.tag }}
+        run: gh release upload "$TAG" release-staging/*
+
+      - name: Re-download packages, verify GitHub digests, and create metadata
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PUBLISHED_DATE: ${{ needs.validate.outputs.release_date }}
+          TAG: ${{ needs.validate.outputs.tag }}
+          VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          set -euo pipefail
+          if [[ "$(date -u +%F)" != "$PUBLISHED_DATE" ]]; then
+            echo "::error::The UTC date changed during the build; rerun so release metadata stays exact."
+            exit 1
+          fi
+          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" > release-after-packages.json
+          python3 - <<'PY'
+          import hashlib, json, os, pathlib, subprocess
+          repo, version = os.environ["GITHUB_REPOSITORY"], os.environ["VERSION"]
+          release = json.loads(pathlib.Path("release-after-packages.json").read_text())
+          records = json.loads(pathlib.Path("package-records.json").read_text())
+          assets = {asset["name"]: asset for asset in release["assets"]}
+          details = {
+              "linux": ({"status": "unsigned", "details": "No Linux package signature."}, "Experimental portable tarball; no installer or distribution package.", ["Compatibility is not validated across Linux distributions."]),
+              "windows": ({"status": "unsigned", "details": "No Authenticode signature."}, "Experimental portable ZIP; no installer.", ["Windows SmartScreen may warn because the executable is unsigned."]),
+              "macos": ({"status": "ad-hoc", "details": "Ad-hoc bundle signature only; not Developer ID signed or notarized."}, "Experimental app bundle ZIP.", ["Gatekeeper may block the app because it is not notarized."]),
+              "android": ({"status": "ad-hoc", "details": "Ephemeral debug certificate generated for this GitHub-hosted runner build; not a persistent release identity."}, "Experimental sideloadable debug APK; not a Play Store build.", ["The per-run debug key is not a supported in-place upgrade path; another build may require uninstalling the existing app, which removes app-local state.", "Stable Android release signing is not configured."]),
+          }
+          manifest_artifacts = []
+          for record in records:
+              asset = assets.get(record["name"])
+              if not asset:
+                  raise SystemExit(f"::error::Missing GitHub Release asset: {record['name']}")
+              expected = record["sha256"]
+              if asset.get("digest") != f"sha256:{expected}":
+                  raise SystemExit(f"::error::GitHub digest mismatch for {record['name']}")
+              destination = pathlib.Path("verified-downloads") / record["name"]
+              destination.parent.mkdir(exist_ok=True)
+              with destination.open("wb") as output:
+                  subprocess.run(["gh", "api", f"repos/{repo}/releases/assets/{asset['id']}", "-H", "Accept: application/octet-stream"], stdout=output, check=True)
+              if hashlib.sha256(destination.read_bytes()).hexdigest() != expected:
+                  raise SystemExit(f"::error::Downloaded bytes mismatch for {record['name']}")
+              signing, notes, known = details[record["platform"]]
+              manifest_artifacts.append({**record, "url": asset["browser_download_url"],
+                                         "signing": signing, "notes": notes, "knownIssues": known})
+          manifest = {"schemaVersion": 1, "version": version, "date": os.environ["PUBLISHED_DATE"], "artifacts": manifest_artifacts}
+          manifest_path = pathlib.Path("fileflow-release-manifest.json")
+          manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+          manifest_hash = hashlib.sha256(manifest_path.read_bytes()).hexdigest()
+          lines = [f"{record['sha256']}  {record['name']}" for record in records]
+          lines.append(f"{manifest_hash}  {manifest_path.name}")
+          pathlib.Path("SHA256SUMS").write_text("\n".join(sorted(lines)) + "\n", encoding="utf-8")
+          PY
+
+      - name: Publish and verify checksums
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.validate.outputs.tag }}
+        run: |
+          set -euo pipefail
+          gh release upload "$TAG" SHA256SUMS
+          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" > release-after-checksums.json
+          ASSET_ID="$(jq -r '.assets[] | select(.name == "SHA256SUMS") | .id' release-after-checksums.json)"
+          API_DIGEST="$(jq -r '.assets[] | select(.name == "SHA256SUMS") | .digest' release-after-checksums.json)"
+          LOCAL_DIGEST="sha256:$(sha256sum SHA256SUMS | cut -d' ' -f1)"
+          if [[ -z "$ASSET_ID" || "$API_DIGEST" != "$LOCAL_DIGEST" ]]; then
+            echo "::error::GitHub did not retain the expected SHA256SUMS bytes."
+            exit 1
+          fi
+          gh api "repos/$GITHUB_REPOSITORY/releases/assets/$ASSET_ID" -H 'Accept: application/octet-stream' > downloaded-SHA256SUMS
+          cmp SHA256SUMS downloaded-SHA256SUMS
+
+      - name: Publish manifest last and verify it
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.validate.outputs.tag }}
+        run: |
+          set -euo pipefail
+          cleanup_manifest() {
+            gh release delete-asset "$TAG" fileflow-release-manifest.json --yes || true
+          }
+          trap cleanup_manifest ERR
+          gh release upload "$TAG" fileflow-release-manifest.json
+          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" > release-after-manifest.json
+          ASSET_ID="$(jq -r '.assets[] | select(.name == "fileflow-release-manifest.json") | .id' release-after-manifest.json)"
+          API_DIGEST="$(jq -r '.assets[] | select(.name == "fileflow-release-manifest.json") | .digest' release-after-manifest.json)"
+          LOCAL_DIGEST="sha256:$(sha256sum fileflow-release-manifest.json | cut -d' ' -f1)"
+          if [[ -z "$ASSET_ID" || "$API_DIGEST" != "$LOCAL_DIGEST" ]]; then
+            echo "::error::GitHub did not retain the expected release manifest bytes."
+            if [[ -n "$ASSET_ID" ]]; then gh api --method DELETE "repos/$GITHUB_REPOSITORY/releases/assets/$ASSET_ID"; fi
+            exit 1
+          fi
+          gh api "repos/$GITHUB_REPOSITORY/releases/assets/$ASSET_ID" -H 'Accept: application/octet-stream' > downloaded-manifest.json
+          if ! cmp fileflow-release-manifest.json downloaded-manifest.json; then
+            gh api --method DELETE "repos/$GITHUB_REPOSITORY/releases/assets/$ASSET_ID"
+            echo "::error::Downloaded release manifest differs; the feed remains hidden."
+            exit 1
+          fi
+          trap - ERR
+
+      - name: Publish by explicit owner choice
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PRERELEASE: ${{ needs.validate.outputs.prerelease }}
+          RELEASE_DATE: ${{ needs.validate.outputs.release_date }}
+          TAG: ${{ needs.validate.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if [[ "$(date -u +%F)" != "$RELEASE_DATE" ]]; then
+            gh release delete-asset "$TAG" fileflow-release-manifest.json --yes || true
+            echo "::error::The UTC date changed before publication; the draft remains hidden."
+            exit 1
+          fi
+
+          gh release edit "$TAG" --draft=false --prerelease="$PRERELEASE"
+          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" > published-release.json
+          PUBLISHED_AT="$(jq -r '.published_at // empty' published-release.json)"
+          if [[ "$(jq -r '.draft' published-release.json)" != "false" || \
+                "${PUBLISHED_AT%%T*}" != "$RELEASE_DATE" ]]; then
+            gh release delete-asset "$TAG" fileflow-release-manifest.json --yes || true
+            echo "::error::Publication state/date verification failed; the manifest was removed to hide the release feed."
+            exit 1
+          fi
+          echo "## Published native milestone: $TAG" >> "$GITHUB_STEP_SUMMARY"
