@@ -177,9 +177,12 @@ App::App(SDL_Window* w, SDL_Renderer* r, Settings settings, Options options)
     if (options_.open == "pair") StartPairing(secure::PairingFlow::Mode::kPair);
     if (options_.open == "join") StartPairing(secure::PairingFlow::Mode::kJoin);
     if (options_.open == "encrypted") settings_.encrypted = true;
+    if (options_.open == "receive") tab_ = Tab::kReceive;
+    if (options_.open == "received") tab_ = Tab::kReceived;
 }
 
 App::~App() {
+    StopReceiving();
     code_.reset();
     if (preview_ != nullptr) SDL_DestroyTexture(preview_);
 }
@@ -313,8 +316,12 @@ void App::Frame() {
         PairScreen(W, H);
     } else {
         constexpr float kRail = 92;
-        if (tab_ == Tab::kTeams) TeamsScreen(kRail, W, H);
-        else SendScreen(kRail, W, H);
+        switch (tab_) {
+            case Tab::kSend: SendScreen(kRail, W, H); break;
+            case Tab::kReceive: ReceiveScreen(kRail, W, H); break;
+            case Tab::kReceived: ReceivedScreen(kRail, W, H); break;
+            case Tab::kTeams: TeamsScreen(kRail, W, H); break;
+        }
         Rail(H);
     }
     ui_.End();

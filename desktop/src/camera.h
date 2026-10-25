@@ -41,8 +41,9 @@ class Camera {
     [[nodiscard]] int width() const { return w_; }
     [[nodiscard]] int height() const { return h_; }
     [[nodiscard]] const std::vector<std::uint8_t>& luma() const { return luma_; }
-    // NV12-style chroma, half resolution each way: U then V, interleaved (as the phone's camera gives).
-    [[nodiscard]] const std::vector<std::uint8_t>& chroma() const { return chroma_; }
+    // Chroma, half resolution each way, a plane each -- as the decoder takes it.
+    [[nodiscard]] const std::vector<std::uint8_t>& u() const { return u_; }
+    [[nodiscard]] const std::vector<std::uint8_t>& v() const { return v_; }
     [[nodiscard]] std::uint64_t timestamp_ns() const { return ts_; }
     [[nodiscard]] SDL_Texture* preview() const { return preview_; }
 
@@ -53,7 +54,8 @@ class Camera {
     int h_ = 0;
     std::uint64_t ts_ = 0;
     std::vector<std::uint8_t> luma_;
-    std::vector<std::uint8_t> chroma_;
+    std::vector<std::uint8_t> u_;
+    std::vector<std::uint8_t> v_;
     bool none_ = false;
 };
 

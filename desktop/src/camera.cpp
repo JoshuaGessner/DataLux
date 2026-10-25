@@ -140,7 +140,8 @@ bool Camera::Poll(SDL_Renderer* r) {
     }
     SDL_UpdateTexture(preview_, nullptr, rgba->pixels, rgba->pitch);
     luma_.resize(static_cast<std::size_t>(w_) * static_cast<std::size_t>(h_));
-    chroma_.resize(static_cast<std::size_t>(w_) * static_cast<std::size_t>(h_) / 2);
+    u_.resize(static_cast<std::size_t>(w_ / 2) * static_cast<std::size_t>(h_ / 2));
+    v_.resize(u_.size());
     const auto* px = static_cast<const std::uint8_t*>(rgba->pixels);
     for (int y = 0; y < h_; ++y) {
         const std::uint8_t* row = px + static_cast<std::ptrdiff_t>(y) * rgba->pitch;
@@ -153,9 +154,9 @@ bool Camera::Poll(SDL_Renderer* r) {
             if ((x & 1) == 0 && (y & 1) == 0) {
                 const int U = ((-43 * R - 85 * G + 128 * B) >> 8) + 128;
                 const int V = ((128 * R - 107 * G - 21 * B) >> 8) + 128;
-                const std::size_t at = static_cast<std::size_t>((y / 2) * w_ + x);
-                chroma_[at] = static_cast<std::uint8_t>(std::clamp(U, 0, 255));
-                chroma_[at + 1] = static_cast<std::uint8_t>(std::clamp(V, 0, 255));
+                const std::size_t at = static_cast<std::size_t>((y / 2) * (w_ / 2) + x / 2);
+                u_[at] = static_cast<std::uint8_t>(std::clamp(U, 0, 255));
+                v_[at] = static_cast<std::uint8_t>(std::clamp(V, 0, 255));
             }
         }
     }

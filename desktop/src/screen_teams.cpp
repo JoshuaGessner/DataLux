@@ -132,12 +132,17 @@ void App::Rail(float H) {
         Ui::Icon icon;
         const char* label;
     };
-    const Item items[] = {{Tab::kSend, Ui::Icon::kSend, "Send"}, {Tab::kTeams, Ui::Icon::kTeams, "Teams"}};
+    const Item items[] = {{Tab::kSend, Ui::Icon::kSend, "Send"},
+                          {Tab::kReceive, Ui::Icon::kReceive, "Receive"},
+                          {Tab::kReceived, Ui::Icon::kReceived, "Received"},
+                          {Tab::kTeams, Ui::Icon::kTeams, "Teams"}};
     float y = 96;
     for (const auto& it : items) {
         if (ui_.RailItem(std::string("rail/") + it.label, 46, y, it.icon, it.label, tab_ == it.tab)) {
+            if (tab_ == Tab::kReceive && it.tab != Tab::kReceive) StopReceiving();  // the camera only while it's shown
             tab_ = it.tab;
             team_open_.clear();
+            received_dirty_ = true;
             ui_.Unfocus();
         }
         y += 76;

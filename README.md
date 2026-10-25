@@ -47,11 +47,12 @@ transfer pauses; aim back and it carries on from where it was. Nothing received 
 
 Received files are saved to **Downloads › FileFlow** and listed in the **Received** tab.
 
-## Sending from a computer
+## FileFlow on a computer
 
-`fileflow-send` turns a laptop, monitor, TV or projector into the sending screen, for any phone
-running FileFlow. A bigger screen means bigger cells, so phones can read from further back and
-further to the side — one screen, a room full of receivers, each at its own pace.
+The desktop app does what the phone app does — **Send**, **Receive**, **Received**, **Teams** — with a
+laptop, monitor, TV or projector as the sending screen and the computer's own camera to receive and
+pair. A bigger screen means bigger cells, so phones can read from further back and further to the
+side: one screen, a room full of receivers, each at its own pace.
 
 ```sh
 cmake --preset desktop-app && cmake --build build/desktop-app
@@ -78,10 +79,20 @@ move the mouse or press a key to bring them back. **Esc** stops. Keys: **1 2 3**
 **F** toggles full screen. Options: `--speed steady|fast|fastest`, `--compression off|auto|max`,
 `--windowed`.
 
-It needs CMake 3.25 and a C++20 compiler; SDL3, the Inter typeface and stb_truetype are fetched,
-pinned, and built in, so the result is a single program with nothing to install. Tested on macOS,
-and it compiles on Linux (GCC 15); Windows is next to be checked. Encrypted sending from a
-computer isn't there yet.
+**Receive** reads a phone's sending screen held up to the computer's camera, and saves to
+**Downloads › FileFlow**, listed under **Received**. A computer's camera is slower than a phone's,
+so set the sending phone to **Steady**.
+
+**Encrypted mode and teams** work as on the phone and with phones: pair with a phone, make a team
+and invite phones to it, or join a phone's team — the computer shows its code big for the phone's
+front camera and reads the phone's with its own. **Encrypted** on Send seals to the paired phone or
+a team; receiving opens anything sealed to either. The formats are the phone's, byte for byte, held
+to the same test vectors.
+
+It needs CMake 3.25 and a C++20 compiler; SDL3, Mbed TLS, the Inter typeface, stb_truetype and the
+QR libraries are fetched, pinned, and built in, so the result is a single program with nothing to
+install. Tested on macOS, and it builds and passes its tests on Linux (GCC 15); Windows is next to
+be checked. Not yet tried end to end with a phone held to a webcam.
 
 ## Encrypted mode
 

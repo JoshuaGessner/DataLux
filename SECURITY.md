@@ -43,6 +43,11 @@ it sends or receives can leave the two phones by any other route.
   received. Removing a member replaces the key (and its id) with a new one, which the leader hands
   to each remaining member again; the removed phone keeps only the old key. The member list is
   bookkeeping on the leader's phone, not access control: the key is.
+- *The desktop app* implements the same formats (desktop/src/secure.cpp, on Mbed TLS), held to
+  the phone's own test vectors. Its pairing keys live in memory only, for 30 minutes, as on the
+  phone. Its team keys are stored in a file in the user's application-preferences folder, readable
+  only by that user (mode 0600) -- but NOT wrapped by a hardware-held key as on Android: anyone who
+  can read that user's files can read them. Wrapping them with the system keychain is planned.
 - *No downgrade.* A receiver in encrypted mode refuses unencrypted files and files sealed to any
   key it does not hold.
 

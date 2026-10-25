@@ -53,14 +53,8 @@ FetchContent_Declare(quirc
     URL      https://github.com/dlbeer/quirc/archive/refs/tags/v1.2.tar.gz
     URL_HASH SHA256=73c12ea33d337ec38fb81218c7674f57dba7ec0570bddd5c7f7a977c0deb64c5
 )
-FetchContent_GetProperties(qrcodegen)
-if(NOT qrcodegen_POPULATED)
-    FetchContent_Populate(qrcodegen)
-endif()
-FetchContent_GetProperties(quirc)
-if(NOT quirc_POPULATED)
-    FetchContent_Populate(quirc)
-endif()
+# Neither has a CMakeLists of its own, so this only fetches them; the library is built below.
+FetchContent_MakeAvailable(qrcodegen quirc)
 add_library(ff_qr STATIC
     ${qrcodegen_SOURCE_DIR}/cpp/qrcodegen.cpp
     ${quirc_SOURCE_DIR}/lib/decode.c
@@ -107,6 +101,8 @@ add_executable(fileflow-send
     src/screen_send.cpp
     src/screen_teams.cpp
     src/camera.cpp
+    src/receiver.cpp
+    src/screen_receive.cpp
     src/paint.cpp
     src/transfer.cpp
     src/stb_impl.cpp
@@ -177,7 +173,7 @@ endif()
 
 # The desktop's own tests: its secure formats held to the phone's vectors, and the rest.
 if(FILEFLOW_BUILD_TESTS)
-    add_executable(desktop_tests tests/test_secure.cpp tests/test_qr.cpp src/camera.cpp)
+    add_executable(desktop_tests tests/test_secure.cpp tests/test_qr.cpp tests/test_receive.cpp src/camera.cpp src/receiver.cpp)
     target_link_libraries(desktop_tests PRIVATE fileflow_secure ff_qr SDL3::SDL3-static fileflow_warnings GTest::gtest_main)
     set_target_properties(desktop_tests PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
     include(GoogleTest)

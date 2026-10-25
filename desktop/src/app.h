@@ -9,6 +9,7 @@
 
 #include "camera.h"
 #include "paint.h"
+#include "receiver.h"
 #include "secure.h"
 #include "transfer.h"
 #include "ui.h"
@@ -18,6 +19,7 @@
 #include <chrono>
 #include <cstdint>
 #include <future>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -106,6 +108,10 @@ class App {
     void TeamsScreen(float x, float W, float H);
     void TeamDetail(float x, float W, float H, const secure::Team& team);
     void PairScreen(float W, float H);
+    void ReceiveScreen(float x, float W, float H);
+    void ReceivedScreen(float x, float W, float H);
+    void StartReceiving();
+    void StopReceiving();
     float EncryptedRow(float x, float y, float w);  // returns its height
     void SendScreen(float x, float W, float H);
     void SendingOverlay(float W, float H, float alpha);
@@ -199,6 +205,15 @@ class App {
         std::string outcome;
     };
     std::unique_ptr<PairState> pair_;
+
+    // Receiving.
+    std::unique_ptr<Receiver> receiver_;
+    Camera rx_camera_;
+    std::optional<ReceiveResult> rx_result_;
+    std::vector<SavedFile> received_;
+    std::map<std::string, std::int64_t> received_times_;
+    bool received_dirty_ = true;
+    float received_read_at_ = 0;
 
     // Sending.
     std::optional<Prepared> prepared_;
