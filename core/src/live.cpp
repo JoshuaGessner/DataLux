@@ -144,6 +144,7 @@ LiveStatus LiveReceiver::Ingest(const ImageView8& img, std::int64_t timestamp_ns
     frames_without_screen_ = in_view ? 0 : frames_without_screen_ + 1;
 
     bool read = false;
+    bool payload = false;
     if (p.last_ok()) {
         const FrameOutcome o = session_->Commit(std::move(decoded), timestamp_ns);
         status_.distinct_states = session_->stats().distinct_sequences;
@@ -159,6 +160,7 @@ LiveStatus LiveReceiver::Ingest(const ImageView8& img, std::int64_t timestamp_ns
             case FrameOutcome::kManifest:
             case FrameOutcome::kManifestRejected:
                 ++status_.payload_frames;  // passed intra-frame FEC and its CRC
+                payload = true;
                 if (first_payload_ns_ == 0) first_payload_ns_ = timestamp_ns;
                 last_payload_ns_ = std::max(last_payload_ns_, timestamp_ns);
                 foreign_run_ = 0;
@@ -194,6 +196,14 @@ LiveStatus LiveReceiver::Ingest(const ImageView8& img, std::int64_t timestamp_ns
     }
     read_window_.push_back(read);
     while (read_window_.size() > cfg_.window_frames) read_window_.pop_front();
+
+    // The lens is learned only from frames that read, and a lane that stops decoding goes back to
+    // the strength the last good frame -- from any lane -- was read with.
+    if (payload) {
+        good_lens_ = p.lens_strength();
+        have_good_lens_ = true;
+    }
+    p.LensFeedback(read, payload, good_lens_, have_good_lens_);
 
     if (session_->complete() && !result_) result_ = session_->Finish();
     Decide(timestamp_ns, p);

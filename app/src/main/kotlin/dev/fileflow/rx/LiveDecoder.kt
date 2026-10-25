@@ -107,6 +107,8 @@ class LiveDecoder(
     grids: List<Pair<Int, Int>>,
     exposureNs: Long,
     private val lanes: Int = DEFAULT_LANES,
+    /** The lens distortion this camera was last read with ([LiveStatus.lensStrength]); 0 = unknown. */
+    lensPrior: Double = 0.0,
 ) : AutoCloseable {
 
     /**
@@ -124,7 +126,7 @@ class LiveDecoder(
     private class Candidate(val cols: Int, val rows: Int, val handle: Long)
 
     private val candidates: List<Candidate> =
-        grids.distinct().map { (c, r) -> Candidate(c, r, NativeReceiver.open(c, r, exposureNs, lanes)) }
+        grids.distinct().map { (c, r) -> Candidate(c, r, NativeReceiver.open(c, r, exposureNs, lanes, lensPrior)) }
     private val next = java.util.concurrent.atomic.AtomicInteger(0)
     private val lastByCandidate = java.util.concurrent.ConcurrentHashMap<Candidate, LiveStatus>()
     /** Per candidate: payload count last seen, and the capture time it last went up. */
@@ -571,7 +573,7 @@ internal object NativeReceiver {
     @JvmStatic external fun slotCount(): Int
     /** Confines the calling thread to the fast cores; how many, 0 = left alone (all are fast). */
     @JvmStatic external fun pinToFastCores(): Int
-    @JvmStatic external fun open(cols: Int, rows: Int, exposureNs: Long, lanes: Int): Long
+    @JvmStatic external fun open(cols: Int, rows: Int, exposureNs: Long, lanes: Int, lensPrior: Double): Long
     @JvmStatic external fun ingest(
         handle: Long, y: ByteBuffer, width: Int, height: Int, rowStride: Int,
         u: ByteBuffer?, v: ByteBuffer?, chromaRowStride: Int, chromaPixelStride: Int,

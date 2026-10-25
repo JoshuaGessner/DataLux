@@ -257,6 +257,8 @@ class LiveReceiver {
     TransferRate rate_;
     std::int64_t first_payload_ns_ = 0;  // when this session's first payload frame arrived
     std::int64_t last_payload_ns_ = 0;   // and its latest
+    double good_lens_ = 0.0;  // the lens strength the last payload frame decoded with
+    bool have_good_lens_ = false;
     std::optional<Result<std::vector<std::uint8_t>>> result_;
 };
 

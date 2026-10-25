@@ -312,4 +312,62 @@ TEST(ColorTransfer, AnUndistortedLensIsLeftAlone) {
     EXPECT_NEAR(o.lens, 0.0, 0.01);
 }
 
+TEST(ColorTransfer, LensLearningHoldsStillWhenNothingReadsAndFallsBack) {
+    // F72. On a Pixel 8 a few seconds of frames that could not be read -- the phone moving, the
+    // lens refocusing -- walked the learned strength from -0.03 to +0.10, and no header read again.
+    // Two guards, tested directly: once anything has decoded, frames that do not read do not move
+    // the strength (even frames that would pull it elsewhere); and a lane that stops decoding goes
+    // back to the strength the last good frame was read with.
+    const FrameLayout layout = FrameLayout::Create(kGrid, LayoutConfig{}).value();
+    TransmitConfig tc;
+    tc.profile = ModulationProfile::kM5EightColor;
+    auto tx = TransmitSession::Create(layout, File(60000), "lens.bin", 0x1E45, tc);
+    ASSERT_TRUE(tx.ok());
+    auto p = FramePipeline::Create(layout).value();
+    CellMatrix frame(kGrid.cols, kGrid.rows);
+    std::uint64_t n = 0;
+    auto feed = [&](int frames) {
+        for (int i = 0; i < frames; ++i, ++n) {
+            EXPECT_TRUE(tx.value().Next(&frame).ok());
+            Homography truth;
+            const sim::YuvImage img =
+                sim::RenderColorView(frame, kGrid, Optics(n + 1U), sim::ColorChannelConfig{}, &truth);
+            const ChromaPlanes chroma{img.u.view(), img.v.view()};
+            (void)p.Process(img.y.view(), n, static_cast<std::int64_t>(n + 1) * 33'333'333, &chroma);
+        }
+    };
+    g_distance = 0.8;
+    g_lens_k1 = -0.045;
+    feed(40);  // nothing has decoded yet: it learns freely
+    const double learned = p.lens_strength();
+    EXPECT_NEAR(learned, -0.045, 0.015);
+
+    // A payload decoded at that strength; then the frames stop reading, through a lens that would
+    // pull the estimate to zero if it were allowed to learn.
+    p.LensFeedback(true, true, learned, true);
+    g_lens_k1 = 0.0;
+    for (int i = 0; i < 30; ++i) {
+        feed(1);
+        p.LensFeedback(false, false, learned, true);
+    }
+    EXPECT_DOUBLE_EQ(p.lens_strength(), learned) << "learned from frames that did not read";
+
+    // A lane whose strength is wrong and decodes nothing returns to the last good one.
+    for (int i = 0; i < 12; ++i) p.LensFeedback(true, false, 0.0, true);
+    EXPECT_DOUBLE_EQ(p.lens_strength(), 0.0);
+    g_lens_k1 = 0.0;
+    g_distance = 1.0;
+}
+
+TEST(ColorTransfer, ALensRememberedFromLastTimeIsWhereLearningStarts) {
+    // The app keeps the strength its last verified transfer learned and starts the next one there;
+    // a value from a corrupted setting is held to the same range learning is.
+    const FrameLayout layout = FrameLayout::Create(kGrid, LayoutConfig{}).value();
+    PipelineConfig pc;
+    pc.subcell.lens_k1_initial = -0.04;
+    EXPECT_DOUBLE_EQ(FramePipeline::Create(layout, pc).value().lens_strength(), -0.04);
+    pc.subcell.lens_k1_initial = 5.0;
+    EXPECT_DOUBLE_EQ(FramePipeline::Create(layout, pc).value().lens_strength(), pc.subcell.lens_k1_max);
+}
+
 }  // namespace fileflow

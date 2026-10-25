@@ -540,7 +540,10 @@ class CaptureActivity : AppCompatActivity() {
         val v = buildViewfinder(preferred.first, preferred.second)
         v.showGuidance = false
         v.showFrameGuide = true
-        val decoder = LiveDecoder(grids, exposureNs)
+        // This camera's lens distortion, as the last verified transfer learned it: a lens does
+        // not change, so the next close-up reads from its first frames instead of re-learning.
+        val lensPrior = getSharedPreferences(LENS_PREFS, MODE_PRIVATE).getFloat(PREF_LENS_K1, 0f).toDouble()
+        val decoder = LiveDecoder(grids, exposureNs, lensPrior = lensPrior)
         liveDecoder = decoder
         statusCard?.set(
             (if (encrypted) "Encrypted · " else "") + "Fill the picture with the sending screen.",
@@ -942,6 +945,10 @@ class CaptureActivity : AppCompatActivity() {
             // Opened with the pairing, if any; in encrypted mode a plain or foreign file is refused,
             // and the refusal says why instead of passing for a storage failure.
             var refused: String? = null
+            if (s.phase == LivePhase.Verified && s.lensStrength != 0.0) {
+                getSharedPreferences(LENS_PREFS, MODE_PRIVATE).edit()
+                    .putFloat(PREF_LENS_K1, s.lensStrength.toFloat()).apply()
+            }
             val saved = if (s.phase == LivePhase.Verified) {
                 runCatching {
                     decoder.saveVerified(this, PairingStore.current(), requireEncrypted = encrypted)
@@ -1278,6 +1285,9 @@ class CaptureActivity : AppCompatActivity() {
          */
         /** Headers reading but no colour frame decoding for this long: suggest a slower setting. */
         private const val COLOUR_STALL_MS = 6000L
+        /** Where the receiving camera's learned lens distortion is kept between transfers. */
+        private const val LENS_PREFS = "receive"
+        private const val PREF_LENS_K1 = "lens_k1"
         /** Saved diagnosis frames this far apart, so three are three different moments. */
         private const val DUMP_SPACING_MS = 300L
         private const val WHITE_CEILING = 245.0

@@ -182,6 +182,24 @@ std::optional<Homography> FramePipeline::ApplyCorrection(const Homography& h0) c
     return r.value();
 }
 
+void FramePipeline::LensFeedback(bool header_read, bool payload_ok, double fallback,
+                                 bool have_fallback) noexcept {
+    lens_reading_ = header_read;
+    lens_bootstrap_ = !have_fallback;
+    if (!have_fallback) return;
+    if (payload_ok) {
+        lens_failures_ = 0;
+        return;
+    }
+    if (++lens_failures_ < cfg_.subcell.lens_revert_after) return;
+    lens_failures_ = 0;
+    if (lens_k1_ != fallback) {
+        lens_k1_ = fallback;
+        lens_step_ = cfg_.subcell.lens_step;
+        correction_valid_ = false;
+    }
+}
+
 Homography FramePipeline::TuneLens(const ImageView8& img, const Homography& h) {
     const GridGeometry g = layout_->geometry();
     const std::array<Point2, 4> grid{Point2{0, 0}, Point2{static_cast<double>(g.cols), 0},
@@ -305,7 +323,8 @@ FramePipeline::FramePipeline(const FrameLayout& layout, PipelineConfig cfg, Cell
       align_sampler_(std::move(align_sampler)),
       chroma_sampler_(std::move(chroma_sampler)),
       anchors_(std::move(anchors)),
-      tracker_(std::move(tracker)) {}
+      tracker_(std::move(tracker)),
+      lens_k1_(std::clamp(cfg.subcell.lens_k1_initial, cfg.subcell.lens_k1_min, cfg.subcell.lens_k1_max)) {}
 
 Result<FramePipeline> FramePipeline::Create(const FrameLayout& layout, PipelineConfig cfg) {
     FF_ASSIGN_OR_RETURN(auto sampler, CellSampler::Create(layout.geometry(), cfg.sampler));
@@ -475,7 +494,9 @@ CapturedFrame FramePipeline::Process(const ImageView8& img, std::uint64_t index,
         if (auto r = Homography::FromCorrespondences(grid, ideal); r.ok()) h0 = r.value();
     }
     Homography h = AlignTracked(img, h0, tr.reacquired);
-    if (warm_frames_ == 0 && cfg_.subcell.fit_lens) h = TuneLens(img, h);
+    if (warm_frames_ == 0 && cfg_.subcell.fit_lens && (lens_reading_ || lens_bootstrap_)) {
+        h = TuneLens(img, h);
+    }
 
     last_h_ = h;
     last_score_ = tr.marker_score;

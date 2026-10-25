@@ -113,14 +113,21 @@ struct SubcellConfig {
     // step either way, with the grid's corners held where they are seen, and kept where the pilots
     // separate better. The score peaks within ~0.005 of the strength that decodes best.
     bool fit_lens = true;
-    double lens_k1_min = -0.15;
-    double lens_k1_max = 0.10;
+    // Phone main cameras bow outward (barrel, negative); a large positive strength is never right.
+    double lens_k1_min = -0.12;
+    double lens_k1_max = 0.05;
     double lens_step = 0.02;
     double lens_min_step = 0.0025;
     double lens_min_gain = 0.002;  // a move must raise pilot contrast by this fraction
     int lens_corner_evaluations = 48;  // corner refinement each candidate strength gets
     // Learned only while the grid's corners reach this far out, as a fraction of the half-diagonal.
     double lens_min_reach = 0.55;
+    // This many frames in a row without a payload and the lane goes back to the last strength any
+    // lane decoded with (LensFeedback).
+    int lens_revert_after = 12;
+    // Where learning starts: the strength this camera was last read with, when the app knows it.
+    // A lens does not change between transfers, so a close-up can read from its first frames.
+    double lens_k1_initial = 0.0;
     double warm_range = 0.1;
     int warm_steps = 5;
     double warm_corner_step = 0.075;
@@ -252,6 +259,15 @@ class FramePipeline {
     [[nodiscard]] const Homography& last_homography() const noexcept { return last_h_; }
     // The lens distortion this pipeline has learned (SubcellConfig::fit_lens); 0 = none.
     [[nodiscard]] double lens_strength() const noexcept { return lens_k1_; }
+
+    // How the frame this pipeline just processed fared downstream, so the lens is learned only
+    // from frames that read (F72): steering on frames that did not -- motion, refocusing, a clipped
+    // screen -- is steering on noise, and on a Pixel 8 it walked the strength from -0.03 to +0.10
+    // and no header read again. `fallback` is the strength the receiver last decoded a payload
+    // with; after SubcellConfig::lens_revert_after frames without one, the lane returns to it.
+    // Until anything has decoded (`have_fallback` false) learning runs on every frame: a strongly
+    // bowed close-up reads no header until the bow is corrected, and there is nothing to protect.
+    void LensFeedback(bool header_read, bool payload_ok, double fallback, bool have_fallback) noexcept;
     [[nodiscard]] bool last_ok() const noexcept { return last_ok_; }
     [[nodiscard]] double last_marker_score() const noexcept { return last_score_; }
 
@@ -333,6 +349,9 @@ class FramePipeline {
     RadialDistortion lens_{};  // this frame's lens model, in luma pixels
     double lens_k1_ = 0.0;     // this lane's estimate of the lens's strength
     double lens_step_ = 0.02;  // and how far its next search reaches
+    bool lens_reading_ = false;  // the last frame read its header: safe to learn from the next
+    bool lens_bootstrap_ = true;  // nothing has decoded yet: learn regardless
+    int lens_failures_ = 0;      // frames since the last payload
     std::array<double, 8> correction_{};  // AlignTracked's last result, relative to its input
     bool correction_valid_ = false;
     int warm_frames_ = 0;  // since the last full search
