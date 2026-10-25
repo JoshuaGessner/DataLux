@@ -439,7 +439,7 @@ jobs:
             exit 1
           fi
 
-          if gh release view "$TAG" --json isDraft,isImmutable,tagName > release-state.json 2>/dev/null; then
+          if gh release view "$TAG" --json databaseId,isDraft,isImmutable,tagName,targetCommitish > release-state.json 2>/dev/null; then
             if [[ "$(jq -r '.isDraft' release-state.json)" != "true" || \
                   "$(jq -r '.isImmutable' release-state.json)" == "true" ]]; then
               echo "::error::$TAG is already published and is immutable."
@@ -451,9 +451,15 @@ jobs:
               --target "$COMMIT" \
               --title "FileFlow $TAG" \
               --notes "Experimental native milestone built from $COMMIT. See NATIVE_RELEASES.md before publishing."
+            gh release view "$TAG" --json databaseId,isDraft,isImmutable,tagName,targetCommitish > release-state.json
           fi
 
-          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" > release-before-upload.json
+          RELEASE_ID="$(jq -r '.databaseId' release-state.json)"
+          if [[ -z "$RELEASE_ID" || "$RELEASE_ID" == "null" ]]; then
+            echo "::error::GitHub did not return the draft release ID."
+            exit 1
+          fi
+          gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" > release-before-upload.json
           if [[ "$(jq -r '.draft' release-before-upload.json)" != "true" ]]; then
             echo "::error::$TAG is not a draft release."
             exit 1
@@ -462,22 +468,10 @@ jobs:
             echo "::error::The draft already has assets; refusing to overwrite immutable release material."
             exit 1
           fi
-
-          gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" > release-tag-ref.json
-          python3 - <<'PY'
-          import json, os, pathlib, subprocess
-          expected = os.environ["COMMIT"]
-          repo = os.environ["GITHUB_REPOSITORY"]
-          obj = json.loads(pathlib.Path("release-tag-ref.json").read_text())["object"]
-          while obj["type"] == "tag":
-              response = subprocess.run(
-                  ["gh", "api", f"repos/{repo}/git/tags/{obj['sha']}"],
-                  check=True, capture_output=True, text=True)
-              obj = json.loads(response.stdout)["object"]
-          if obj["type"] != "commit" or obj["sha"] != expected:
-              raise SystemExit(
-                  f"::error::{os.environ['TAG']} resolves to {obj['sha']}, expected {expected}")
-          PY
+          if [[ "$(jq -r '.target_commitish' release-before-upload.json)" != "$COMMIT" ]]; then
+            echo "::error::$TAG draft targets a different commit; refusing to upload assets."
+            exit 1
+          fi
 
       - name: Upload packages to the draft without overwriting assets
         env:
@@ -497,7 +491,8 @@ jobs:
             echo "::error::The UTC date changed during the build; rerun so release metadata stays exact."
             exit 1
           fi
-          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" > release-after-packages.json
+          RELEASE_ID="$(gh release view "$TAG" --json databaseId --jq '.databaseId')"
+          gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" > release-after-packages.json
           python3 - <<'PY'
           import hashlib, json, os, pathlib, subprocess
           repo, version = os.environ["GITHUB_REPOSITORY"], os.environ["VERSION"]
@@ -543,7 +538,8 @@ jobs:
         run: |
           set -euo pipefail
           gh release upload "$TAG" SHA256SUMS
-          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" > release-after-checksums.json
+          RELEASE_ID="$(gh release view "$TAG" --json databaseId --jq '.databaseId')"
+          gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" > release-after-checksums.json
           ASSET_ID="$(jq -r '.assets[] | select(.name == "SHA256SUMS") | .id' release-after-checksums.json)"
           API_DIGEST="$(jq -r '.assets[] | select(.name == "SHA256SUMS") | .digest' release-after-checksums.json)"
           LOCAL_DIGEST="sha256:$(sha256sum SHA256SUMS | cut -d' ' -f1)"
@@ -565,7 +561,8 @@ jobs:
           }
           trap cleanup_manifest ERR
           gh release upload "$TAG" fileflow-release-manifest.json
-          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" > release-after-manifest.json
+          RELEASE_ID="$(gh release view "$TAG" --json databaseId --jq '.databaseId')"
+          gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" > release-after-manifest.json
           ASSET_ID="$(jq -r '.assets[] | select(.name == "fileflow-release-manifest.json") | .id' release-after-manifest.json)"
           API_DIGEST="$(jq -r '.assets[] | select(.name == "fileflow-release-manifest.json") | .digest' release-after-manifest.json)"
           LOCAL_DIGEST="sha256:$(sha256sum fileflow-release-manifest.json | cut -d' ' -f1)"
@@ -585,6 +582,7 @@ jobs:
       - name: Publish by explicit owner choice
         env:
           GH_TOKEN: ${{ github.token }}
+          COMMIT: ${{ needs.validate.outputs.commit }}
           PRERELEASE: ${{ needs.validate.outputs.prerelease }}
           RELEASE_DATE: ${{ needs.validate.outputs.release_date }}
           TAG: ${{ needs.validate.outputs.tag }}
@@ -605,4 +603,19 @@ jobs:
             echo "::error::Publication state/date verification failed; the manifest was removed to hide the release feed."
             exit 1
           fi
+          gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" > published-tag-ref.json
+          python3 - <<'PY'
+          import json, os, pathlib, subprocess
+          expected = os.environ["COMMIT"]
+          repo = os.environ["GITHUB_REPOSITORY"]
+          obj = json.loads(pathlib.Path("published-tag-ref.json").read_text())["object"]
+          while obj["type"] == "tag":
+              response = subprocess.run(
+                  ["gh", "api", f"repos/{repo}/git/tags/{obj['sha']}"],
+                  check=True, capture_output=True, text=True)
+              obj = json.loads(response.stdout)["object"]
+          if obj["type"] != "commit" or obj["sha"] != expected:
+              raise SystemExit(
+                  f"::error::{os.environ['TAG']} resolves to {obj['sha']}, expected {expected}")
+          PY
           echo "## Published native milestone: $TAG" >> "$GITHUB_STEP_SUMMARY"
