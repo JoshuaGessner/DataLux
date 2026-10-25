@@ -191,7 +191,13 @@ std::uint32_t CellColour(std::uint8_t v) {
 class Sender {
   public:
     Sender(SDL_Window* w, SDL_Renderer* r, std::size_t speed, CompressionMode mode)
-        : window_(w), renderer_(r), speed_(speed), mode_(mode) {}
+        : window_(w), renderer_(r), speed_(speed), mode_(mode) {
+        // The display's stated rate until one is measured. Guessing 60 sent a 120 Hz screen's
+        // first half second at twice the speed's frame rate -- faster than a 50 fps camera reads.
+        const SDL_DisplayMode* m = SDL_GetCurrentDisplayMode(SDL_GetDisplayForWindow(w));
+        if (m != nullptr && m->refresh_rate > 0.0F) hz_ = static_cast<double>(m->refresh_rate);
+        divisor_ = DivisorFor(hz_);
+    }
 
     ~Sender() {
         if (texture_ != nullptr) SDL_DestroyTexture(texture_);
@@ -291,6 +297,7 @@ class Sender {
         if (texture_ != nullptr) SDL_DestroyTexture(texture_);
         texture_ = nullptr;  // made on the next frame, the right way up for the window
         const Speed& s = kSpeeds[speed_];
+        divisor_ = DivisorFor(hz_);  // a new speed is a new frame rate, now, not after a measurement
         vsyncs_ = 0;
         states_ = 0;
         started_ = std::chrono::steady_clock::now();
@@ -397,14 +404,18 @@ class Sender {
         const double median = intervals_[intervals_.size() / 2];
         intervals_.clear();
         if (median <= 0.0) return;
-        const double hz = 1.0 / median;
-        const auto d = static_cast<std::uint64_t>(
-            std::max(1L, std::lround(hz / kSpeeds[speed_].states_per_second)));
+        hz_ = 1.0 / median;
+        const auto d = DivisorFor(hz_);
         if (d != divisor_) {
-            std::printf("display %.1f Hz: a new frame every %llu refreshes\n", hz,
+            std::printf("display %.1f Hz: a new frame every %llu refreshes\n", hz_,
                         static_cast<unsigned long long>(d));
             divisor_ = d;
         }
+    }
+
+    // Refreshes per frame for the current speed at `hz`.
+    [[nodiscard]] std::uint64_t DivisorFor(double hz) const {
+        return static_cast<std::uint64_t>(std::max(1L, std::lround(hz / kSpeeds[speed_].states_per_second)));
     }
 
     SDL_Window* window_;
@@ -422,7 +433,8 @@ class Sender {
     std::string status_;
     std::string snapshot_;
     bool done_ = false;
-    std::uint64_t divisor_ = 2;  // 30 frames/s at 60 Hz until measured
+    double hz_ = 60.0;  // the display's refresh rate: stated, then measured
+    std::uint64_t divisor_ = 2;
     std::uint64_t vsyncs_ = 0;
     std::uint64_t states_ = 0;
     int pitch_ = 0;
