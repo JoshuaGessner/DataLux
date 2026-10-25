@@ -62,13 +62,20 @@ One successful publication run attaches these packages to the workflow-created G
 | --- | --- | --- | --- |
 | Linux | Portable `.tar.gz` | Detected from the build runner | Unsigned |
 | Windows | Portable `.zip` | Detected from the build runner | Unsigned |
-| macOS | App-bundle `.zip` | Read from the built Mach-O file | Ad-hoc only; not Developer ID signed or notarized |
+| macOS | Drag-and-drop `.dmg` with FileFlow.app and an Applications shortcut | Read from the built Mach-O file | Ad-hoc app signature only; not Developer ID signed or notarized |
 | Android | Sideloadable debug `.apk` | Fixed project ABI, `arm64-v8a` | Ephemeral runner-generated debug certificate; not a persistent release identity |
 
 The workflow reuses the established Linux, Windows, and Android build/test gates. The macOS release
 job builds the production app bundle, launch-smoke-tests it, verifies its ad-hoc signature, and
 records whether the actual binary is `x86_64`, `arm64`, or `universal2`. The portable core suite
 remains an ordinary CI gate. No architecture is inferred from a mutable runner label.
+
+The DMG uses a branded Finder background and fixed icon positions. Its builder verifies the disk
+image, mounts it read-only, checks the Applications link, checks the app's signature and architecture,
+and compares the complete app tree with the original bundle. Hidden `.fileflow` documents contain
+the source revision, license, and README. A report binds these checks to the DMG's SHA-256 and source
+commit before the Linux publication job accepts it. Build tools are hash-pinned in
+`desktop/macos/packaging/requirements-dmg.txt`; no Finder UI scripting is required.
 
 GitHub Actions artifacts are retained for only seven days. They are the only output of a build-only
 dry run and staging material during a publication run. The verified copies attached to the GitHub
@@ -145,6 +152,22 @@ The repair hides the invalid manifest first, replaces only `SHA256SUMS`, then pu
 manifest last. It never replaces a package or moves the tag. Any post-write verification failure
 removes the manifest so the download feed stays hidden. Because the workflow is locked to the exact
 known-bad metadata digests, a second run after a successful repair is rejected.
+
+### v0.2.0 DMG packaging update
+
+The owner-only `macos-dmg.yml` workflow packages the already published, verified v0.2.0 ARM64 Mac app
+as a DMG. It checks the original release/tag/source and exact package/metadata digests before building.
+`publish_dmg=false` produces reviewable Actions artifacts only. With explicit publication enabled,
+it adds the new DMG and changes only the Mac manifest record and checksum metadata. The original
+ZIP and all other installer assets keep their IDs and bytes; the source tag does not move.
+
+Metadata is published last and verified by both GitHub's digest and downloaded bytes. A failed
+publication job can be rerun against its retained, identical build artifact. It recognizes only
+the reviewed old metadata or its own exact replacement bytes, refusing unrelated changes. The
+website's normal catalog refresh picks up the DMG without requiring another web image release.
+
+To install, open the DMG and drag FileFlow to Applications, then eject the disk image. This packaging
+change does not add Developer ID signing or notarization and does not remove Gatekeeper checks.
 
 ## Current limitations and signing gates
 

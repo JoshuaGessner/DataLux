@@ -243,9 +243,10 @@ jobs:
           SDL_VIDEODRIVER: dummy
           SDL_RENDER_DRIVER: software
         run: build/desktop-app/desktop/FileFlow.app/Contents/MacOS/FileFlow --windowed --no-camera --seconds 2
-      - name: Verify ad-hoc signature and package app bundle
+      - name: Verify app and build drag-and-drop DMG
         env:
           TAG: ${{ needs.validate.outputs.tag }}
+          COMMIT: ${{ needs.validate.outputs.commit }}
         run: |
           set -euo pipefail
           APP=build/desktop-app/desktop/FileFlow.app
@@ -259,12 +260,12 @@ jobs:
           else echo "::error::Unsupported Mach-O architectures: $BINARY_ARCHES"; exit 1
           fi
           PACKAGE_BASE="FileFlow-$TAG-macos-$ARCH"
-          mkdir -p "dist/$PACKAGE_BASE" release-staging
-          ditto "$APP" "dist/$PACKAGE_BASE/FileFlow.app"
-          codesign --verify --deep --strict "dist/$PACKAGE_BASE/FileFlow.app"
-          cp LICENSE README.md "dist/$PACKAGE_BASE/"
-          git rev-parse HEAD > "dist/$PACKAGE_BASE/SOURCE_REVISION.txt"
-          ditto -c -k --sequesterRsrc --keepParent "dist/$PACKAGE_BASE" "release-staging/$PACKAGE_BASE.zip"
+          mkdir -p release-staging
+          bash scripts/build_macos_dmg.sh \
+            --app "$APP" --output "release-staging/$PACKAGE_BASE.dmg" \
+            --version "${TAG#v}" --arch "$ARCH" --source-revision "$COMMIT" \
+            --license LICENSE --readme README.md \
+            --report release-staging/macos-package-validation.json
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: release-macos
@@ -355,11 +356,11 @@ jobs:
           python3 - <<'PY'
           import hashlib, json, os, pathlib, re, sys, tarfile, zipfile
           root, tag, commit = pathlib.Path("release-staging"), os.environ["TAG"], os.environ["COMMIT"]
-          files = sorted(path for path in root.iterdir() if path.is_file())
+          files = sorted(path for path in root.iterdir() if path.is_file() and path.name != "macos-package-validation.json")
           patterns = {
               "linux": re.compile(rf"^FileFlow-{re.escape(tag)}-linux-(x86_64|arm64)\.tar\.gz$"),
               "windows": re.compile(rf"^FileFlow-{re.escape(tag)}-windows-(x86_64|arm64)\.zip$"),
-              "macos": re.compile(rf"^FileFlow-{re.escape(tag)}-macos-(x86_64|arm64|universal2)\.zip$"),
+              "macos": re.compile(rf"^FileFlow-{re.escape(tag)}-macos-(x86_64|arm64|universal2)\.dmg$"),
               "android": re.compile(rf"^FileFlow-{re.escape(tag)}-android-(arm64-v8a)-debug\.apk$"),
           }
           found = {}
@@ -382,7 +383,7 @@ jobs:
               if archive.extractfile(revision[0]).read().decode().strip() != commit:
                   raise SystemExit("::error::Linux SOURCE_REVISION.txt is wrong")
 
-          for platform in ("windows", "macos"):
+          for platform in ("windows",):
               path = found[platform][0]
               with zipfile.ZipFile(path) as archive:
                   bad = archive.testzip()
@@ -390,12 +391,25 @@ jobs:
                       raise SystemExit(f"::error::{path.name} has a corrupt member: {bad}")
                   names = archive.namelist()
                   revisions = [name for name in names if name.endswith("/SOURCE_REVISION.txt")]
-                  suffix = "/FileFlow.exe" if platform == "windows" else "/FileFlow.app/Contents/MacOS/FileFlow"
+                  suffix = "/FileFlow.exe"
                   binaries = [name for name in names if name.endswith(suffix)]
                   if len(revisions) != 1 or len(binaries) != 1:
                       raise SystemExit(f"::error::{platform} archive contents are incomplete")
                   if archive.read(revisions[0]).decode().strip() != commit:
                       raise SystemExit(f"::error::{platform} SOURCE_REVISION.txt is wrong")
+
+          # The macOS job mounts and verifies the DMG. Bind that read-only mount's report
+          # to the exact package bytes/source/architecture before publishing from Linux.
+          mac_path, mac_arch = found["macos"]
+          mac_report = json.loads((root / "macos-package-validation.json").read_text())
+          expected_mac = {"schemaVersion": 1, "packageName": mac_path.name,
+                          "sourceRevision": commit, "architecture": mac_arch,
+                          "platform": "macos", "version": tag[1:],
+                          "sha256": hashlib.sha256(mac_path.read_bytes()).hexdigest()}
+          if any(mac_report.get(key) != value for key, value in expected_mac.items()):
+              raise SystemExit("::error::Mac DMG verification report does not match the package")
+          if mac_path.read_bytes()[-512:-508] != b"koly":
+              raise SystemExit("::error::Mac package is not a UDIF disk image")
 
           with zipfile.ZipFile(found["android"][0]) as archive:
               bad = archive.testzip()
@@ -477,7 +491,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ needs.validate.outputs.tag }}
-        run: gh release upload "$TAG" release-staging/*
+        run: |
+          while IFS= read -r PACKAGE; do
+            gh release upload "$TAG" "release-staging/$PACKAGE"
+          done < <(jq -r '.[].name' package-records.json)
 
       - name: Re-download packages, verify GitHub digests, and create metadata
         env:
@@ -502,7 +519,7 @@ jobs:
           details = {
               "linux": ({"status": "unsigned", "details": "No Linux package signature."}, "Experimental portable tarball; no installer or distribution package.", ["Compatibility is not validated across Linux distributions."]),
               "windows": ({"status": "unsigned", "details": "No Authenticode signature."}, "Experimental portable ZIP; no installer.", ["Windows SmartScreen may warn because the executable is unsigned."]),
-              "macos": ({"status": "ad-hoc", "details": "Ad-hoc bundle signature only; not Developer ID signed or notarized."}, "Experimental app bundle ZIP.", ["Gatekeeper may block the app because it is not notarized."]),
+              "macos": ({"status": "ad-hoc", "details": "Ad-hoc app-bundle signature only; not Developer ID signed or notarized."}, "Experimental drag-and-drop DMG. Open the disk image, then drag FileFlow to Applications.", ["Gatekeeper may block the app because it is not notarized."]),
               "android": ({"status": "ad-hoc", "details": "Ephemeral debug certificate generated for this GitHub-hosted runner build; not a persistent release identity."}, "Experimental sideloadable debug APK; not a Play Store build.", ["The per-run debug key is not a supported in-place upgrade path; another build may require uninstalling the existing app, which removes app-local state.", "Stable Android release signing is not configured."]),
           }
           manifest_artifacts = []

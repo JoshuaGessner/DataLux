@@ -1,0 +1,95 @@
+name: package existing v0.2.0 Mac release as DMG
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish_dmg:
+        description: Add the DMG to v0.2.0 and make it the verified Mac download
+        type: boolean
+        required: true
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-milestone-release
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - name: Require owner and reviewed main workflow
+        env:
+          ACTOR: ${{ github.actor }}
+          OWNER: ${{ github.repository_owner }}
+          WORKFLOW_REF: ${{ github.ref }}
+        run: |
+          [[ "$ACTOR" == "$OWNER" && "$WORKFLOW_REF" == refs/heads/main ]] || exit 1
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - name: Run packaging guards
+        run: |
+          python3 desktop/macos/packaging/test_package_tools.py
+          python3 tests/test_publish_macos_dmg.py
+      - name: Download and verify the unchanged published applications
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/publish_macos_dmg.py download --directory dmg-work/original
+      - name: Build and verify the drag-and-drop DMG
+        run: |
+          mkdir -p dmg-work/package dmg-work/extracted
+          ditto -x -k dmg-work/original/FileFlow-v0.2.0-macos-arm64.zip dmg-work/extracted
+          bash scripts/build_macos_dmg.sh \
+            --app dmg-work/extracted/FileFlow-v0.2.0-macos-arm64/FileFlow.app \
+            --output dmg-work/package/FileFlow-v0.2.0-macos-arm64.dmg \
+            --version 0.2.0 --arch arm64 \
+            --source-revision 7c9ff1ab58df7becdf8b0f44aa331854d12e8b13 \
+            --license dmg-work/extracted/FileFlow-v0.2.0-macos-arm64/LICENSE \
+            --readme dmg-work/extracted/FileFlow-v0.2.0-macos-arm64/README.md \
+            --report dmg-work/package/macos-package-validation.json \
+            --background-preview dmg-work/package/background.png
+          python3 scripts/publish_macos_dmg.py prepare --directory dmg-work/original \
+            --dmg dmg-work/package/FileFlow-v0.2.0-macos-arm64.dmg \
+            --report dmg-work/package/macos-package-validation.json --output dmg-work/metadata
+      - name: Retain the verified package and original metadata for retry/audit
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: verified-macos-dmg
+          path: dmg-work/
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    if: inputs.publish_dmg == true
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: verified-macos-dmg
+          path: dmg-work
+      - name: Add DMG and publish matching catalog metadata last
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 scripts/publish_macos_dmg.py publish --directory dmg-work/original \
+            --dmg dmg-work/package/FileFlow-v0.2.0-macos-arm64.dmg \
+            --report dmg-work/package/macos-package-validation.json --output dmg-work/metadata
+      - name: Preserve final publication audit
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: macos-dmg-publication-audit-${{ github.run_attempt }}
+          path: dmg-work/metadata/
+          retention-days: 90
+          if-no-files-found: warn
