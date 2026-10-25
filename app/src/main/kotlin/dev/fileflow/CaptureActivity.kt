@@ -969,6 +969,10 @@ class CaptureActivity : AppCompatActivity() {
                         appendLine("RECEIVED — verified")
                         appendLine()
                         appendLine("  file        ${saved.name}")
+                        saved.files.forEach { appendLine("              ${it.name} (${TransmitActivity.formatBytes(it.bytes)})") }
+                        if (saved.files.size < saved.batchSize) {
+                            appendLine("              ${saved.batchSize - saved.files.size} could not be saved")
+                        }
                         appendLine("  size        ${TransmitActivity.formatBytes(saved.bytes)}")
                         appendLine("  integrity   SHA-256 matched the sender's")
                         appendLine("  transfer    ${"%.1f".format(link)} s, first data to verified")
@@ -1073,6 +1077,17 @@ class CaptureActivity : AppCompatActivity() {
         if (saved != null) {
             col.addView(text(saved.name, 18f, com.google.android.material.R.attr.colorOnSurface, bold = true)
                 .apply { gravity = Gravity.CENTER })
+            if (saved.isBatch) {
+                // The batch's files by name, a few of them, so the person sees what came.
+                val shown = saved.files.take(BATCH_NAMES_SHOWN).joinToString("\n") { it.name }
+                val more = saved.files.size - BATCH_NAMES_SHOWN
+                col.addView(text(shown + (if (more > 0) "\nand $more more" else ""), 14f)
+                    .apply { gravity = Gravity.CENTER; setPadding(0, dp(4), 0, 0) })
+                if (saved.files.size < saved.batchSize) {
+                    col.addView(text("${saved.batchSize - saved.files.size} of them could not be saved.", 14f)
+                        .apply { gravity = Gravity.CENTER; setTextColor(getColor(R.color.ff_bad)) })
+                }
+            }
             col.addView(space(12))
             // The headline is the file's own bytes per second -- what the person waited for --
             // with compressing and opening counted in. Compressed, the link's rate and what
@@ -1110,7 +1125,22 @@ class CaptureActivity : AppCompatActivity() {
         }
         col.addView(space(32))
 
-        if (uri != null) {
+        if (saved != null && saved.isBatch) {
+            // A batch: its files are in the Received tab, where they can be opened, shared or
+            // managed together; and shared from here all at once.
+            col.addView(button("Show in Received", R.drawable.ic_folder) {
+                startActivity(android.content.Intent(this, MainActivity::class.java)
+                    .setAction(MainActivity.ACTION_SHOW_RECEIVED)
+                    .addFlags(android.content.Intent.FLAG_ACTIVITY_CLEAR_TOP or android.content.Intent.FLAG_ACTIVITY_SINGLE_TOP))
+                finish()
+            }, matchWidth())
+            val uris = saved.files.mapNotNull { it.uri }
+            if (uris.isNotEmpty()) {
+                col.addView(button("Share all", R.drawable.ic_share, Style.Tonal) {
+                    MainActivity.shareAll(this, uris, saved.name)
+                }, matchWidth(dp(8)))
+            }
+        } else if (uri != null) {
             val mime = contentResolver.getType(uri) ?: "application/octet-stream"
             col.addView(button("Open", R.drawable.ic_open) {
                 val view = android.content.Intent(android.content.Intent.ACTION_VIEW)
@@ -1301,6 +1331,8 @@ class CaptureActivity : AppCompatActivity() {
          */
         /** Headers reading but no colour frame decoding for this long: suggest a slower setting. */
         private const val COLOUR_STALL_MS = 6000L
+        /** A received batch's file names listed on the result screen before "and N more". */
+        private const val BATCH_NAMES_SHOWN = 4
         /** Where the receiving camera's learned lens distortion is kept between transfers. */
         private const val LENS_PREFS = "receive"
         private const val PREF_LENS_K1 = "lens_k1"

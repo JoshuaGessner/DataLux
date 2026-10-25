@@ -151,15 +151,30 @@ class TransmitActivity : AppCompatActivity() {
         }
         stateRate = panelHz / divisor
 
-        // From "Send a file…" the document is the intent data; from the share sheet, EXTRA_STREAM.
-        val uri = intent.data ?: if (intent.action == android.content.Intent.ACTION_SEND) {
-            androidx.core.content.IntentCompat.getParcelableExtra(
-                intent, android.content.Intent.EXTRA_STREAM, android.net.Uri::class.java,
+        // What to send. From the app: the picked documents, one as the intent data or several as its
+        // clip data. From the share sheet: EXTRA_STREAM, one or a list. None: the test file.
+        val uris: List<android.net.Uri> = when (intent.action) {
+            android.content.Intent.ACTION_SEND_MULTIPLE -> androidx.core.content.IntentCompat
+                .getParcelableArrayListExtra(intent, android.content.Intent.EXTRA_STREAM, android.net.Uri::class.java)
+                .orEmpty()
+            android.content.Intent.ACTION_SEND -> listOfNotNull(
+                androidx.core.content.IntentCompat.getParcelableExtra(
+                    intent, android.content.Intent.EXTRA_STREAM, android.net.Uri::class.java,
+                ),
             )
-        } else null
-        if (uri == null && intent.action == android.content.Intent.ACTION_SEND) {
+            else -> buildList {
+                intent.clipData?.let { c -> for (i in 0 until c.itemCount) c.getItemAt(i).uri?.let(::add) }
+                if (isEmpty()) intent.data?.let(::add)
+            }
+        }.distinct()
+        if (uris.isEmpty() && (intent.action == android.content.Intent.ACTION_SEND ||
+                intent.action == android.content.Intent.ACTION_SEND_MULTIPLE)) {
             // Shared text, or a share with no file attached: never fall back to the test file.
-            fail("Nothing to send — FileFlow sends a file, and this share did not include one.")
+            fail("Nothing to send — FileFlow sends files, and this share did not include one.")
+            return
+        }
+        if (uris.size > Envelope.MAX_BATCH_FILES) {
+            fail("That's ${uris.size} files. The most one transfer can carry is ${Envelope.MAX_BATCH_FILES}.")
             return
         }
         encrypted = intent.getBooleanExtra("encrypted", false)
@@ -170,22 +185,33 @@ class TransmitActivity : AppCompatActivity() {
         // A picked file is read OFF the main thread -- it can be tens of megabytes, from a cloud
         // provider that has to download it first -- and compressed and sealed there too, with a
         // holding screen meanwhile.
-        setContentView(message("Preparing the file…"))
+        setContentView(message(if (uris.size > 1) "Preparing ${uris.size} files…" else "Preparing the file…"))
         Thread {
             val opened = runCatching {
-                val (name, bytes) = if (uri == null) {
-                    // The test file is random, so it does NOT compress: what it measures is the
-                    // link, which is what a test is for.
-                    Transmitter.TEST_FILE_NAME to testBytes(if (payload > 0) payload else DEFAULT_TEST_BYTES)
-                } else {
-                    readFile(uri)
-                }
                 // Encrypted mode with no pairing is refused here, never silently sent in the clear.
                 val key = if (encrypted) {
                     PairingStore.current()
                         ?: error("Encrypted mode is on, but the phones aren't paired. Pair them, then send.")
                 } else null
-                val p = Envelope.pack(bytes, name, key, compression)
+                val name: String
+                val p: Envelope.Packed
+                if (uris.size > 1) {
+                    // A batch: every file read, then sent as ONE transfer (Envelope.packBatch).
+                    val files = readFiles(uris)
+                    name = "${files.size} files"
+                    batchNames = files.map { it.first }
+                    p = Envelope.packBatch(files, name, key, compression)
+                } else {
+                    val (n, bytes) = if (uris.isEmpty()) {
+                        // The test file is random, so it does NOT compress: what it measures is the
+                        // link, which is what a test is for.
+                        Transmitter.TEST_FILE_NAME to testBytes(if (payload > 0) payload else DEFAULT_TEST_BYTES)
+                    } else {
+                        readFile(uris[0])
+                    }
+                    name = n
+                    p = Envelope.pack(bytes, name, key, compression)
+                }
                 packed = p
                 displayName = name
                 // Under encryption the link itself carries no name -- it is inside the envelope --
@@ -214,36 +240,62 @@ class TransmitActivity : AppCompatActivity() {
     /** What was handed to the link, and the name the person knows the file by. */
     @Volatile private var packed: Envelope.Packed? = null
     @Volatile private var displayName: String? = null
+    /** A batch's file names, for the log; null for one file. */
+    @Volatile private var batchNames: List<String>? = null
     private var encrypted = false
 
     /** The generated test file: incompressible, the same every time for a given size. */
     private fun testBytes(n: Int): ByteArray = ByteArray(n).also { java.util.Random(5L).nextBytes(it) }
 
-    /** A picked or shared document's name and bytes, read with a hard size bound. */
-    private fun readFile(uri: android.net.Uri): Pair<String, ByteArray> {
-        val (name, size) = describe(uri)
-        if (size > MAX_FILE_BYTES) {
-            error("$name is ${formatBytes(size)}. The most this can send is " +
-                  "${formatBytes(MAX_FILE_BYTES)} — at optical speeds a bigger file " +
-                  "would take too long to be practical.")
+    /**
+     * Several documents for one batch, within one size bound for them all; names made unique, so
+     * none overwrites another on the receiving phone.
+     */
+    private fun readFiles(uris: List<android.net.Uri>): List<Pair<String, ByteArray>> {
+        var budget = MAX_FILE_BYTES
+        val taken = HashSet<String>()
+        return uris.map { uri ->
+            val (name, bytes) = readFile(uri, budget, allowEmpty = true, total = true)
+            budget -= bytes.size
+            var unique = name
+            var n = 2
+            while (!taken.add(unique.lowercase())) {
+                val stem = name.substringBeforeLast('.', name)
+                val ext = if ('.' in name) "." + name.substringAfterLast('.') else ""
+                unique = "$stem ($n)$ext"
+                n++
+            }
+            unique to bytes
         }
+    }
+
+    /** A picked or shared document's name and bytes, read with a hard size bound. */
+    private fun readFile(
+        uri: android.net.Uri, limit: Long = MAX_FILE_BYTES, allowEmpty: Boolean = false,
+        total: Boolean = false,
+    ): Pair<String, ByteArray> {
+        val (name, size) = describe(uri)
+        val tooBig = if (total) "Together the files are more than ${formatBytes(MAX_FILE_BYTES)}. " +
+            "Send fewer at once — at optical speeds a bigger transfer would take too long to be practical."
+        else "$name is ${formatBytes(size)}. The most this can send is " +
+            "${formatBytes(MAX_FILE_BYTES)} — at optical speeds a bigger file " +
+            "would take too long to be practical."
+        if (size > limit) error(tooBig)
         val bytes = contentResolver.openInputStream(uri)?.use { input ->
             // Bounded read: a provider that misreported the size cannot exhaust memory.
             val out = java.io.ByteArrayOutputStream()
             val buf = ByteArray(64 * 1024)
-            var total = 0L
+            var read = 0L
             while (true) {
                 val n = input.read(buf)
                 if (n < 0) break
-                total += n
-                if (total > MAX_FILE_BYTES) {
-                    error("$name is larger than ${formatBytes(MAX_FILE_BYTES)}.")
-                }
+                read += n
+                if (read > limit) error(tooBig)
                 out.write(buf, 0, n)
             }
             out.toByteArray()
         } ?: error("The file could not be opened.")
-        if (bytes.isEmpty()) error("$name is empty — there is nothing to send.")
+        if (bytes.isEmpty() && !allowEmpty) error("$name is empty — there is nothing to send.")
         return name to bytes
     }
 
@@ -278,6 +330,7 @@ class TransmitActivity : AppCompatActivity() {
             "${if (p?.encrypted == true) " encrypted" else ""}, " +
             "${t.cols}x${t.rows} ${if (colours > 0) "$colours colours" else "black and white"} at " +
             "${"%.0f".format(targetStateRate)} states/s")
+        batchNames?.let { SessionLog.i(LOG_TAG, "batch of ${it.size}: ${it.joinToString(", ")}") }
         // An explicit divisor is a scripted sweep and is held fixed; otherwise the renderer
         // re-derives it from the vsync rate the panel actually runs at (F59).
         val adaptive = !intent.hasExtra("divisor")

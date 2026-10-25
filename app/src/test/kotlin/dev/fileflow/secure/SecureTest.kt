@@ -161,6 +161,36 @@ class EnvelopeTest {
         assertArrayEquals(data, u.data)
     }
 
+    @Test fun aBatchComesBackAsItsFilesInOrder() {
+        val files = listOf("a.txt" to text(40_000), "empty.bin" to ByteArray(0), "photo.jpg" to noise(30_000))
+        for (key in listOf<PairingKey?>(null, paired().first)) {
+            val p = Envelope.packBatch(files, "3 files", key, Envelope.Mode.Auto, DeflateCodec)
+            val reader = if (key == null) null else key
+            val u = Envelope.unpack(p.bytes, reader, requireEncrypted = key != null)
+            val got = u.files
+            assertNotNull(got)
+            assertEquals(files.map { it.first }, got!!.map { it.first })
+            files.zip(got).forEach { (want, have) -> assertArrayEquals(want.second, have.second) }
+            assertEquals("3 files", u.name)
+        }
+    }
+
+    @Test fun aSingleFileIsNotABatch() {
+        val u = Envelope.unpack(Envelope.pack(text(1000), "a.txt", null).bytes, null, false)
+        assertNull(u.files)
+    }
+
+    @Test fun aBatchThatLiesAboutItsSizesIsRefused() {
+        val p = Envelope.packBatch(listOf("a" to text(100), "b" to text(100)), "2 files", null, Envelope.Mode.Off)
+        // Plain, uncompressed: the batch starts right after the inner header. Claim the first file
+        // is far longer than the batch -- the bound, not the claim, must win.
+        val bad = p.bytes.copyOf()
+        val batchAt = 4 + 1 + 2 + "2 files".length + 8 + 1 + 4
+        val firstSizeAt = batchAt + 4 + 2 + 2 + 1
+        bad[firstSizeAt + 4] = 0x7F
+        expectFailure(Envelope.Failure.Corrupt) { Envelope.unpack(bad, null, false) }
+    }
+
     @Test fun anUnknownCodecIsSaidSo() {
         val p = Envelope.pack(text(10_000), "a.txt", null, Envelope.Mode.Auto, DeflateCodec)
         val bad = p.bytes.copyOf()

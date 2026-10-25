@@ -12,10 +12,19 @@ import javax.crypto.spec.GCMParameterSpec
  * ```
  * "FFE2" | flags | [key id (8) | nonce (12)]  | body
  *          bit 1 encrypted                        ^ only when encrypted
+ *          bit 2 a batch: the data is several files (below)
  * body  = AES-256-GCM(inner), header bytes as associated data   (encrypted)
  *       | inner                                                  (otherwise)
  * inner = name length (u16) | name (UTF-8) | original size (u64) | codec (u8) | compress ms (u32)
  *         | data, compressed by the codec (0 none, 1 deflate, 2 zstd)
+ * ```
+ *
+ * A batch is one transfer of several files -- the link is one-way, so the sender cannot know when
+ * the receiver has finished one file and move on to the next; sending them as one means one aim,
+ * one progress bar, and compression across all of them:
+ *
+ * ```
+ * data  = "FFB1" | count (u16) | count x [ name length (u16) | name (UTF-8) | size (u64) | bytes ]
  * ```
  *
  * Version 1 ("FFE1", deflate only, flag bit 0 = compressed) is still read.
@@ -30,6 +39,11 @@ object Envelope {
     private val MAGIC = "FFE2".toByteArray(Charsets.US_ASCII)
     private const val FLAG_V1_COMPRESSED = 1
     private const val FLAG_ENCRYPTED = 2
+    private const val FLAG_BATCH = 4
+    private val MAGIC_BATCH = "FFB1".toByteArray(Charsets.US_ASCII)
+
+    /** Most files one batch may carry. */
+    const val MAX_BATCH_FILES = 1000
     private const val NONCE_BYTES = 12
     private const val TAG_BITS = 128
     private const val MAX_NAME_BYTES = 255
@@ -96,6 +110,8 @@ object Envelope {
         val compressMs: Long,
         /** What opening it cost here, ms. */
         val decompressMs: Long,
+        /** A batch's files, name and bytes, in the order sent; null for a single file. */
+        val files: List<Pair<String, ByteArray>>? = null,
     ) {
         val compressed: Boolean get() = codec != CODEC_NONE
     }
@@ -128,15 +144,41 @@ object Envelope {
     fun pack(
         data: ByteArray, name: String, key: PairingKey?,
         mode: Mode = Mode.Auto, codec: Codec = defaultCodec, random: SecureRandom = SecureRandom(),
+    ): Packed = pack(data, name, key, mode, codec, random, batch = false)
+
+    /**
+     * Wraps several files as ONE transfer (see the format above), named for the person by
+     * [name]. Compressed and encrypted as a whole, like a single file.
+     */
+    fun packBatch(
+        files: List<Pair<String, ByteArray>>, name: String, key: PairingKey?,
+        mode: Mode = Mode.Auto, codec: Codec = defaultCodec, random: SecureRandom = SecureRandom(),
+    ): Packed {
+        require(files.isNotEmpty() && files.size <= MAX_BATCH_FILES) { "1..$MAX_BATCH_FILES files" }
+        val names = files.map { (n, _) -> truncatedName(n) }
+        val size = MAGIC_BATCH.size + 2 + files.indices.sumOf { 2L + names[it].size + 8 + files[it].second.size }
+        require(size <= MAX_ORIGINAL_BYTES) { "batch too large" }
+        val buf = ByteBuffer.allocate(size.toInt()).put(MAGIC_BATCH).putShort(files.size.toShort())
+        files.forEachIndexed { i, (_, bytes) ->
+            buf.putShort(names[i].size.toShort()).put(names[i]).putLong(bytes.size.toLong()).put(bytes)
+        }
+        return pack(buf.array(), name, key, mode, codec, random, batch = true)
+    }
+
+    private fun truncatedName(name: String): ByteArray = name.toByteArray(Charsets.UTF_8).let {
+        if (it.size <= MAX_NAME_BYTES) it else it.copyOf(MAX_NAME_BYTES)
+    }
+
+    private fun pack(
+        data: ByteArray, name: String, key: PairingKey?,
+        mode: Mode, codec: Codec, random: SecureRandom, batch: Boolean,
     ): Packed {
         require(data.size.toLong() <= MAX_ORIGINAL_BYTES) { "file too large" }
         val started = System.nanoTime()
         val body = compressIfWorthIt(data, mode, codec)
         val compressMs = if (mode == Mode.Off) 0 else (System.nanoTime() - started) / 1_000_000
         val codecId = if (body !== data) codec.id else CODEC_NONE
-        val nameBytes = name.toByteArray(Charsets.UTF_8).let {
-            if (it.size <= MAX_NAME_BYTES) it else it.copyOf(MAX_NAME_BYTES)
-        }
+        val nameBytes = truncatedName(name)
         val inner = ByteBuffer.allocate(2 + nameBytes.size + 8 + 1 + 4 + body.size)
             .putShort(nameBytes.size.toShort())
             .put(nameBytes)
@@ -150,14 +192,15 @@ object Envelope {
         if (key == null) {
             val out = ByteArray(MAGIC.size + 1 + inner.size)
             MAGIC.copyInto(out)
-            out[MAGIC.size] = 0
+            out[MAGIC.size] = (if (batch) FLAG_BATCH else 0).toByte()
             inner.copyInto(out, MAGIC.size + 1)
             return Packed(out, data.size.toLong(), codecId, compressMs, encrypted = false)
         }
 
         val nonce = ByteArray(NONCE_BYTES).also(random::nextBytes)
         val header = ByteBuffer.allocate(MAGIC.size + 1 + PairingKey.ID_BYTES + NONCE_BYTES)
-            .put(MAGIC).put(FLAG_ENCRYPTED.toByte()).put(key.id).put(nonce).array()
+            .put(MAGIC).put((FLAG_ENCRYPTED or (if (batch) FLAG_BATCH else 0)).toByte())
+            .put(key.id).put(nonce).array()
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
         cipher.init(Cipher.ENCRYPT_MODE, key.secret, GCMParameterSpec(TAG_BITS, nonce))
         cipher.updateAAD(header)
@@ -175,7 +218,7 @@ object Envelope {
             throw UnpackException(Failure.NotAnEnvelope)
         }
         val flags = bytes[MAGIC.size].toInt() and 0xFF
-        val known = FLAG_ENCRYPTED or (if (v1) FLAG_V1_COMPRESSED else 0)
+        val known = FLAG_ENCRYPTED or (if (v1) FLAG_V1_COMPRESSED else FLAG_BATCH)
         if (flags and known.inv() != 0) throw UnpackException(Failure.Corrupt)
         val encrypted = flags and FLAG_ENCRYPTED != 0
         if (requireEncrypted && !encrypted) throw UnpackException(Failure.NotEncrypted)
@@ -227,7 +270,33 @@ object Envelope {
         }
         if (data.size.toLong() != original) throw UnpackException(Failure.Corrupt)
         val decompressMs = (System.nanoTime() - started) / 1_000_000
-        return Unpacked(name, data, codecId, encrypted, bytes.size, compressMs, decompressMs)
+        val files = if (flags and FLAG_BATCH != 0 && !v1) parseBatch(data) else null
+        return Unpacked(name, data, codecId, encrypted, bytes.size, compressMs, decompressMs, files)
+    }
+
+    /**
+     * A batch's files. Every count, length and size is checked against what is actually there:
+     * the bytes came off a screen anyone could have been showing (THREAT-MODEL T3).
+     */
+    private fun parseBatch(data: ByteArray): List<Pair<String, ByteArray>> {
+        fun corrupt(): Nothing = throw UnpackException(Failure.Corrupt)
+        if (data.size < MAGIC_BATCH.size + 2 || !hasMagic(data, MAGIC_BATCH)) corrupt()
+        val buf = ByteBuffer.wrap(data)
+        buf.position(MAGIC_BATCH.size)
+        val count = buf.short.toInt() and 0xFFFF
+        if (count == 0 || count > MAX_BATCH_FILES) corrupt()
+        val out = ArrayList<Pair<String, ByteArray>>(count)
+        repeat(count) {
+            if (buf.remaining() < 2) corrupt()
+            val nameLen = buf.short.toInt() and 0xFFFF
+            if (nameLen > MAX_NAME_BYTES || buf.remaining() < nameLen + 8) corrupt()
+            val name = ByteArray(nameLen).also { buf.get(it) }.toString(Charsets.UTF_8)
+            val size = buf.long
+            if (size < 0 || size > buf.remaining()) corrupt()
+            out += name to ByteArray(size.toInt()).also { buf.get(it) }
+        }
+        if (buf.remaining() != 0) corrupt()
+        return out
     }
 
     fun isEnvelope(bytes: ByteArray): Boolean = hasMagic(bytes, MAGIC) || hasMagic(bytes, MAGIC_V1)

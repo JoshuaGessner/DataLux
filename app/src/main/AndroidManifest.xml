@@ -93,10 +93,15 @@
             tools:ignore="LockedOrientationActivity,DiscouragedApi"
             android:theme="@style/Theme.FileFlow.Fullscreen"
             android:configChanges="orientation|screenSize|keyboardHidden|screenLayout|smallestScreenSize">
-            <!-- "Share → FileFlow" from any app sends that one file, the same as picking it with
-                 "Send a file…". One file only: there is no multi-file transfer. -->
+            <!-- "Share → FileFlow" from any app sends what was shared, the same as picking it with
+                 "Choose files": one file, or several as one batch. -->
             <intent-filter android:label="Send with FileFlow">
                 <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="*/*" />
+            </intent-filter>
+            <intent-filter android:label="Send with FileFlow">
+                <action android:name="android.intent.action.SEND_MULTIPLE" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <data android:mimeType="*/*" />
             </intent-filter>

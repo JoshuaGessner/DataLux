@@ -430,16 +430,31 @@ class LiveDecoder(
             Envelope.Unpacked(linkName, received, Envelope.CODEC_NONE, encrypted = false, received.size,
                               compressMs = 0, decompressMs = 0)
         }
-        val bytes = opened.data
-        val safe = opened.name.replace(Regex("[/\\\\\\u0000-\\u001f]"), "_")
-            .trimStart('.').ifBlank { "received.bin" }
-        val saved = runCatching { saveToDownloads(context, safe, bytes) }.getOrNull()
-            ?: saveToAppFolder(context, safe, bytes)?.let {
-                SavedFile(it.name, null, it.absolutePath, bytes.size.toLong())
+        val batch = opened.files
+        val saved = if (batch == null) {
+            saveOne(context, opened.name, opened.data)
+        } else {
+            // A batch: each file saved on its own, as if it had been sent alone. Reported as one
+            // result listing them, so the person sees the batch they were sent.
+            val parts = batch.mapNotNull { (name, bytes) -> saveOne(context, name, bytes) }
+            parts.firstOrNull()?.let { first ->
+                SavedFile(opened.name, first.uri, "Downloads/$DOWNLOADS_SUBDIR", parts.sumOf { it.bytes },
+                          files = parts, batchSize = batch.size)
             }
+        }
         return saved?.copy(linkBytes = opened.packedSize.toLong(), codec = opened.codec,
                            encrypted = opened.encrypted, compressMs = opened.compressMs,
                            decompressMs = opened.decompressMs)
+    }
+
+    /** One file into Downloads/FileFlow, or the app's own folder failing that; null if neither. */
+    private fun saveOne(context: Context, name: String, bytes: ByteArray): SavedFile? {
+        val safe = name.replace(Regex("[/\\\\\\u0000-\\u001f]"), "_")
+            .trimStart('.').ifBlank { "received.bin" }
+        return runCatching { saveToDownloads(context, safe, bytes) }.getOrNull()
+            ?: saveToAppFolder(context, safe, bytes)?.let {
+                SavedFile(it.name, null, it.absolutePath, bytes.size.toLong())
+            }
     }
 
     /** Where a received file ended up. [uri] is null when only the app-private fallback worked. */
@@ -456,8 +471,12 @@ class LiveDecoder(
         /** What compressing cost the sender, and opening it cost here, ms. */
         val compressMs: Long = 0,
         val decompressMs: Long = 0,
+        /** A batch's files as saved (empty for a single file), and how many the batch held. */
+        val files: List<SavedFile> = emptyList(),
+        val batchSize: Int = 0,
     ) {
         val compressed: Boolean get() = codec != 0
+        val isBatch: Boolean get() = batchSize > 0
     }
 
     /**

@@ -60,8 +60,8 @@ class MainActivity : AppCompatActivity() {
     private var receivedList: LinearLayout? = null
 
     private val pickFile = registerForActivityResult(
-        androidx.activity.result.contract.ActivityResultContracts.OpenDocument(),
-    ) { uri -> if (uri != null) send(uri) }
+        androidx.activity.result.contract.ActivityResultContracts.OpenMultipleDocuments(),
+    ) { uris -> if (uris.isNotEmpty()) send(uris) }
 
     /** Encrypted mode: files are sealed to a paired phone (`secure/`). One switch, both tabs. */
     private var encrypted = false
@@ -88,8 +88,8 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    /** Opens the transmitter on [uri], or on the generated test file when null. */
-    private fun send(uri: android.net.Uri?) = withPairing {
+    /** Opens the transmitter on [uris] -- several are sent as one batch -- or the test file if none. */
+    private fun send(uris: List<android.net.Uri>) = withPairing {
         val i = Intent(this, TransmitActivity::class.java)
             .putExtra("cols", speed.cols)
             .putExtra("rows", speed.rows)
@@ -97,9 +97,15 @@ class MainActivity : AppCompatActivity() {
             .putExtra("colours", speed.colours)
             .putExtra("encrypted", encrypted)
             .putExtra("compression", compression.name)
-        if (uri != null) {
-            // The picker's grant covers this activity; the flag passes it on to the transmitter.
-            i.setData(uri).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        if (uris.isNotEmpty()) {
+            // The picker's grant covers this activity; the flag passes it on to the transmitter,
+            // for the data URI and every URI in the clip data.
+            i.setData(uris[0]).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            if (uris.size > 1) {
+                val clip = android.content.ClipData.newRawUri("files", uris[0])
+                uris.drop(1).forEach { clip.addItem(android.content.ClipData.Item(it)) }
+                i.clipData = clip
+            }
         }
         startActivity(i)
     }
@@ -163,6 +169,7 @@ class MainActivity : AppCompatActivity() {
             insets
         }
         setContentView(root)
+        onBackPressedDispatcher.addCallback(this, clearSelectionOnBack)
         val tab = prefs.getInt(PREF_TAB, TAB_SEND).takeIf { it in pages } ?: TAB_SEND
         nav.selectedItemId = tab
         show(tab, animate = false)
@@ -182,6 +189,7 @@ class MainActivity : AppCompatActivity() {
                 nav.selectedItemId = TAB_SEND
                 pickFile.launch(arrayOf("*/*"))
             }
+            ACTION_SHOW_RECEIVED -> nav.selectedItemId = TAB_RECEIVED
         }
     }
 
@@ -322,16 +330,17 @@ class MainActivity : AppCompatActivity() {
             listOf(
                 hero(R.drawable.ic_upload),
                 space(20),
-                centred(title("Send a file", 22f)),
+                centred(title("Send files", 22f)),
                 space(6),
-                centred(text("It appears on this screen as light for the other phone to scan.")),
+                centred(text("They appear on this screen as light for the other phone to scan. " +
+                    "Choose several to send them together.")),
             ),
             listOf(
                 securityRow(),
-                button("Choose a file", R.drawable.ic_file) {
+                button("Choose files", R.drawable.ic_file) {
                     withPairing { pickFile.launch(arrayOf("*/*")) }
                 }.apply { layoutParams = matchWidth() },
-                button("Send a test file", R.drawable.ic_bolt, Style.Tonal) { send(null) }
+                button("Send a test file", R.drawable.ic_bolt, Style.Tonal) { send(emptyList()) }
                     .apply { layoutParams = matchWidth(dp(10)) },
                 speedLabel,
             ),
@@ -364,27 +373,70 @@ class MainActivity : AppCompatActivity() {
             setPadding(dp(16), dp(4), dp(16), dp(16))
         }
         receivedList = list
+        val summary = text("", 13f).apply { setPadding(dp(20), 0, dp(20), dp(4)) }
+        receivedSummary = summary
+        val label = text("", 16f, com.google.android.material.R.attr.colorOnSurface)
+        selectionLabel = label
+        val bar = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(4), dp(4), dp(8), dp(4))
+            background = GradientDrawable().apply {
+                cornerRadius = dp(28).toFloat()
+                setColor(themeColor(com.google.android.material.R.attr.colorSecondaryContainer))
+            }
+            addView(iconButton(R.drawable.ic_close, "Cancel selection") { clearSelection() })
+            addView(label, LinearLayout.LayoutParams(0, WRAP, 1f))
+            addView(iconButton(R.drawable.ic_select_all, "Select all") { selectAll() })
+            addView(iconButton(R.drawable.ic_share, "Share") {
+                shareAll(this@MainActivity, selected.toList(), "${selected.size} files")
+            })
+            // Passed on to another phone, as one batch: a file that reached one person in the
+            // field often needs to reach the next.
+            addView(iconButton(R.drawable.ic_upload, "Send with FileFlow") {
+                val uris = selected.toList()
+                clearSelection()
+                send(uris)
+            })
+            addView(iconButton(R.drawable.ic_delete, "Delete") { confirmDeleteSelected() })
+            visibility = View.GONE
+        }
+        selectionBar = bar
         return LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            addView(header("Received", "Received files",
-                "Verified files are saved to Downloads › ${LiveDecoder.DOWNLOADS_SUBDIR}. " +
-                    "Tap one to open it, or use your Files app."))
+            addView(header("Received", "Received files", RECEIVED_HELP))
+            addView(summary)
+            addView(bar, matchWidth().apply { setMargins(dp(16), 0, dp(16), dp(4)) })
             // A list may scroll -- it is the one thing here that grows.
             addView(ScrollView(context).apply { addView(list) },
                 LinearLayout.LayoutParams(MATCH, 0, 1f))
         }
     }
 
+    /** A received file, as the list shows it. */
+    private class ReceivedItem(
+        val uri: android.net.Uri, val name: String, val bytes: Long, val mime: String, val addedS: Long,
+    )
+
+    private var receivedItems: List<ReceivedItem> = emptyList()
+    private val selected = LinkedHashSet<android.net.Uri>()
+    private val rows = HashMap<android.net.Uri, com.google.android.material.card.MaterialCardView>()
+    private var selectionBar: View? = null
+    private var selectionLabel: TextView? = null
+    private var receivedSummary: TextView? = null
+
+    /** Back leaves selection before it leaves the app. */
+    private val clearSelectionOnBack = object : androidx.activity.OnBackPressedCallback(false) {
+        override fun handleOnBackPressed() = clearSelection()
+    }
+
     /** Files this app saved to Downloads/FileFlow, newest first. */
     private fun refreshReceived() {
         val list = receivedList ?: return
         list.removeAllViews()
+        rows.clear()
         thumbnails.queue.clear()  // pictures for the rows just removed
-        data class Item(
-            val uri: android.net.Uri, val name: String, val bytes: Long, val mime: String?,
-            val addedS: Long,
-        )
-        val items = ArrayList<Item>()
+        val items = ArrayList<ReceivedItem>()
         runCatching {
             contentResolver.query(
                 MediaStore.Downloads.EXTERNAL_CONTENT_URI,
@@ -395,39 +447,110 @@ class MainActivity : AppCompatActivity() {
                 arrayOf("%/${LiveDecoder.DOWNLOADS_SUBDIR}/%"),
                 "${MediaStore.MediaColumns.DATE_ADDED} DESC",
             )?.use { c ->
-                while (c.moveToNext() && items.size < 100) {
-                    items += Item(
+                while (c.moveToNext() && items.size < MAX_LISTED) {
+                    items += ReceivedItem(
                         ContentUris.withAppendedId(MediaStore.Downloads.EXTERNAL_CONTENT_URI, c.getLong(0)),
-                        c.getString(1) ?: "file", c.getLong(2), c.getString(3), c.getLong(4),
+                        c.getString(1) ?: "file", c.getLong(2), c.getString(3) ?: "application/octet-stream",
+                        c.getLong(4),
                     )
                 }
             }
         }
+        receivedItems = items
+        selected.retainAll(items.map { it.uri }.toSet())  // a deleted file is no longer selected
         if (items.isEmpty()) {
             list.addView(centred(text("Nothing received yet.")).apply { setPadding(0, dp(48), 0, 0) },
                 matchWidth())
+            updateSelection()
             return
         }
         items.forEach { item ->
-            val mime = item.mime ?: "application/octet-stream"
             val whenText = android.text.format.DateUtils.getRelativeTimeSpanString(
                 item.addedS * 1000, System.currentTimeMillis(),
                 android.text.format.DateUtils.MINUTE_IN_MILLIS,
             )
-            list.addView(row(
+            val mime = item.mime
+            val card = row(
                 R.drawable.ic_file, item.name, "${TransmitActivity.formatBytes(item.bytes)} · $whenText",
-                onLongClick = { anchor -> fileMenu(anchor, item.uri, item.name, mime) },
+                onLongClick = { toggle(item.uri) },
                 thumbnailOf = if (mime.startsWith("image/") || mime.startsWith("video/")) item.uri else null,
             ) {
-                val view = Intent(Intent.ACTION_VIEW)
-                    .setDataAndType(item.uri, mime)
-                    .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                runCatching { startActivity(Intent.createChooser(view, item.name)) }
-            }, matchWidth(dp(8)))
+                if (selected.isNotEmpty()) {
+                    toggle(item.uri)
+                } else {
+                    val view = Intent(Intent.ACTION_VIEW)
+                        .setDataAndType(item.uri, mime)
+                        .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    runCatching { startActivity(Intent.createChooser(view, item.name)) }
+                }
+            } as com.google.android.material.card.MaterialCardView
+            card.isCheckable = true
+            card.isChecked = item.uri in selected
+            rows[item.uri] = card
+            list.addView(card, matchWidth(dp(8)))
         }
-        list.addView(centred(text("Long-press a file to share or delete it.", 13f))
+        if (items.size == MAX_LISTED) {
+            list.addView(centred(text("Showing the newest $MAX_LISTED. The rest are in your Files app, " +
+                "in Downloads › ${LiveDecoder.DOWNLOADS_SUBDIR}.", 13f)).apply { setPadding(0, dp(12), 0, 0) },
+                matchWidth())
+        }
+        list.addView(centred(text("Press and hold a file to select it, then share, send or delete several at once.", 13f))
             .apply { setPadding(0, dp(12), 0, 0) }, matchWidth())
+        updateSelection()
     }
+
+    private fun toggle(uri: android.net.Uri) {
+        if (!selected.remove(uri)) selected += uri
+        rows[uri]?.isChecked = uri in selected
+        updateSelection()
+    }
+
+    private fun selectAll() {
+        receivedItems.forEach { selected += it.uri }
+        rows.values.forEach { it.isChecked = true }
+        updateSelection()
+    }
+
+    private fun clearSelection() {
+        selected.clear()
+        rows.values.forEach { it.isChecked = false }
+        updateSelection()
+    }
+
+    /** The selection bar, or the list's summary when nothing is selected. */
+    private fun updateSelection() {
+        val selecting = selected.isNotEmpty()
+        clearSelectionOnBack.isEnabled = selecting
+        selectionBar?.visibility = if (selecting) View.VISIBLE else View.GONE
+        receivedSummary?.visibility = if (selecting || receivedItems.isEmpty()) View.GONE else View.VISIBLE
+        val bytes = receivedItems.filter { it.uri in selected }.sumOf { it.bytes }
+        selectionLabel?.text = "${selected.size} selected · ${TransmitActivity.formatBytes(bytes)}"
+        receivedSummary?.text = "${receivedItems.size} ${if (receivedItems.size == 1) "file" else "files"} · " +
+            TransmitActivity.formatBytes(receivedItems.sumOf { it.bytes })
+    }
+
+    private fun confirmDeleteSelected() {
+        val uris = selected.toList()
+        if (uris.isEmpty()) return
+        com.google.android.material.dialog.MaterialAlertDialogBuilder(this)
+            .setTitle(if (uris.size == 1) "Delete this file?" else "Delete ${uris.size} files?")
+            .setMessage("They will be removed from Downloads › ${LiveDecoder.DOWNLOADS_SUBDIR}.")
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton("Delete") { _, _ ->
+                selected.clear()
+                deleteFiles(uris)
+            }
+            .show()
+    }
+
+    /** A round, tinted icon button, for the selection bar. */
+    private fun iconButton(icon: Int, description: String, onClick: () -> Unit) =
+        MaterialButton(this, null, com.google.android.material.R.attr.materialIconButtonStyle).apply {
+            setIconResource(icon)
+            contentDescription = description
+            tooltipText = description
+            setOnClickListener { onClick() }
+        }
 
     /**
      * Deletes received files. This install's own are deleted outright; one saved by an earlier
@@ -464,30 +587,6 @@ class MainActivity : AppCompatActivity() {
     override fun onDestroy() {
         super.onDestroy()
         thumbnails.shutdownNow()
-    }
-
-    /** Share or delete a received file. */
-    private fun fileMenu(anchor: View, uri: android.net.Uri, name: String, mime: String) {
-        android.widget.PopupMenu(this, anchor).apply {
-            menu.add("Share").setOnMenuItemClickListener {
-                val send = Intent(Intent.ACTION_SEND)
-                    .setType(mime)
-                    .putExtra(Intent.EXTRA_STREAM, uri)
-                    .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                runCatching { startActivity(Intent.createChooser(send, name)) }
-                true
-            }
-            menu.add("Delete").setOnMenuItemClickListener {
-                com.google.android.material.dialog.MaterialAlertDialogBuilder(this@MainActivity)
-                    .setTitle("Delete $name?")
-                    .setMessage("It will be removed from Downloads › ${LiveDecoder.DOWNLOADS_SUBDIR}.")
-                    .setNegativeButton("Cancel", null)
-                    .setPositiveButton("Delete") { _, _ -> deleteFiles(listOf(uri)) }
-                    .show()
-                true
-            }
-            show()
-        }
     }
 
     private fun settingsPage(prefs: android.content.SharedPreferences): View {
@@ -642,6 +741,26 @@ class MainActivity : AppCompatActivity() {
     companion object {
         const val ACTION_RECEIVE = "dev.fileflow.action.RECEIVE"
         const val ACTION_SEND_FILE = "dev.fileflow.action.SEND_FILE"
+        /** Opens on the Received tab: from a received batch's result screen. */
+        const val ACTION_SHOW_RECEIVED = "dev.fileflow.action.SHOW_RECEIVED"
+
+        /** Shares several received files at once, through the system share sheet. */
+        fun shareAll(context: android.content.Context, uris: List<android.net.Uri>, title: String) {
+            if (uris.isEmpty()) return
+            val send = if (uris.size == 1) {
+                Intent(Intent.ACTION_SEND).putExtra(Intent.EXTRA_STREAM, uris[0])
+            } else {
+                Intent(Intent.ACTION_SEND_MULTIPLE).putParcelableArrayListExtra(Intent.EXTRA_STREAM, ArrayList(uris))
+            }
+            // A common type when they share one, else any; clip data carries the read grant for all.
+            val types = uris.map { context.contentResolver.getType(it) ?: "application/octet-stream" }.distinct()
+            send.type = types.singleOrNull() ?: "*/*"
+            val clip = android.content.ClipData.newRawUri(title, uris[0])
+            uris.drop(1).forEach { clip.addItem(android.content.ClipData.Item(it)) }
+            send.clipData = clip
+            send.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            runCatching { context.startActivity(Intent.createChooser(send, title)) }
+        }
         private const val PREF_SPEED = "speed"
         private const val PREF_ENCRYPTED = "encrypted"
         private const val PREF_COMPRESSION = "compression"
@@ -652,6 +771,15 @@ class MainActivity : AppCompatActivity() {
         private const val TAB_SETTINGS = 4
         private const val MATCH = LinearLayout.LayoutParams.MATCH_PARENT
         private const val WRAP = LinearLayout.LayoutParams.WRAP_CONTENT
+
+        /** Received files listed at most; the rest are in the Files app. */
+        private const val MAX_LISTED = 500
+
+        private const val RECEIVED_HELP =
+            "Verified files are saved to Downloads › ${LiveDecoder.DOWNLOADS_SUBDIR}.\n\n" +
+                "Tap a file to open it. Press and hold to select it, then tap others to select " +
+                "them too; share, delete, or send them on to another phone with FileFlow, " +
+                "all at once."
 
         private const val HOW_IT_WORKS =
             "One phone shows the file as a fast-changing pattern of light. The other phone's " +
