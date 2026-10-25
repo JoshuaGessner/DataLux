@@ -30,6 +30,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <future>
@@ -59,8 +60,8 @@ constexpr std::array<Speed, 3> kSpeeds = {{
 constexpr std::size_t kFecNsym = 32;
 // What one transfer may carry, as on the phone: a receiver holds the whole file in memory.
 constexpr std::uint64_t kMaxFileBytes = 64ULL * 1024 * 1024;
-// Present intervals measured before the refresh rate (and so the divisor) is re-derived.
-constexpr std::size_t kRemeasureFrames = 60;
+// Present intervals measured before the refresh rate is re-derived.
+constexpr std::size_t kRemeasureFrames = 30;
 // How long the status line stays after sending starts, or after a key or the mouse moves. While
 // sending the screen must show NOTHING but the code: the receiver finds the grid by its outer
 // ring, and bright text between that ring and the edge of the camera's view is mistaken for it --
@@ -192,11 +193,9 @@ class Sender {
   public:
     Sender(SDL_Window* w, SDL_Renderer* r, std::size_t speed, CompressionMode mode)
         : window_(w), renderer_(r), speed_(speed), mode_(mode) {
-        // The display's stated rate until one is measured. Guessing 60 sent a 120 Hz screen's
-        // first half second at twice the speed's frame rate -- faster than a 50 fps camera reads.
+        // The display's stated rate until one is measured.
         const SDL_DisplayMode* m = SDL_GetCurrentDisplayMode(SDL_GetDisplayForWindow(w));
         if (m != nullptr && m->refresh_rate > 0.0F) hz_ = static_cast<double>(m->refresh_rate);
-        divisor_ = DivisorFor(hz_);
     }
 
     ~Sender() {
@@ -256,7 +255,7 @@ class Sender {
                 turned_ = turned;
                 MakeTexture();
             }
-            if (vsyncs_++ % divisor_ == 0) Advance();
+            Pace(s.states_per_second);
         }
 
         SDL_SetRenderDrawColor(renderer_, 0, 0, 0, 255);
@@ -297,8 +296,7 @@ class Sender {
         if (texture_ != nullptr) SDL_DestroyTexture(texture_);
         texture_ = nullptr;  // made on the next frame, the right way up for the window
         const Speed& s = kSpeeds[speed_];
-        divisor_ = DivisorFor(hz_);  // a new speed is a new frame rate, now, not after a measurement
-        vsyncs_ = 0;
+        next_due_.reset();
         states_ = 0;
         started_ = std::chrono::steady_clock::now();
         Wake();
@@ -390,10 +388,46 @@ class Sender {
         SDL_SetRenderScale(renderer_, 1.0F, 1.0F);
     }
 
-    // The divisor from the MEASURED refresh rate (median present interval), as the phone does:
-    // a display's stated rate is often wrong, and variable-rate panels change theirs.
+    // Frames paced by the CLOCK, each due 1/rate after the last and shown on the refresh nearest its
+    // due time -- so each lasts a whole number of refreshes, and none is skipped or doubled.
+    //
+    // It counted refreshes instead (a new frame every Nth, N from the measured refresh rate), which
+    // is right only while the rate holds still. A Mac's adaptive-refresh panel does not: entering
+    // full screen it ran at 60 Hz, then 120, and every change sent frames at the wrong rate until
+    // the next measurement -- 34 a second on Fast, where 30 is meant, and the receiving phones counted
+    // 40-48 through a whole transfer. A 50 fps camera misses frames shown that fast.
+    void Pace(double states_per_second) {
+        const auto now = std::chrono::steady_clock::now();
+        const auto slack = std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+            std::chrono::duration<double>(0.5 / hz_));
+        if (next_due_.has_value() && now + slack < *next_due_) return;
+        Advance();
+        const auto period = std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+            std::chrono::duration<double>(1.0 / states_per_second));
+        next_due_ = next_due_.value_or(now) + period;
+        // Far behind (the window was hidden, the machine slept): start the clock again from now
+        // rather than racing through the backlog.
+        if (*next_due_ + period < now) next_due_ = now + period;
+    }
+
+    // The MEASURED refresh rate (median present interval): a display's stated rate is often wrong,
+    // and variable-rate panels change theirs. Used only for pacing's half-refresh slack.
     void Measure() {
         const auto now = std::chrono::steady_clock::now();
+        ++presents_;
+        // Every few seconds, what was actually shown: the receiver's "states/s seen" should match.
+        if (transfer_ && now - report_at_ >= std::chrono::seconds(5)) {
+            const double secs = std::chrono::duration<double>(now - report_at_).count();
+            if (report_presents_ > 0) {
+                std::printf("%.1f frames/s, %.1f presents/s\n",
+                            static_cast<double>(states_ - report_states_) / secs,
+                            static_cast<double>(presents_ - report_presents_) / secs);
+                std::fflush(stdout);
+            }
+            report_at_ = now;
+            report_states_ = states_;
+            report_presents_ = presents_;
+        }
         if (last_present_.has_value()) {
             intervals_.push_back(std::chrono::duration<double>(now - *last_present_).count());
         }
@@ -405,17 +439,6 @@ class Sender {
         intervals_.clear();
         if (median <= 0.0) return;
         hz_ = 1.0 / median;
-        const auto d = DivisorFor(hz_);
-        if (d != divisor_) {
-            std::printf("display %.1f Hz: a new frame every %llu refreshes\n", hz_,
-                        static_cast<unsigned long long>(d));
-            divisor_ = d;
-        }
-    }
-
-    // Refreshes per frame for the current speed at `hz`.
-    [[nodiscard]] std::uint64_t DivisorFor(double hz) const {
-        return static_cast<std::uint64_t>(std::max(1L, std::lround(hz / kSpeeds[speed_].states_per_second)));
     }
 
     SDL_Window* window_;
@@ -433,9 +456,12 @@ class Sender {
     std::string status_;
     std::string snapshot_;
     bool done_ = false;
+    std::uint64_t presents_ = 0;
+    std::chrono::steady_clock::time_point report_at_;
+    std::uint64_t report_states_ = 0;
+    std::uint64_t report_presents_ = 0;
     double hz_ = 60.0;  // the display's refresh rate: stated, then measured
-    std::uint64_t divisor_ = 2;
-    std::uint64_t vsyncs_ = 0;
+    std::optional<std::chrono::steady_clock::time_point> next_due_;  // when the next frame is due
     std::uint64_t states_ = 0;
     int pitch_ = 0;
     std::chrono::steady_clock::time_point started_;
@@ -447,7 +473,7 @@ class Sender {
 int Usage() {
     std::fprintf(stderr,
                  "usage: fileflow-send [--speed steady|fast|fastest] [--compression off|auto|max] "
-                 "[--windowed] [--snapshot OUT.bmp] [FILE...]\n"
+                 "[--windowed] [--seconds N] [--snapshot OUT.bmp] [FILE...]\n"
                  "With no files, drop them on the window.\n");
     return 2;
 }
@@ -459,6 +485,7 @@ int main(int argc, char** argv) {
     CompressionMode mode = CompressionMode::kAuto;
     bool windowed = false;
     std::string snapshot;
+    double seconds = 0.0;  // > 0: stop after this long (for unattended runs)
     std::vector<std::string> files;
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
@@ -474,6 +501,8 @@ int main(int argc, char** argv) {
             else return Usage();
         } else if (a == "--windowed") {
             windowed = true;
+        } else if (a == "--seconds" && i + 1 < argc) {
+            seconds = std::atof(argv[++i]);
         } else if (a == "--snapshot" && i + 1 < argc) {
             snapshot = argv[++i];
         } else if (a == "--help" || a == "-h" || (!a.empty() && a[0] == '-')) {
@@ -507,7 +536,12 @@ int main(int argc, char** argv) {
         if (!snapshot.empty()) sender.SnapshotTo(snapshot);
         std::vector<std::string> dropped;
         bool running = true;
+        const auto began = std::chrono::steady_clock::now();
         while (running && !sender.done()) {
+            if (seconds > 0.0 &&
+                std::chrono::duration<double>(std::chrono::steady_clock::now() - began).count() > seconds) {
+                break;
+            }
             SDL_Event e;
             while (SDL_PollEvent(&e)) {
                 switch (e.type) {
