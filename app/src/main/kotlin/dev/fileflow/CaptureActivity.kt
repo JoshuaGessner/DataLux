@@ -17,6 +17,8 @@ import android.widget.ScrollView
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
+import androidx.core.content.edit
+import androidx.core.content.edit
 import androidx.core.graphics.toColorInt
 import dev.fileflow.aim.AimAnalyser
 import dev.fileflow.aim.AimVerdict
@@ -30,6 +32,7 @@ import dev.fileflow.rx.LivePhase
 import dev.fileflow.rx.LiveStatus
 import dev.fileflow.secure.Envelope
 import dev.fileflow.secure.PairingStore
+import dev.fileflow.secure.Teams
 import dev.fileflow.ui.StatusCard
 import dev.fileflow.ui.Ui.Style
 import dev.fileflow.ui.Ui.button
@@ -946,16 +949,18 @@ class CaptureActivity : AppCompatActivity() {
         saving.set(true)
         Thread {
             try {
-                // Opened with the pairing, if any; in encrypted mode a plain or foreign file is refused,
-                // and the refusal says why instead of passing for a storage failure.
+                // Opened with the pairing and the teams, if any; in encrypted mode a plain or foreign
+                // file is refused, and the refusal says why instead of passing for a storage failure.
                 var refused: String? = null
                 if (s.phase == LivePhase.Verified && s.lensStrength != 0.0) {
-                    getSharedPreferences(LENS_PREFS, MODE_PRIVATE).edit()
-                        .putFloat(PREF_LENS_K1, s.lensStrength.toFloat()).apply()
+                    getSharedPreferences(LENS_PREFS, MODE_PRIVATE).edit {
+                        putFloat(PREF_LENS_K1, s.lensStrength.toFloat())
+                    }
                 }
                 val saved = if (s.phase == LivePhase.Verified) {
                     runCatching {
-                        decoder.saveVerified(this, PairingStore.current(), requireEncrypted = encrypted)
+                        decoder.saveVerified(this, listOfNotNull(PairingStore.current()) + Teams.store(this).all(),
+                                             requireEncrypted = encrypted)
                     }.onFailure { e ->
                         if (e is Envelope.UnpackException) refused = e.failure.message
                     }.getOrNull()
@@ -991,7 +996,7 @@ class CaptureActivity : AppCompatActivity() {
                                 " (the sender's ${saved.compressMs} ms check found it would not shrink)"
                             } else "")
                         }
-                        if (saved.encrypted) appendLine("  encrypted   AES-256-GCM, paired key")
+                        if (saved.encrypted) appendLine("  encrypted   AES-256-GCM, ${saved.sealedTo ?: "paired phone"}")
                         appendLine("  from Receive ${"%.1f".format(seconds)} s, " +
                                    "${"%.1f".format(saved.bytes / 1024.0 / seconds)} KB/s " +
                                    "(includes finding the sender)")
@@ -1115,7 +1120,10 @@ class CaptureActivity : AppCompatActivity() {
                     .apply { gravity = Gravity.CENTER; setPadding(0, dp(2), 0, 0) })
             }
             col.addView(text(
-                (if (saved.encrypted) "Encrypted · " else "") +
+                (if (saved.encrypted) {
+                    saved.sealedTo?.takeIf { it.startsWith("team ") }?.let { "Encrypted to ${it.removePrefix("team ")} · " }
+                        ?: "Encrypted · "
+                } else "") +
                     "Verified · saved to ${saved.location.substringBeforeLast('/')}",
                 13f,
             )

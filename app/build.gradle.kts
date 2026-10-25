@@ -14,6 +14,10 @@ android {
         versionCode = 2
         versionName = "0.2.0"
 
+        // A store build (`-Pstore=true`) locks paid features behind what was bought
+        // (Entitlements.kt). Every other build -- yours, from this source -- has them all.
+        buildConfigField("boolean", "STORE", (findProperty("store") == "true").toString())
+
         ndk {
             // arm64 only (ADR-0013). HWASan is ARM64-only anyway, and the emulator is useless
             // to us -- it has neither a real camera nor a real display pipeline.
@@ -51,6 +55,10 @@ android {
         debug {
             isJniDebuggable = true
         }
+    }
+
+    buildFeatures {
+        buildConfig = true
     }
 
     compileOptions {

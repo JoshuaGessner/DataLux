@@ -4,6 +4,7 @@ import java.nio.ByteBuffer
 import java.security.SecureRandom
 import javax.crypto.Cipher
 import javax.crypto.spec.GCMParameterSpec
+import javax.crypto.spec.SecretKeySpec
 
 /**
  * What actually travels over the light link: the file, compressed when that makes it smaller,
@@ -29,11 +30,23 @@ import javax.crypto.spec.GCMParameterSpec
  *
  * Version 1 ("FFE1", deflate only, flag bit 0 = compressed) is still read.
  *
+ * The key id names the key an envelope is sealed to -- a pairing's, or a team's ([Team]) -- so a
+ * receiver holding several opens it with the right one, and says plainly when it holds none.
+ *
  * Compression comes before encryption, because ciphertext does not compress. The file's NAME is
  * inside the envelope, so an encrypted transfer shows nothing but its size to a camera that is not
  * the paired one. Every transfer is already verified end to end by the link's SHA-256; under
  * encryption the GCM tag additionally proves the bytes came from the paired phone, unaltered.
  */
+/** A key an envelope can be sealed to: a pairing's ([PairingKey]) or a team's ([Team]). */
+interface SealKey {
+    val secret: SecretKeySpec
+    /** [PairingKey.ID_BYTES] bytes, written in the clear in each envelope sealed to this key. */
+    val id: ByteArray
+    /** For the person: "paired phone", "team Field crew". */
+    val label: String
+}
+
 object Envelope {
     private val MAGIC_V1 = "FFE1".toByteArray(Charsets.US_ASCII)
     private val MAGIC = "FFE2".toByteArray(Charsets.US_ASCII)
@@ -112,14 +125,17 @@ object Envelope {
         val decompressMs: Long,
         /** A batch's files, name and bytes, in the order sent; null for a single file. */
         val files: List<Pair<String, ByteArray>>? = null,
+        /** The key that opened it, when it was sealed. */
+        val sealedTo: SealKey? = null,
     ) {
         val compressed: Boolean get() = codec != CODEC_NONE
     }
 
     enum class Failure(val message: String) {
         NotAnEnvelope("This isn't a FileFlow file."),
-        NeedsPairing("This file is encrypted. Pair the two phones, then send it again."),
-        WrongPairing("This file is encrypted for a different pairing, or was altered. Nothing was saved."),
+        NeedsPairing("This file is encrypted. Pair the two phones, or join the sender's team, then send it again."),
+        WrongPairing("This file is encrypted for a pairing or team this phone isn't in, or was altered. " +
+            "Nothing was saved."),
         NotEncrypted("The sender isn't in encrypted mode, so the file was refused. Turn encrypted mode on " +
             "on both phones, or off on this one."),
         UnknownCodec("This file was compressed in a way this version of FileFlow can't open. Update it."),
@@ -142,7 +158,7 @@ object Envelope {
      * percent; encrypted to [key] when given.
      */
     fun pack(
-        data: ByteArray, name: String, key: PairingKey?,
+        data: ByteArray, name: String, key: SealKey?,
         mode: Mode = Mode.Auto, codec: Codec = defaultCodec, random: SecureRandom = SecureRandom(),
     ): Packed = pack(data, name, key, mode, codec, random, batch = false)
 
@@ -151,7 +167,7 @@ object Envelope {
      * [name]. Compressed and encrypted as a whole, like a single file.
      */
     fun packBatch(
-        files: List<Pair<String, ByteArray>>, name: String, key: PairingKey?,
+        files: List<Pair<String, ByteArray>>, name: String, key: SealKey?,
         mode: Mode = Mode.Auto, codec: Codec = defaultCodec, random: SecureRandom = SecureRandom(),
     ): Packed {
         require(files.isNotEmpty() && files.size <= MAX_BATCH_FILES) { "1..$MAX_BATCH_FILES files" }
@@ -170,7 +186,7 @@ object Envelope {
     }
 
     private fun pack(
-        data: ByteArray, name: String, key: PairingKey?,
+        data: ByteArray, name: String, key: SealKey?,
         mode: Mode, codec: Codec, random: SecureRandom, batch: Boolean,
     ): Packed {
         require(data.size.toLong() <= MAX_ORIGINAL_BYTES) { "file too large" }
@@ -208,11 +224,16 @@ object Envelope {
         return Packed(header + sealed, data.size.toLong(), codecId, compressMs, encrypted = true)
     }
 
+    /** [unpack] with at most one key. */
+    fun unpack(bytes: ByteArray, key: SealKey?, requireEncrypted: Boolean): Unpacked =
+        unpack(bytes, listOfNotNull(key), requireEncrypted)
+
     /**
-     * Opens what [pack] made. [key] is the current pairing, if any; with [requireEncrypted] an
-     * envelope that is not encrypted is refused, so encrypted mode cannot be talked down to plain.
+     * Opens what [pack] made. [keys] are every key this phone holds -- the current pairing, its
+     * teams -- and the envelope's key id picks one. With [requireEncrypted] an envelope that is not
+     * encrypted is refused, so encrypted mode cannot be talked down to plain.
      */
-    fun unpack(bytes: ByteArray, key: PairingKey?, requireEncrypted: Boolean): Unpacked {
+    fun unpack(bytes: ByteArray, keys: List<SealKey>, requireEncrypted: Boolean): Unpacked {
         val v1 = hasMagic(bytes, MAGIC_V1)
         if (!v1 && !hasMagic(bytes, MAGIC) || bytes.size < MAGIC.size + 1) {
             throw UnpackException(Failure.NotAnEnvelope)
@@ -223,12 +244,15 @@ object Envelope {
         val encrypted = flags and FLAG_ENCRYPTED != 0
         if (requireEncrypted && !encrypted) throw UnpackException(Failure.NotEncrypted)
 
+        var sealedTo: SealKey? = null
         val inner: ByteArray = if (encrypted) {
             val headerSize = MAGIC.size + 1 + PairingKey.ID_BYTES + NONCE_BYTES
             if (bytes.size < headerSize + TAG_BITS / 8) throw UnpackException(Failure.Corrupt)
-            if (key == null) throw UnpackException(Failure.NeedsPairing)
+            if (keys.isEmpty()) throw UnpackException(Failure.NeedsPairing)
             val id = bytes.copyOfRange(MAGIC.size + 1, MAGIC.size + 1 + PairingKey.ID_BYTES)
-            if (!java.security.MessageDigest.isEqual(id, key.id)) throw UnpackException(Failure.WrongPairing)
+            val key = keys.firstOrNull { java.security.MessageDigest.isEqual(id, it.id) }
+                ?: throw UnpackException(Failure.WrongPairing)
+            sealedTo = key
             val nonce = bytes.copyOfRange(MAGIC.size + 1 + PairingKey.ID_BYTES, headerSize)
             try {
                 val cipher = Cipher.getInstance("AES/GCM/NoPadding")
@@ -271,7 +295,7 @@ object Envelope {
         if (data.size.toLong() != original) throw UnpackException(Failure.Corrupt)
         val decompressMs = (System.nanoTime() - started) / 1_000_000
         val files = if (flags and FLAG_BATCH != 0 && !v1) parseBatch(data) else null
-        return Unpacked(name, data, codecId, encrypted, bytes.size, compressMs, decompressMs, files)
+        return Unpacked(name, data, codecId, encrypted, bytes.size, compressMs, decompressMs, files, sealedTo)
     }
 
     /**

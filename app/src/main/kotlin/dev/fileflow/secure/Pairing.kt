@@ -18,12 +18,14 @@ import javax.crypto.spec.SecretKeySpec
  * and the six-digit code both phones show so the people holding them can check they match.
  */
 class PairingKey(
-    val secret: SecretKeySpec,
-    val id: ByteArray,
+    override val secret: SecretKeySpec,
+    override val id: ByteArray,
     /** "482 913": the same on both phones, or someone else's key was scanned. */
     val code: String,
     val createdMs: Long,
-) {
+) : SealKey {
+    override val label: String get() = "paired phone"
+
     companion object {
         const val ID_BYTES = 8
     }

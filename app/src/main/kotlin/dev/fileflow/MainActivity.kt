@@ -24,6 +24,8 @@ import com.google.android.material.materialswitch.MaterialSwitch
 import dev.fileflow.rx.LiveDecoder
 import dev.fileflow.secure.Envelope
 import dev.fileflow.secure.PairingStore
+import dev.fileflow.secure.Team
+import dev.fileflow.secure.Teams
 import dev.fileflow.ui.Ui.Style
 import dev.fileflow.ui.Ui.button
 import dev.fileflow.ui.Ui.card
@@ -65,6 +67,8 @@ class MainActivity : AppCompatActivity() {
 
     /** Encrypted mode: files are sealed to a paired phone (`secure/`). One switch, both tabs. */
     private var encrypted = false
+    /** The team files are sealed to when sending ([Team.idHex]); null for the paired phone. */
+    private var sealTo: String? = null
     /** How hard the sender compresses: the Settings choice, Auto unless changed. */
     private var compression = Envelope.Mode.Auto
     private val securityRows = ArrayList<Pair<MaterialSwitch, TextView>>()
@@ -78,9 +82,21 @@ class MainActivity : AppCompatActivity() {
         if (r.resultCode == RESULT_OK) next?.invoke()
     }
 
-    /** Runs [action] now, or after pairing when encrypted mode is on and the phones are not paired. */
-    private fun withPairing(action: () -> Unit) {
-        if (!encrypted || PairingStore.current() != null) {
+    /** The team to send to, when one is chosen, still on this phone, and part of this plan. */
+    private fun sealTeam(): Team? =
+        if (Entitlements.has(Entitlements.Feature.Teams)) Teams.store(this).find(sealTo) else null
+
+    /**
+     * Runs [action] now, or after pairing when encrypted mode is on and there is no key to use:
+     * no pairing, and -- sending -- no team chosen or -- [receiving] -- no team at all.
+     */
+    private fun withPairing(receiving: Boolean = false, action: () -> Unit) {
+        val teamKey = if (receiving) {
+            Entitlements.has(Entitlements.Feature.Teams) && Teams.store(this).all().isNotEmpty()
+        } else {
+            sealTeam() != null
+        }
+        if (!encrypted || PairingStore.current() != null || teamKey) {
             action()
         } else {
             afterPairing = action
@@ -96,6 +112,7 @@ class MainActivity : AppCompatActivity() {
             .putExtra("stateRate", speed.statesPerSecond)
             .putExtra("colours", speed.colours)
             .putExtra("encrypted", encrypted)
+            .putExtra("team", if (encrypted) sealTeam()?.idHex else null)
             .putExtra("compression", compression.name)
         if (uris.isNotEmpty()) {
             // The picker's grant covers this activity; the flag passes it on to the transmitter,
@@ -110,7 +127,7 @@ class MainActivity : AppCompatActivity() {
         startActivity(i)
     }
 
-    private fun receive() = withPairing {
+    private fun receive() = withPairing(receiving = true) {
         // LIVE: decode on the phone until the file verifies (C13b). The receiver chooses its own
         // capture rate, exposure and grid; the sender's grid is only tried first. Scripted
         // experiments still reach the recording path by launching CaptureActivity without `live`.
@@ -131,6 +148,7 @@ class MainActivity : AppCompatActivity() {
         val prefs = getPreferences(MODE_PRIVATE)
         speed = Speed.named(prefs.getString(PREF_SPEED, null))
         encrypted = prefs.getBoolean(PREF_ENCRYPTED, false)
+        sealTo = prefs.getString(PREF_SEAL_TO, null)
         compression = runCatching {
             Envelope.Mode.valueOf(prefs.getString(PREF_COMPRESSION, null) ?: "")
         }.getOrDefault(Envelope.Mode.Auto)
@@ -232,20 +250,54 @@ class MainActivity : AppCompatActivity() {
                 setPadding(dp(12), 0, dp(8), 0)
                 addView(text("Encrypted", 16f, com.google.android.material.R.attr.colorOnSurface))
                 addView(sub)
-                // Tapping the state pairs (again): the way to recover from a mismatched code.
-                setOnClickListener {
-                    if (encrypted) pair.launch(Intent(this@MainActivity, PairActivity::class.java))
-                }
+                // Tapping the state pairs (again) -- the way to recover from a mismatched code -- or,
+                // with teams, chooses who files are sealed to.
+                setOnClickListener { if (encrypted) chooseSealTo() }
             }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
             addView(sw)
             addView(helpButton("Encrypted mode", ENCRYPTION_HELP))
         }
     }
 
+    /** Who files are sealed to: the paired phone, or one of this phone's teams. */
+    private fun chooseSealTo() {
+        val teams = if (Entitlements.has(Entitlements.Feature.Teams)) Teams.store(this).all() else emptyList()
+        if (teams.isEmpty()) {
+            pair.launch(Intent(this, PairActivity::class.java))
+            return
+        }
+        val key = PairingStore.current()
+        val labels = listOf(key?.let { "Paired phone · ${it.code}" } ?: "Pair with a phone") +
+            teams.map { "Team · ${it.name}" } + "Manage teams…"
+        val current = teams.indexOfFirst { it.idHex == sealTeam()?.idHex } + 1
+        com.google.android.material.dialog.MaterialAlertDialogBuilder(this)
+            .setTitle("Seal files to")
+            .setSingleChoiceItems(labels.toTypedArray(), current) { d, which ->
+                d.dismiss()
+                when (which) {
+                    0 -> {
+                        setSealTo(null)
+                        if (key == null) pair.launch(Intent(this, PairActivity::class.java))
+                    }
+                    labels.size - 1 -> startActivity(Intent(this, TeamsActivity::class.java))
+                    else -> setSealTo(teams[which - 1].idHex)
+                }
+            }
+            .show()
+    }
+
+    private fun setSealTo(idHex: String?) {
+        sealTo = idHex
+        getPreferences(MODE_PRIVATE).edit { putString(PREF_SEAL_TO, idHex) }
+        refreshSecurity()
+    }
+
     private fun refreshSecurity() {
         val key = PairingStore.current()
+        val team = sealTeam()
         val state = when {
             !encrypted -> "Off"
+            team != null -> "Team · ${team.name}"
             key != null -> "Paired · ${key.code}"
             else -> "Not paired · tap to pair"
         }
@@ -472,7 +524,11 @@ class MainActivity : AppCompatActivity() {
             val mime = item.mime
             val card = row(
                 R.drawable.ic_file, item.name, "${TransmitActivity.formatBytes(item.bytes)} · $whenText",
-                onLongClick = { toggle(item.uri) },
+                onLongClick = {
+                    if (selected.isNotEmpty() || Entitlements.check(this, Entitlements.Feature.BulkManage)) {
+                        toggle(item.uri)
+                    }
+                },
                 thumbnailOf = if (mime.startsWith("image/") || mime.startsWith("video/")) item.uri else null,
             ) {
                 if (selected.isNotEmpty()) {
@@ -626,6 +682,11 @@ class MainActivity : AppCompatActivity() {
                 space(8),
                 compressionToggle.apply { layoutParams = matchWidth() },
             ), matchWidth(dp(12)))
+            addView(row(R.drawable.ic_group, "Teams", "Encrypted sending to a whole group at once") {
+                if (Entitlements.check(this@MainActivity, Entitlements.Feature.Teams)) {
+                    startActivity(Intent(this@MainActivity, TeamsActivity::class.java))
+                }
+            }, matchWidth(dp(12)))
             addView(row(R.drawable.ic_help, "How it works", null) {
                 showHelp("How it works", HOW_IT_WORKS)
             }, matchWidth(dp(12)))
@@ -768,6 +829,7 @@ class MainActivity : AppCompatActivity() {
         }
         private const val PREF_SPEED = "speed"
         private const val PREF_ENCRYPTED = "encrypted"
+        private const val PREF_SEAL_TO = "seal_to"
         private const val PREF_COMPRESSION = "compression"
         private const val PREF_TAB = "tab"
         private const val TAB_SEND = 1
@@ -811,7 +873,9 @@ class MainActivity : AppCompatActivity() {
                 "front camera. Nothing goes over a network, and the key is never stored: it lasts " +
                 "until you close FileFlow, or 30 minutes.\n\n" +
                 "Turn it on on BOTH phones. In encrypted mode the receiver refuses any file that " +
-                "isn't sealed to its pairing."
+                "isn't sealed to its pairing or one of its teams.\n\n" +
+                "Teams (Settings › Teams) keep one key for a whole group, so one screen can send " +
+                "to everyone in it at once. Tap Encrypted to choose a team to send to."
 
         private const val COMPRESSION_HELP =
             "Auto — files that compress, like documents, text and spreadsheets, are made smaller " +

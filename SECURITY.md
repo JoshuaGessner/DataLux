@@ -30,11 +30,18 @@ it sends or receives can leave the two phones by any other route.
 - *Files.* Each file (and its name) is compressed if that helps, then encrypted with AES-256-GCM
   under a random 96-bit nonce, with the envelope header bound in as associated data. Any change to
   any byte makes the receiver refuse the file.
-- *Forward secrecy.* Keys exist only in memory, for at most 30 minutes or until the app closes.
-  Nothing is ever written to storage, so a phone examined later holds nothing that opens past
-  transfers.
+- *Forward secrecy.* Pairing keys exist only in memory, for at most 30 minutes or until the app
+  closes. Nothing about a pairing is written to storage, so a phone examined later holds nothing
+  that opens past paired transfers.
+- *Teams.* A team key is a random 256-bit AES key, handed to a new member only over a fresh pairing
+  made for the purpose: sealed with AES-256-GCM under that pairing's key, the pairing's key id bound
+  in as associated data. The member answers with an HMAC under the team key, which is how the
+  leader's phone confirms the hand-over. Team keys ARE stored, wrapped by a non-exportable Android
+  Keystore key, so a copy of the app's data alone opens nothing. A team has no forward secrecy:
+  anyone who holds its key can open every transfer ever sent to it, and a phone that leaves the
+  team keeps whatever it already received. Removing a member means making a new team.
 - *No downgrade.* A receiver in encrypted mode refuses unencrypted files and files sealed to any
-  other pairing.
+  key it does not hold.
 
 **Not protected.** Without encrypted mode, anyone whose camera can see the sending screen can
 receive the file, exactly as with a QR code. Encrypted mode hides a file's contents and name but

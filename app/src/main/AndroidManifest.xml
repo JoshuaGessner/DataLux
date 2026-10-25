@@ -52,6 +52,11 @@
             tools:ignore="LockedOrientationActivity,DiscouragedApi"
             android:configChanges="orientation|screenSize|keyboardHidden" />
 
+        <!-- Teams for encrypted mode: one key a group shares, handed out over a pairing. -->
+        <activity
+            android:name=".TeamsActivity"
+            android:exported="false" />
+
         <activity
             android:name=".ProbeActivity"
             android:exported="true"

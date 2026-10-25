@@ -3,7 +3,7 @@ package dev.fileflow.rx
 import android.content.Context
 import dev.fileflow.SessionLog
 import dev.fileflow.secure.Envelope
-import dev.fileflow.secure.PairingKey
+import dev.fileflow.secure.SealKey
 import java.io.File
 import java.nio.ByteBuffer
 import java.util.concurrent.Executors
@@ -410,11 +410,11 @@ class LiveDecoder(
      * that anyone could have been showing (THREAT-MODEL T3).
      */
     //
-    // The verified bytes are an envelope (`Envelope`): opened here, with the pairing [key] when
-    // there is one, and refused -- [Envelope.UnpackException], nothing written -- when it is sealed
+    // The verified bytes are an envelope (`Envelope`): opened here, with whichever of [keys] -- the
+    // pairing, the teams -- it is sealed to, and refused -- [Envelope.UnpackException], nothing written -- when it is sealed
     // to another pairing, has been altered, or is plain while [requireEncrypted].
     fun saveVerified(
-        context: Context, key: PairingKey? = null, requireEncrypted: Boolean = false,
+        context: Context, keys: List<SealKey> = emptyList(), requireEncrypted: Boolean = false,
     ): SavedFile? {
         // Under the same lock as close(): leaving the screen at the moment of completion would
         // otherwise free the native receiver while its bytes were being read out.
@@ -425,7 +425,7 @@ class LiveDecoder(
         }
         // A sender from before envelopes sent the bare file; accepted only outside encrypted mode.
         val opened = if (Envelope.isEnvelope(received) || requireEncrypted) {
-            Envelope.unpack(received, key, requireEncrypted)
+            Envelope.unpack(received, keys, requireEncrypted)
         } else {
             Envelope.Unpacked(linkName, received, Envelope.CODEC_NONE, encrypted = false, received.size,
                               compressMs = 0, decompressMs = 0)
@@ -443,8 +443,8 @@ class LiveDecoder(
             }
         }
         return saved?.copy(linkBytes = opened.packedSize.toLong(), codec = opened.codec,
-                           encrypted = opened.encrypted, compressMs = opened.compressMs,
-                           decompressMs = opened.decompressMs)
+                           encrypted = opened.encrypted, sealedTo = opened.sealedTo?.label,
+                           compressMs = opened.compressMs, decompressMs = opened.decompressMs)
     }
 
     /** One file into Downloads/FileFlow, or the app's own folder failing that; null if neither. */
@@ -468,6 +468,8 @@ class LiveDecoder(
         /** 0 none, 1 deflate, 2 zstd. */
         val codec: Int = 0,
         val encrypted: Boolean = false,
+        /** Who it was sealed to, for the person: "paired phone", "team Field crew". */
+        val sealedTo: String? = null,
         /** What compressing cost the sender, and opening it cost here, ms. */
         val compressMs: Long = 0,
         val decompressMs: Long = 0,

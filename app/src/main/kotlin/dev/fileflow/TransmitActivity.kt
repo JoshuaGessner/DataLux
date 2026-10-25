@@ -11,6 +11,8 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import dev.fileflow.secure.Envelope
 import dev.fileflow.secure.PairingStore
+import dev.fileflow.secure.SealKey
+import dev.fileflow.secure.Teams
 import dev.fileflow.tx.OpticalRenderer
 import dev.fileflow.tx.ScreenShape
 import dev.fileflow.tx.Transmitter
@@ -177,6 +179,11 @@ class TransmitActivity : AppCompatActivity() {
             fail("That's ${uris.size} files. The most one transfer can carry is ${Envelope.MAX_BATCH_FILES}.")
             return
         }
+        if (uris.size > 1 && !Entitlements.has(Entitlements.Feature.Batch)) {
+            fail("Sending several files at once is part of FileFlow ${Entitlements.Feature.Batch.tier}. " +
+                "Send them one at a time.")
+            return
+        }
         encrypted = intent.getBooleanExtra("encrypted", false)
         val compression = runCatching {
             Envelope.Mode.valueOf(intent.getStringExtra("compression") ?: "")
@@ -188,11 +195,15 @@ class TransmitActivity : AppCompatActivity() {
         setContentView(message(if (uris.size > 1) "Preparing ${uris.size} files…" else "Preparing the file…"))
         Thread {
             val opened = runCatching {
-                // Encrypted mode with no pairing is refused here, never silently sent in the clear.
-                val key = if (encrypted) {
-                    PairingStore.current()
+                // Encrypted mode with no key is refused here, never silently sent in the clear.
+                val team = intent.getStringExtra("team")
+                val key: SealKey? = when {
+                    !encrypted -> null
+                    team != null -> Teams.store(this).find(team)
+                        ?: error("That team is no longer on this phone. Choose another, then send.")
+                    else -> PairingStore.current()
                         ?: error("Encrypted mode is on, but the phones aren't paired. Pair them, then send.")
-                } else null
+                }
                 val name: String
                 val p: Envelope.Packed
                 if (uris.size > 1) {

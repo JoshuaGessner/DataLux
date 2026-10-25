@@ -38,7 +38,11 @@ import com.google.zxing.qrcode.QRCodeReader
 import com.google.zxing.qrcode.QRCodeWriter
 import com.google.zxing.qrcode.decoder.ErrorCorrectionLevel
 import dev.fileflow.secure.Pairing
+import dev.fileflow.secure.PairingKey
 import dev.fileflow.secure.PairingStore
+import dev.fileflow.secure.Team
+import dev.fileflow.secure.TeamInvite
+import dev.fileflow.secure.Teams
 import dev.fileflow.ui.Ui.Style
 import dev.fileflow.ui.Ui.button
 import dev.fileflow.ui.Ui.dp
@@ -55,6 +59,11 @@ import dev.fileflow.ui.Ui.title
  * with its front camera, so one gesture exchanges both keys. When a phone has read its peer's key
  * it shows the six-digit code the two must agree on; when it also sees that the peer has read its
  * key, it closes by itself.
+ *
+ * The same screen hands out a team's key ([TeamInvite]). The leader opens it to invite
+ * ([EXTRA_INVITE]), the new member to join ([EXTRA_JOIN]); they pair exactly as above, then the
+ * leader's code becomes the team key sealed to that pairing, and the member's an acknowledgement.
+ * A pairing made for a team is used for nothing else, and is not kept.
  */
 class PairActivity : AppCompatActivity() {
 
@@ -73,6 +82,15 @@ class PairActivity : AppCompatActivity() {
     private var lastDecodeMs = 0L
     private var luma = ByteArray(0)
     @Volatile private var finishing = false
+
+    /** The team being handed out, on the leader's phone. */
+    private val inviting: Team? by lazy { Teams.store(this).find(intent.getStringExtra(EXTRA_INVITE)) }
+    private val joining by lazy { intent.getBooleanExtra(EXTRA_JOIN, false) }
+    private val forTeam get() = inviting != null || joining
+    private var key: PairingKey? = null
+    private var showingInvite = false
+    /** Set once the team has changed hands: the member's copy saved, or the leader shown its ack. */
+    private var teamDone = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -116,8 +134,9 @@ class PairActivity : AppCompatActivity() {
                     contentDescription = "Cancel"
                     setOnClickListener { finish() }
                 })
-                addView(title("Pair phones", 24f), LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-                addView(helpButton("Pairing", PAIR_HELP))
+                val heading = inviting?.let { "Invite to ${it.name}" } ?: if (joining) "Join a team" else "Pair phones"
+                addView(title(heading, 24f), LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+                addView(if (forTeam) helpButton("Teams", TEAM_HELP) else helpButton("Pairing", PAIR_HELP))
             })
             addView(space(12))
             addView(qr, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f))
@@ -128,6 +147,11 @@ class PairActivity : AppCompatActivity() {
             addView(button("Cancel", style = Style.Text) { finish() }, matchWidth(dp(4)))
         }
         setContentView(col.padForSystemBars())
+        if (joining) status.text = "Hold this phone face to face with the team leader's, which shows Invite."
+        if (inviting == null && intent.hasExtra(EXTRA_INVITE)) {
+            status.text = "That team is no longer on this phone."
+            return
+        }
         showQr()
     }
 
@@ -154,11 +178,14 @@ class PairActivity : AppCompatActivity() {
         }
     }
 
-    /** Draws this phone's current code: its key, plus an acknowledgement once it has the peer's. */
-    private fun showQr() {
+    /**
+     * Draws this phone's current code: its key, plus an acknowledgement once it has the peer's --
+     * or, for a team, [text].
+     */
+    private fun showQr(text: String = pairing.qrText()) {
         val size = 720
         val m = QRCodeWriter().encode(
-            pairing.qrText(), BarcodeFormat.QR_CODE, size, size,
+            text, BarcodeFormat.QR_CODE, size, size,
             mapOf(EncodeHintType.ERROR_CORRECTION to ErrorCorrectionLevel.M, EncodeHintType.MARGIN to 2),
         )
         val px = IntArray(size * size) { i -> if (m.get(i % size, i / size)) Color.BLACK else Color.WHITE }
@@ -166,18 +193,34 @@ class PairActivity : AppCompatActivity() {
     }
 
     private fun onRead(text: String) {
-        if (finishing) return
+        if (finishing || teamDone) return
+        if (forTeam && onTeamRead(text)) return
         when (pairing.read(text)) {
             Pairing.Read.NotOurs, Pairing.Read.Own -> return
             Pairing.Read.PeerKey -> {
                 // We hold their key; our code now says so, which is what completes THEIR side.
-                showQr()
+                if (!showingInvite) showQr()
                 showCode()
                 status.text = "Got it. Keep holding until both phones show this code."
             }
             Pairing.Read.PeerComplete -> {
-                showQr()
                 showCode()
+                val team = inviting
+                val k = key
+                if (team != null && k != null) {
+                    // Both phones hold the pairing key, so the member can open the team's now.
+                    if (!showingInvite) {
+                        showingInvite = true
+                        showQr(TeamInvite.encode(team, k))
+                    }
+                    status.text = "Paired. Handing over ${team.name}: keep holding…"
+                    return
+                }
+                showQr()
+                if (joining) {
+                    status.text = "Paired. Waiting for the team…"
+                    return
+                }
                 status.text = "Paired. Check both phones show the same code."
                 // A moment longer on screen, so the other phone sees this code's acknowledgement too.
                 qr.postDelayed({ complete() }, AUTO_CLOSE_MS)
@@ -185,16 +228,58 @@ class PairActivity : AppCompatActivity() {
         }
     }
 
+    /** A team invite or acknowledgement in [text]: true when it was one, handled. */
+    private fun onTeamRead(text: String): Boolean {
+        val isTeamCode = text.startsWith(TeamInvite.PREFIX) || text.startsWith(TeamInvite.ACK_PREFIX)
+        val k = key ?: return isTeamCode
+        val team = inviting
+        if (team != null && TeamInvite.isAck(text, team, k)) {
+            teamDone = true
+            status.text = "Done: the other phone has joined ${team.name}."
+            buzz()
+            qr.postDelayed({ complete() }, AUTO_CLOSE_MS)
+            return true
+        }
+        if (joining && text.startsWith(TeamInvite.PREFIX)) {
+            val joined = TeamInvite.decode(text, k) ?: run {
+                status.text = "That team code is for a different pairing. Cancel and pair with the leader again."
+                return true
+            }
+            Teams.store(this).add(joined)
+            teamDone = true
+            // Shown until the leader reads it, which is how THEIR screen knows to say done.
+            showQr(TeamInvite.ack(joined, k))
+            status.text = "Joined ${joined.name}. Hold a moment longer so the other phone sees it."
+            buzz()
+            qr.postDelayed({ complete() }, AUTO_CLOSE_MS * 2)
+            return true
+        }
+        return isTeamCode
+    }
+
     private fun showCode() {
-        val key = pairing.key() ?: return
-        PairingStore.set(key)
-        code.text = key.code
+        val k = key ?: pairing.key() ?: return
+        // A pairing made to pass on a team is not the phone's pairing: that is left as it was.
+        if (!forTeam) PairingStore.set(k)
+        if (key == null) buzz()
+        key = k
+        code.text = k.code
         code.visibility = View.VISIBLE
         done.visibility = View.VISIBLE
+    }
+
+    private fun buzz() {
         window.decorView.performHapticFeedback(android.view.HapticFeedbackConstants.CONFIRM)
     }
 
     private fun complete() {
+        if (forTeam) {
+            if (finishing) return
+            finishing = true
+            if (teamDone) setResult(RESULT_OK)
+            finish()
+            return
+        }
         if (finishing || PairingStore.current() == null) return
         finishing = true
         setResult(RESULT_OK)
@@ -318,6 +403,10 @@ class PairActivity : AppCompatActivity() {
     }
 
     companion object {
+        /** The [Team.idHex] of a team to hand out. */
+        const val EXTRA_INVITE = "invite"
+        /** Join a team, from a leader's phone showing [EXTRA_INVITE]. */
+        const val EXTRA_JOIN = "join"
         private const val REQ_CAMERA = 7
         private const val DECODE_EVERY_MS = 150L
         private const val AUTO_CLOSE_MS = 1800L
@@ -328,5 +417,12 @@ class PairActivity : AppCompatActivity() {
                 "Both phones then show a six-digit code. If they match, the pairing is yours. If " +
                 "they don't, cancel and pair again.\n\n" +
                 "A pairing lasts until you close FileFlow, or 30 minutes."
+        private const val TEAM_HELP =
+            "The leader taps Invite on the team; the new member taps Join a team. Hold the two " +
+                "phones face to face, as for pairing.\n\n" +
+                "They pair first, and check the six-digit codes match. Then the leader's screen " +
+                "shows the team's key, sealed so that only the phone it just paired with can open " +
+                "it — anyone else's camera learns nothing from it.\n\n" +
+                "When the member's phone has the key, both screens say so."
     }
 }
