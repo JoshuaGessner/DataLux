@@ -522,9 +522,13 @@ class MainActivity : AppCompatActivity() {
         val selecting = selected.isNotEmpty()
         clearSelectionOnBack.isEnabled = selecting
         selectionBar?.visibility = if (selecting) View.VISIBLE else View.GONE
+        // Each row's chevron gives way to the selection tick, which sits where it does.
+        rows.values.forEach { card ->
+            card.findViewWithTag<View>(CHEVRON)?.visibility = if (selecting) View.INVISIBLE else View.VISIBLE
+        }
         receivedSummary?.visibility = if (selecting || receivedItems.isEmpty()) View.GONE else View.VISIBLE
         val bytes = receivedItems.filter { it.uri in selected }.sumOf { it.bytes }
-        selectionLabel?.text = "${selected.size} selected · ${TransmitActivity.formatBytes(bytes)}"
+        selectionLabel?.text = "${selected.size} selected\n${TransmitActivity.formatBytes(bytes)}"
         receivedSummary?.text = "${receivedItems.size} ${if (receivedItems.size == 1) "file" else "files"} · " +
             TransmitActivity.formatBytes(receivedItems.sumOf { it.bytes })
     }
@@ -725,6 +729,7 @@ class MainActivity : AppCompatActivity() {
             }, LinearLayout.LayoutParams(0, WRAP, 1f))
             addView(ImageView(context).apply {
                 setImageResource(R.drawable.ic_chevron)
+                tag = CHEVRON
                 imageTintList = ColorStateList.valueOf(
                     themeColor(com.google.android.material.R.attr.colorOnSurfaceVariant),
                 )
@@ -771,6 +776,9 @@ class MainActivity : AppCompatActivity() {
         private const val TAB_SETTINGS = 4
         private const val MATCH = LinearLayout.LayoutParams.MATCH_PARENT
         private const val WRAP = LinearLayout.LayoutParams.WRAP_CONTENT
+
+        /** Tags a list row's chevron, which selection hides. */
+        private const val CHEVRON = "chevron"
 
         /** Received files listed at most; the rest are in the Files app. */
         private const val MAX_LISTED = 500
