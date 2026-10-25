@@ -32,6 +32,9 @@ jobs:
         run: |
           mkdir -p dist/FileFlow-linux-x86_64
           cp build/desktop-app/desktop/fileflow-send LICENSE README.md dist/FileFlow-linux-x86_64/
+          mkdir -p dist/FileFlow-linux-x86_64/share/icons/hicolor/512x512/apps dist/FileFlow-linux-x86_64/share/applications
+          cp build/desktop-app/desktop/icon/fileflow.png dist/FileFlow-linux-x86_64/share/icons/hicolor/512x512/apps/
+          cp desktop/linux/fileflow.desktop dist/FileFlow-linux-x86_64/share/applications/
           git rev-parse HEAD > dist/FileFlow-linux-x86_64/SOURCE_REVISION.txt
           tar -C dist -czf dist/FileFlow-linux-x86_64.tar.gz FileFlow-linux-x86_64
       - uses: actions/upload-artifact@v7

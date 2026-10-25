@@ -26,6 +26,9 @@
 // decoder. --snapshot-after S takes it S seconds in instead, whatever is showing. --code-window
 // presents in a window of its own even with one display, to try the presenter's view.
 #include "app.h"
+#ifndef __APPLE__
+#include "icon_art.h"
+#endif
 
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_main.h>
@@ -39,29 +42,6 @@
 namespace {
 
 using namespace fileflow::desktop;
-
-// The window's icon: the light grid's corner markers and a few lit cells, drawn small.
-SDL_Surface* Icon() {
-    constexpr int kSide = 64;
-    SDL_Surface* s = SDL_CreateSurface(kSide, kSide, SDL_PIXELFORMAT_ARGB8888);
-    if (s == nullptr) return nullptr;
-    const auto* fmt = SDL_GetPixelFormatDetails(s->format);
-    auto fill = [&](int x, int y, int w, int h, std::uint32_t rgb) {
-        const SDL_Rect r{x, y, w, h};
-        SDL_FillSurfaceRect(s, &r, SDL_MapRGB(fmt, nullptr, static_cast<Uint8>(rgb >> 16), static_cast<Uint8>(rgb >> 8),
-                                              static_cast<Uint8>(rgb)));
-    };
-    fill(0, 0, kSide, kSide, 0x0B2A33);
-    for (const auto& [x, y] : {std::pair{8, 8}, std::pair{36, 8}, std::pair{8, 36}}) {
-        fill(x, y, 20, 20, 0xE1E6E8);
-        fill(x + 3, y + 3, 14, 14, 0x0B2A33);
-        fill(x + 7, y + 7, 6, 6, 0xE1E6E8);
-    }
-    fill(38, 38, 8, 8, 0x7DD3F0);
-    fill(48, 48, 8, 8, 0xA8E6A1);
-    fill(48, 38, 8, 8, 0xE1E6E8);
-    return s;
-}
 
 int Usage() {
     std::fprintf(stderr,
@@ -135,10 +115,16 @@ int main(int argc, char** argv) {
         return 1;
     }
     SDL_SetWindowMinimumSize(window, 520, 560);
-    if (SDL_Surface* icon = Icon()) {
-        SDL_SetWindowIcon(window, icon);
-        SDL_DestroySurface(icon);
+    // On macOS SDL_SetWindowIcon replaces NSApp's Dock icon. Keep the native multi-resolution
+    // .icns from the bundle, with its transparent margin and rounded silhouette.
+#ifndef __APPLE__
+    // The taskbar/window icon uses the same artwork as the packaged .ico and Linux launcher.
+    auto icon_pixels = icon::Draw(128);
+    if (SDL_Surface* surface = SDL_CreateSurfaceFrom(128, 128, SDL_PIXELFORMAT_RGBA32, icon_pixels.data(), 128 * 4)) {
+        SDL_SetWindowIcon(window, surface);
+        SDL_DestroySurface(surface);
     }
+#endif
     // Presenting waits for the display's refresh: the clock every frame is counted against.
     SDL_SetRenderVSync(renderer, 1);
 
