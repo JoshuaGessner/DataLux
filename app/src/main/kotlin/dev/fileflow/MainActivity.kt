@@ -379,6 +379,7 @@ class MainActivity : AppCompatActivity() {
     private fun refreshReceived() {
         val list = receivedList ?: return
         list.removeAllViews()
+        thumbnails.queue.clear()  // pictures for the rows just removed
         data class Item(
             val uri: android.net.Uri, val name: String, val bytes: Long, val mime: String?,
             val addedS: Long,
@@ -428,6 +429,43 @@ class MainActivity : AppCompatActivity() {
             .apply { setPadding(0, dp(12), 0, 0) }, matchWidth())
     }
 
+    /**
+     * Deletes received files. This install's own are deleted outright; one saved by an earlier
+     * install is not the app's to delete, so Android asks the person -- once, for all of them.
+     */
+    private fun deleteFiles(uris: List<android.net.Uri>) {
+        val refused = uris.filter { uri ->
+            !runCatching { contentResolver.delete(uri, null, null) > 0 }.getOrDefault(false)
+        }
+        if (refused.isNotEmpty()) {
+            runCatching {
+                val request = MediaStore.createDeleteRequest(contentResolver, refused)
+                confirmDelete.launch(androidx.activity.result.IntentSenderRequest.Builder(request).build())
+            }.onFailure {
+                android.widget.Toast.makeText(this, "Delete it from the Files app.",
+                    android.widget.Toast.LENGTH_LONG).show()
+            }
+        }
+        refreshReceived()
+    }
+
+    private val confirmDelete = registerForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.StartIntentSenderForResult(),
+    ) { refreshReceived() }
+
+    /**
+     * Loads list thumbnails: two at a time, however many rows a refresh builds. It used to start a
+     * thread per row on every visit to the tab, up to a hundred at once.
+     */
+    private val thumbnails = java.util.concurrent.ThreadPoolExecutor(
+        2, 2, 0L, java.util.concurrent.TimeUnit.MILLISECONDS, java.util.concurrent.LinkedBlockingQueue(),
+    )
+
+    override fun onDestroy() {
+        super.onDestroy()
+        thumbnails.shutdownNow()
+    }
+
     /** Share or delete a received file. */
     private fun fileMenu(anchor: View, uri: android.net.Uri, name: String, mime: String) {
         android.widget.PopupMenu(this, anchor).apply {
@@ -444,20 +482,7 @@ class MainActivity : AppCompatActivity() {
                     .setTitle("Delete $name?")
                     .setMessage("It will be removed from Downloads › ${LiveDecoder.DOWNLOADS_SUBDIR}.")
                     .setNegativeButton("Cancel", null)
-                    .setPositiveButton("Delete") { _, _ ->
-                        // Files this app saved are its own to delete. One saved by an earlier
-                        // install is not, and Android would need the person's consent; the Files
-                        // app is the honest route for that rare case.
-                        val ok = runCatching { contentResolver.delete(uri, null, null) > 0 }
-                            .getOrDefault(false)
-                        if (!ok) {
-                            android.widget.Toast.makeText(
-                                this@MainActivity, "Delete it from the Files app.",
-                                android.widget.Toast.LENGTH_LONG,
-                            ).show()
-                        }
-                        refreshReceived()
-                    }
+                    .setPositiveButton("Delete") { _, _ -> deleteFiles(listOf(uri)) }
                     .show()
                 true
             }
@@ -573,10 +598,10 @@ class MainActivity : AppCompatActivity() {
             // the generic icon stays if the provider has no thumbnail to give.
             if (thumbnailOf != null) {
                 iconView.scaleType = ImageView.ScaleType.CENTER_INSIDE
-                Thread {
+                thumbnails.execute {
                     val bmp = runCatching {
                         contentResolver.loadThumbnail(thumbnailOf, android.util.Size(dp(96), dp(96)), null)
-                    }.getOrNull() ?: return@Thread
+                    }.getOrNull() ?: return@execute
                     iconView.post {
                         iconView.imageTintList = null
                         iconView.scaleType = ImageView.ScaleType.CENTER_CROP
@@ -588,7 +613,7 @@ class MainActivity : AppCompatActivity() {
                         }
                         iconView.setImageBitmap(bmp)
                     }
-                }.start()
+                }
             }
             addView(LinearLayout(context).apply {
                 orientation = LinearLayout.VERTICAL

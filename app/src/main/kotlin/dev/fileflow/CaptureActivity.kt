@@ -940,74 +940,88 @@ class CaptureActivity : AppCompatActivity() {
         liveFinished = true
         liveRecorder?.cancel()
         val decoder = liveDecoder ?: return
-        // Off the UI thread: the file can be megabytes.
+        // Off the UI thread: the file can be megabytes. The decoder holds the verified bytes, so it
+        // is freed only once they are saved -- leaving the screen at the moment of completion used
+        // to free it first, and the save then found nothing to save: a verified file, lost.
+        saving.set(true)
         Thread {
-            // Opened with the pairing, if any; in encrypted mode a plain or foreign file is refused,
-            // and the refusal says why instead of passing for a storage failure.
-            var refused: String? = null
-            if (s.phase == LivePhase.Verified && s.lensStrength != 0.0) {
-                getSharedPreferences(LENS_PREFS, MODE_PRIVATE).edit()
-                    .putFloat(PREF_LENS_K1, s.lensStrength.toFloat()).apply()
-            }
-            val saved = if (s.phase == LivePhase.Verified) {
-                runCatching {
-                    decoder.saveVerified(this, PairingStore.current(), requireEncrypted = encrypted)
-                }.onFailure { e ->
-                    if (e is Envelope.UnpackException) refused = e.failure.message
-                }.getOrNull()
-            } else null
-            val seconds = elapsedMs / 1000.0
-            // The link's own time, first data to verified; the whole time from Receive includes
-            // finding the sender, which is the person's, not the link's.
-            val link = if (s.transferSeconds > 0.0) s.transferSeconds else seconds
-            val report = buildString {
-                if (s.phase == LivePhase.Verified && saved != null) {
-                    appendLine("RECEIVED — verified")
-                    appendLine()
-                    appendLine("  file        ${saved.name}")
-                    appendLine("  size        ${TransmitActivity.formatBytes(saved.bytes)}")
-                    appendLine("  integrity   SHA-256 matched the sender's")
-                    appendLine("  transfer    ${"%.1f".format(link)} s, first data to verified")
-                    appendLine("  link        ${"%.1f".format(saved.linkBytes / 1024.0 / link)} KB/s, " +
-                               "${TransmitActivity.formatBytes(saved.linkBytes)} on the link")
-                    if (saved.compressed) {
-                        val gain = gainOf(saved, link)
-                        appendLine("  compressed  ${Throughput.codecName(saved.codec)}, " +
-                                   "${"%.2f".format(gain.ratio)}x; ${saved.compressMs} ms to compress, " +
-                                   "${saved.decompressMs} ms to open")
-                        appendLine("  effective   ${"%.1f".format(gain.effectiveRate / 1024.0)} KB/s " +
-                                   "of file, all costs counted; ${Throughput.describeSaving(gain.secondsSaved)} " +
-                                   "against ${"%.1f".format(gain.uncompressedSeconds)} s uncompressed")
-                    } else {
-                        appendLine("  compressed  no" + if (saved.compressMs > 0) {
-                            " (the sender's ${saved.compressMs} ms check found it would not shrink)"
-                        } else "")
-                    }
-                    if (saved.encrypted) appendLine("  encrypted   AES-256-GCM, paired key")
-                    appendLine("  from Receive ${"%.1f".format(seconds)} s, " +
-                               "${"%.1f".format(saved.bytes / 1024.0 / seconds)} KB/s " +
-                               "(includes finding the sender)")
-                    appendLine("  grid        ${s.cols}x${s.rows}")
-                    appendLine()
-                    appendLine("  saved to    ${saved.location}")
-                } else if (refused != null) {
-                    appendLine("REFUSED")
-                    appendLine()
-                    appendLine(refused)
-                } else if (s.phase == LivePhase.Verified) {
-                    appendLine("RECEIVED and verified, but it could not be saved to storage.")
-                } else {
-                    appendLine("TRANSFER FAILED")
-                    appendLine()
-                    appendLine(s.message)
+            try {
+                // Opened with the pairing, if any; in encrypted mode a plain or foreign file is refused,
+                // and the refusal says why instead of passing for a storage failure.
+                var refused: String? = null
+                if (s.phase == LivePhase.Verified && s.lensStrength != 0.0) {
+                    getSharedPreferences(LENS_PREFS, MODE_PRIVATE).edit()
+                        .putFloat(PREF_LENS_K1, s.lensStrength.toFloat()).apply()
                 }
-                appendLine()
-                appendLine("  frames read ${s.frames}")
+                val saved = if (s.phase == LivePhase.Verified) {
+                    runCatching {
+                        decoder.saveVerified(this, PairingStore.current(), requireEncrypted = encrypted)
+                    }.onFailure { e ->
+                        if (e is Envelope.UnpackException) refused = e.failure.message
+                    }.getOrNull()
+                } else null
+                val seconds = elapsedMs / 1000.0
+                // The link's own time, first data to verified; the whole time from Receive includes
+                // finding the sender, which is the person's, not the link's.
+                val link = if (s.transferSeconds > 0.0) s.transferSeconds else seconds
+                val report = buildString {
+                    if (s.phase == LivePhase.Verified && saved != null) {
+                        appendLine("RECEIVED — verified")
+                        appendLine()
+                        appendLine("  file        ${saved.name}")
+                        appendLine("  size        ${TransmitActivity.formatBytes(saved.bytes)}")
+                        appendLine("  integrity   SHA-256 matched the sender's")
+                        appendLine("  transfer    ${"%.1f".format(link)} s, first data to verified")
+                        appendLine("  link        ${"%.1f".format(saved.linkBytes / 1024.0 / link)} KB/s, " +
+                                   "${TransmitActivity.formatBytes(saved.linkBytes)} on the link")
+                        if (saved.compressed) {
+                            val gain = gainOf(saved, link)
+                            appendLine("  compressed  ${Throughput.codecName(saved.codec)}, " +
+                                       "${"%.2f".format(gain.ratio)}x; ${saved.compressMs} ms to compress, " +
+                                       "${saved.decompressMs} ms to open")
+                            appendLine("  effective   ${"%.1f".format(gain.effectiveRate / 1024.0)} KB/s " +
+                                       "of file, all costs counted; ${Throughput.describeSaving(gain.secondsSaved)} " +
+                                       "against ${"%.1f".format(gain.uncompressedSeconds)} s uncompressed")
+                        } else {
+                            appendLine("  compressed  no" + if (saved.compressMs > 0) {
+                                " (the sender's ${saved.compressMs} ms check found it would not shrink)"
+                            } else "")
+                        }
+                        if (saved.encrypted) appendLine("  encrypted   AES-256-GCM, paired key")
+                        appendLine("  from Receive ${"%.1f".format(seconds)} s, " +
+                                   "${"%.1f".format(saved.bytes / 1024.0 / seconds)} KB/s " +
+                                   "(includes finding the sender)")
+                        appendLine("  grid        ${s.cols}x${s.rows}")
+                        appendLine()
+                        appendLine("  saved to    ${saved.location}")
+                    } else if (refused != null) {
+                        appendLine("REFUSED")
+                        appendLine()
+                        appendLine(refused)
+                    } else if (s.phase == LivePhase.Verified) {
+                        appendLine("RECEIVED and verified, but it could not be saved to storage.")
+                    } else {
+                        appendLine("TRANSFER FAILED")
+                        appendLine()
+                        appendLine(s.message)
+                    }
+                    appendLine()
+                    appendLine("  frames read ${s.frames}")
+                }
+                report.lineSequence().forEach { SessionLog.i(LOG_TAG, it) }
+                runOnUiThread {
+                    if (!isFinishing && !isDestroyed) showResult(report, saved, s, link, seconds, refused)
+                }
+            } finally {
+                saving.set(false)
+                if (destroyed) decoder.close()  // the screen went away while this was saving
             }
-            report.lineSequence().forEach { SessionLog.i(LOG_TAG, it) }
-            runOnUiThread { showResult(report, saved, s, link, seconds, refused) }
         }.start()
     }
+
+    /** A verified file is being saved; the decoder holding it must outlive the screen until then. */
+    private val saving = java.util.concurrent.atomic.AtomicBoolean(false)
+    @Volatile private var destroyed = false
 
     /** The link's rate over [link] seconds, and what compression made of it. */
     private fun gainOf(saved: LiveDecoder.SavedFile, link: Double) = Throughput(
@@ -1242,10 +1256,12 @@ class CaptureActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
+        destroyed = true
         aimRecorder?.cancel()
         aimThread?.join(2000)
         liveRecorder?.cancel()
-        liveDecoder?.close()
+        // Unless a verified file is still being saved from it: the saving thread frees it then.
+        if (!saving.get()) liveDecoder?.close()
         thermalListener?.let {
             getSystemService(android.os.PowerManager::class.java)?.removeThermalStatusListener(it)
         }

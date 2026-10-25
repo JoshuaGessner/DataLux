@@ -247,7 +247,11 @@ object Envelope {
         val probe = codec.compress(sample, codec.probeLevel, longWindow = false) ?: return data
         if (probe.size > sample.size * PROBE_MAX_RATIO) return data
         val (level, longWindow) = when (mode) {
-            Mode.Maximum -> codec.maxLevel to true
+            // The strongest level's tables grow with the input: zstd 22 on a 64 MB file wants
+            // several hundred MB, which a mid-range phone does not have to give. Past 16 MB, 19 --
+            // within a few percent of 22, in a tenth of the memory.
+            Mode.Maximum ->
+                (if (data.size <= 16 * 1024 * 1024) codec.maxLevel else 19.coerceAtMost(codec.maxLevel)) to true
             // zstd 19 compresses a few MB/s on a phone; past 32 MB that starts to rival the time
             // it saves, so a little lighter. The long window only matters past its default size.
             else -> (if (data.size <= 32 * 1024 * 1024) 19 else 15).coerceAtMost(codec.maxLevel) to
