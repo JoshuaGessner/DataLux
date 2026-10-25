@@ -98,6 +98,10 @@ struct ReceiveConfig {
     // Symbols decoded before the manifest are kept and replayed once it arrives, so a receiver
     // that misses the first manifest loses nothing. Bounded: 4096 frames is ~13 MB at 120x260.
     std::size_t max_buffered_frames = 4096;
+    // Refuse an in-band manifest larger than this before FileReceiver allocates fountain state.
+    // The protocol ceiling remains FileManifest::kMaxFileSize; platforms with tighter memory
+    // budgets (notably wasm32/mobile browsers) should lower it.
+    std::uint64_t max_file_bytes = FileManifest::kMaxFileSize;
 };
 
 enum class FrameOutcome : std::uint8_t {

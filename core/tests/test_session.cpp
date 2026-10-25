@@ -1,4 +1,6 @@
 // Session layer (C13a): the receiver learns everything but the grid from the frames themselves.
+#include <fileflow/envelope.h>
+#include <fileflow/hash.h>
 #include <fileflow/session.h>
 #include <fileflow/sim/channel.h>
 
@@ -57,6 +59,30 @@ TEST(Session, ReceiverNeedsOnlyTheGrid) {
     EXPECT_EQ(rx.value().stats().fec_fail, 0u);
 }
 
+// Cross-build golden: web/tests/transport-wasm.test.js constructs the identical uncompressed FFE2
+// envelope, then asks the Emscripten build of this same protocol path for these two matrices. Fixed
+// hashes catch ABI/packing/default drift between the native and checked-in browser artifacts.
+TEST(Session, NativeAndWasmShareGoldenOpticalCells) {
+    std::vector<std::uint8_t> raw(64);
+    for (std::size_t i = 0; i < raw.size(); ++i) raw[i] = static_cast<std::uint8_t>(i * 17 + 3);
+    auto envelope = PackEnvelope(raw, "golden.bin", CompressionMode::kOff);
+    ASSERT_TRUE(envelope.ok());
+    EXPECT_EQ(ToHex(Sha256::Of(envelope.value().bytes)),
+              "acc8e2cb1c4282c13600e0539c8f458245fb1d0870819002dea9375f750c957d");
+    const auto session_id = SessionIdFor(envelope.value().bytes, "golden.bin");
+    EXPECT_EQ(session_id, 3817050787u);
+    auto tx = TransmitSession::Create(Layout(), envelope.value().bytes, "golden.bin", session_id);
+    ASSERT_TRUE(tx.ok());
+
+    CellMatrix cells(120, 200);
+    ASSERT_TRUE(tx.value().Next(&cells).ok());
+    EXPECT_EQ(ToHex(Sha256::Of(cells.data())),
+              "95eec4355cf3f1a59be7e192392f8d60b0a557e7de0729ef0704733f02c9e8f9");
+    ASSERT_TRUE(tx.value().Next(&cells).ok());
+    EXPECT_EQ(ToHex(Sha256::Of(cells.data())),
+              "88479d55572fea1fd1f0d6f0fe45c4ef4523a5e9d53a2b31598515024f61d8bd");
+}
+
 TEST(Session, RejectsContentHintThatWouldOverflowTheManifestFrame) {
     TransmitConfig cfg;
     cfg.fec_nsym = 0;
@@ -64,6 +90,30 @@ TEST(Session, RejectsContentHintThatWouldOverflowTheManifestFrame) {
     cfg.content = ContentHint{.original_size = 2000, .codec = 2, .compress_ms = 1};
     EXPECT_EQ(TransmitSession::Create(Layout(), Payload(1000), "x", 1, cfg).error(),
               Error::kValueOutOfRange);
+}
+
+TEST(Session, ReceiverRejectsOversizedManifestBeforeStartingTransfer) {
+    const auto payload = Payload(2048);
+    auto tx = TransmitSession::Create(Layout(), payload, "too-large.bin", 0xB0AD);
+    ASSERT_TRUE(tx.ok());
+    ReceiveConfig cfg;
+    cfg.max_file_bytes = 1024;
+    auto rx = ReceiveSession::Create(Layout(), cfg);
+    ASSERT_TRUE(rx.ok());
+
+    CellMatrix frame(120, 200);
+    ASSERT_TRUE(tx.value().Next(&frame).ok());
+    EXPECT_EQ(rx.value().Ingest(Clean(frame), 1), FrameOutcome::kManifestRejected);
+    EXPECT_EQ(rx.value().manifest(), nullptr);
+    EXPECT_EQ(rx.value().stats().manifests_rejected, 1u);
+}
+
+TEST(Session, ReceiverRejectsInvalidConfiguredFileLimit) {
+    ReceiveConfig cfg;
+    cfg.max_file_bytes = 0;
+    EXPECT_EQ(ReceiveSession::Create(Layout(), cfg).error(), Error::kValueOutOfRange);
+    cfg.max_file_bytes = FileManifest::kMaxFileSize + 1;
+    EXPECT_EQ(ReceiveSession::Create(Layout(), cfg).error(), Error::kValueOutOfRange);
 }
 
 TEST(Session, SymbolsReadBeforeTheManifestAreNotWasted) {

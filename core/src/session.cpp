@@ -106,6 +106,9 @@ double ReceiveStats::distinct_rate() const noexcept {
 Result<ReceiveSession> ReceiveSession::Create(const FrameLayout& layout, ReceiveConfig cfg) {
     const M0Modulator mod(layout);
     if (mod.header_capacity_bytes() < HeaderCodec{}.coded_size()) return Error::kValueOutOfRange;
+    if (cfg.max_file_bytes == 0 || cfg.max_file_bytes > FileManifest::kMaxFileSize) {
+        return Error::kValueOutOfRange;
+    }
     return ReceiveSession(layout, cfg);
 }
 
@@ -153,7 +156,8 @@ FrameOutcome ReceiveSession::AcceptManifest(const FrameHeader& h,
     // Attacker-controlled bytes: Decode bounds and CRCs everything, Validate runs inside it, and
     // the receiver allocates only what a validated manifest declares (INPUT-VALIDATION SR-1/2).
     auto m = FileManifest::Decode(bytes);
-    if (!m.ok() || m.value().session_id != h.session_id) {
+    if (!m.ok() || m.value().session_id != h.session_id ||
+        m.value().file_size > cfg_.max_file_bytes) {
         ++stats_.manifests_rejected;
         return FrameOutcome::kManifestRejected;
     }
