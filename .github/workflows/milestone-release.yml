@@ -494,8 +494,8 @@ jobs:
           RELEASE_ID="$(gh release view "$TAG" --json databaseId --jq '.databaseId')"
           gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" > release-after-packages.json
           python3 - <<'PY'
-          import hashlib, json, os, pathlib, subprocess
-          repo, version = os.environ["GITHUB_REPOSITORY"], os.environ["VERSION"]
+          import hashlib, json, os, pathlib, subprocess, urllib.parse
+          repo, tag, version = os.environ["GITHUB_REPOSITORY"], os.environ["TAG"], os.environ["VERSION"]
           release = json.loads(pathlib.Path("release-after-packages.json").read_text())
           records = json.loads(pathlib.Path("package-records.json").read_text())
           assets = {asset["name"]: asset for asset in release["assets"]}
@@ -520,7 +520,8 @@ jobs:
               if hashlib.sha256(destination.read_bytes()).hexdigest() != expected:
                   raise SystemExit(f"::error::Downloaded bytes mismatch for {record['name']}")
               signing, notes, known = details[record["platform"]]
-              manifest_artifacts.append({**record, "url": asset["browser_download_url"],
+              final_url = f"https://github.com/{repo}/releases/download/{tag}/{urllib.parse.quote(record['name'], safe='')}"
+              manifest_artifacts.append({**record, "url": final_url,
                                          "signing": signing, "notes": notes, "knownIssues": known})
           manifest = {"schemaVersion": 1, "version": version, "date": os.environ["PUBLISHED_DATE"], "artifacts": manifest_artifacts}
           manifest_path = pathlib.Path("fileflow-release-manifest.json")
@@ -588,8 +589,11 @@ jobs:
           TAG: ${{ needs.validate.outputs.tag }}
         run: |
           set -euo pipefail
-          if [[ "$(date -u +%F)" != "$RELEASE_DATE" ]]; then
+          hide_manifest() {
             gh release delete-asset "$TAG" fileflow-release-manifest.json --yes || true
+          }
+          trap 'PUBLISH_EXIT_CODE=$?; if [[ "$PUBLISH_EXIT_CODE" != 0 ]]; then hide_manifest; fi; exit "$PUBLISH_EXIT_CODE"' EXIT
+          if [[ "$(date -u +%F)" != "$RELEASE_DATE" ]]; then
             echo "::error::The UTC date changed before publication; the draft remains hidden."
             exit 1
           fi
@@ -599,10 +603,19 @@ jobs:
           PUBLISHED_AT="$(jq -r '.published_at // empty' published-release.json)"
           if [[ "$(jq -r '.draft' published-release.json)" != "false" || \
                 "${PUBLISHED_AT%%T*}" != "$RELEASE_DATE" ]]; then
-            gh release delete-asset "$TAG" fileflow-release-manifest.json --yes || true
             echo "::error::Publication state/date verification failed; the manifest was removed to hide the release feed."
             exit 1
           fi
+          python3 - <<'PY'
+          import json, pathlib
+          release = json.loads(pathlib.Path("published-release.json").read_text())
+          manifest = json.loads(pathlib.Path("fileflow-release-manifest.json").read_text())
+          assets = {asset["name"]: asset for asset in release["assets"]}
+          for artifact in manifest["artifacts"]:
+              asset = assets.get(artifact["name"])
+              if not asset or asset["browser_download_url"] != artifact["url"]:
+                  raise SystemExit(f"::error::Final GitHub download URL mismatch for {artifact['name']}")
+          PY
           gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" > published-tag-ref.json
           python3 - <<'PY'
           import json, os, pathlib, subprocess
@@ -618,4 +631,5 @@ jobs:
               raise SystemExit(
                   f"::error::{os.environ['TAG']} resolves to {obj['sha']}, expected {expected}")
           PY
+          trap - EXIT
           echo "## Published native milestone: $TAG" >> "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,142 @@
+name: repair v0.2.0 release metadata
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: native-milestone-release
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  repair:
+    name: verify and repair v0.2.0 metadata only
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    env:
+      GH_REPO: ${{ github.repository }}
+      TAG: v0.2.0
+    steps:
+      - name: Require the repository owner and main workflow definition
+        env:
+          ACTOR: ${{ github.actor }}
+          OWNER: ${{ github.repository_owner }}
+          WORKFLOW_REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          if [[ "$ACTOR" != "$OWNER" ]]; then
+            echo "::error::Only the repository owner may repair release metadata."
+            exit 1
+          fi
+          if [[ "$WORKFLOW_REF" != "refs/heads/main" ]]; then
+            echo "::error::This one-time repair must use the reviewed workflow on main."
+            exit 1
+          fi
+
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+
+      - name: Test the offline repair validator
+        run: python3 tests/test_repair_release_metadata.py
+
+      - name: Download and verify the exact published release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p repair-work/original repair-work/repaired repair-work/audit
+          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" > repair-work/audit/release-original.json
+          gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" > repair-work/audit/tag-ref-original.json
+          for NAME in \
+            FileFlow-v0.2.0-android-arm64-v8a-debug.apk \
+            FileFlow-v0.2.0-linux-x86_64.tar.gz \
+            FileFlow-v0.2.0-macos-arm64.zip \
+            FileFlow-v0.2.0-windows-x86_64.zip \
+            SHA256SUMS \
+            fileflow-release-manifest.json
+          do
+            ASSET_ID="$(jq -er --arg name "$NAME" '.assets[] | select(.name == $name) | .id' repair-work/audit/release-original.json)"
+            gh api "repos/$GITHUB_REPOSITORY/releases/assets/$ASSET_ID" \
+              -H 'Accept: application/octet-stream' > "repair-work/original/$NAME"
+          done
+          python3 scripts/repair_release_metadata.py prepare \
+            --release repair-work/audit/release-original.json \
+            --tag-ref repair-work/audit/tag-ref-original.json \
+            --original-dir repair-work/original \
+            --output-dir repair-work/repaired
+          cp repair-work/original/SHA256SUMS repair-work/audit/SHA256SUMS.original
+          cp repair-work/original/fileflow-release-manifest.json repair-work/audit/fileflow-release-manifest.original.json
+          cp repair-work/repaired/SHA256SUMS repair-work/audit/SHA256SUMS.repaired
+          cp repair-work/repaired/fileflow-release-manifest.json repair-work/audit/fileflow-release-manifest.repaired.json
+          cp repair-work/repaired/package-snapshot.json repair-work/audit/package-snapshot.json
+          sha256sum repair-work/original/* > repair-work/audit/downloaded-assets.sha256
+
+      - name: Preserve the reviewed before-and-after metadata audit
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: v0.2.0-metadata-repair-audit
+          path: repair-work/audit
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Hide the bad feed and publish corrected metadata last
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          hide_manifest() {
+            gh release delete-asset "$TAG" fileflow-release-manifest.json --yes || true
+          }
+          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" > repair-work/release-pre-mutation.json
+          gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" > repair-work/tag-ref-pre-mutation.json
+          python3 scripts/repair_release_metadata.py prepare \
+            --release repair-work/release-pre-mutation.json \
+            --tag-ref repair-work/tag-ref-pre-mutation.json \
+            --original-dir repair-work/original \
+            --output-dir repair-work/recheck
+
+          OLD_MANIFEST_ID="$(jq -er '.assets[] | select(.name == "fileflow-release-manifest.json") | .id' repair-work/release-pre-mutation.json)"
+          OLD_CHECKSUMS_ID="$(jq -er '.assets[] | select(.name == "SHA256SUMS") | .id' repair-work/release-pre-mutation.json)"
+          # Only hide our feed after the identity/digest guard has passed. A failed
+          # precheck must not remove metadata that somebody else already repaired.
+          trap 'REPAIR_EXIT_CODE=$?; if [[ "$REPAIR_EXIT_CODE" != 0 ]]; then hide_manifest; fi; exit "$REPAIR_EXIT_CODE"' EXIT
+          gh api --method DELETE "repos/$GITHUB_REPOSITORY/releases/assets/$OLD_MANIFEST_ID"
+          gh api --method DELETE "repos/$GITHUB_REPOSITORY/releases/assets/$OLD_CHECKSUMS_ID"
+
+          gh release upload "$TAG" repair-work/repaired/SHA256SUMS
+          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" > repair-work/release-after-checksums.json
+          NEW_CHECKSUMS_ID="$(jq -er '.assets[] | select(.name == "SHA256SUMS") | .id' repair-work/release-after-checksums.json)"
+          EXPECTED_CHECKSUMS_DIGEST="sha256:$(sha256sum repair-work/repaired/SHA256SUMS | cut -d' ' -f1)"
+          if [[ "$(jq -r '.assets[] | select(.name == "SHA256SUMS") | .digest' repair-work/release-after-checksums.json)" != "$EXPECTED_CHECKSUMS_DIGEST" ]]; then
+            echo "::error::GitHub retained different SHA256SUMS bytes."
+            exit 1
+          fi
+          gh api "repos/$GITHUB_REPOSITORY/releases/assets/$NEW_CHECKSUMS_ID" \
+            -H 'Accept: application/octet-stream' > repair-work/downloaded-SHA256SUMS
+          cmp repair-work/repaired/SHA256SUMS repair-work/downloaded-SHA256SUMS
+
+          gh release upload "$TAG" repair-work/repaired/fileflow-release-manifest.json
+          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" > repair-work/release-final.json
+          gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" > repair-work/tag-ref-final.json
+          NEW_MANIFEST_ID="$(jq -er '.assets[] | select(.name == "fileflow-release-manifest.json") | .id' repair-work/release-final.json)"
+          EXPECTED_MANIFEST_DIGEST="sha256:$(sha256sum repair-work/repaired/fileflow-release-manifest.json | cut -d' ' -f1)"
+          if [[ "$(jq -r '.assets[] | select(.name == "fileflow-release-manifest.json") | .digest' repair-work/release-final.json)" != "$EXPECTED_MANIFEST_DIGEST" ]]; then
+            echo "::error::GitHub retained different manifest bytes."
+            exit 1
+          fi
+          gh api "repos/$GITHUB_REPOSITORY/releases/assets/$NEW_MANIFEST_ID" \
+            -H 'Accept: application/octet-stream' > repair-work/downloaded-manifest.json
+          cmp repair-work/repaired/fileflow-release-manifest.json repair-work/downloaded-manifest.json
+          python3 scripts/repair_release_metadata.py verify-final \
+            --release repair-work/release-final.json \
+            --tag-ref repair-work/tag-ref-final.json \
+            --repaired-dir repair-work/repaired \
+            --snapshot repair-work/repaired/package-snapshot.json
+
+          trap - EXIT
+          echo "## Repaired v0.2.0 metadata; installer assets and tag remained unchanged" >> "$GITHUB_STEP_SUMMARY"

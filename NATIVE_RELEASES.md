@@ -103,8 +103,10 @@ The canonical feed asset is `fileflow-release-manifest.json`. Schema version 1 i
 
 `version` is bare SemVer; its Git tag and GitHub Release are `v${version}`. `date` is the workflow's
 UTC release date; a publication run verifies it equals the GitHub Release's `published_at` date and
-removes the manifest if it does not. Each URL is the exact `browser_download_url` reported by the
-same GitHub Release API response. `signing.status` is one of `unsigned`, `ad-hoc`, or `signed`.
+removes the manifest if it does not. GitHub gives draft assets temporary `untagged-*` URLs, so the
+workflow writes the canonical final tag URL and, immediately after publication, requires it to equal
+the exact `browser_download_url` reported by the published Release API. A mismatch removes the
+manifest and fails closed. `signing.status` is one of `unsigned`, `ad-hoc`, or `signed`.
 
 The separate `SHA256SUMS` asset covers every package and the manifest itself. Before making the
 manifest visible, the workflow:
@@ -117,14 +119,32 @@ manifest visible, the workflow:
    the received bytes;
 5. creates and uploads `SHA256SUMS`, then verifies its server digest and downloaded bytes;
 6. uploads `fileflow-release-manifest.json` last and verifies it the same way; and
-7. publishes the draft only when `publish_release=true`, marking hyphenated SemVer as prerelease.
+7. publishes the draft only when `publish_release=true`, marking hyphenated SemVer as prerelease;
+   and
+8. verifies every final manifest URL against the published Release API and verifies the tag still
+   resolves to the reviewed source commit.
 
 The download feed must expose a package only when both metadata assets exist and all of these values
 agree: manifest name and hash, `SHA256SUMS`, GitHub API asset name and digest, and same-release API
 download URL. A draft is never visible in the public feed. A failed publication may leave a draft
 or a published release without a manifest, which is also intentionally invisible. Release assets
-are immutable: repair means reviewing the failure and starting a fresh version or deliberately
-removing the incomplete draft and tag before rerunning.
+are treated as immutable. Ordinarily, repair means reviewing the failure and starting a fresh
+version or deliberately removing an incomplete draft and tag before rerunning.
+
+### Audited v0.2.0 metadata repair
+
+The first v0.2.0 publication exposed GitHub's temporary draft URLs in the manifest. Those URLs became
+404s when GitHub published the draft under its final tag. The owner-only, workflow-dispatch-only
+`repair-release-metadata.yml` is narrowly locked to the original v0.2.0 release ID, tag, source commit,
+publication date, four package names, and reviewed SHA-256 values. It refuses any other release or an
+immutable release. Before writing, it downloads and verifies every package and both original metadata
+assets, preserves the original and repaired metadata plus API state as a 90-day Actions audit
+artifact, and rechecks that nothing changed.
+
+The repair hides the invalid manifest first, replaces only `SHA256SUMS`, then publishes the corrected
+manifest last. It never replaces a package or moves the tag. Any post-write verification failure
+removes the manifest so the download feed stays hidden. Because the workflow is locked to the exact
+known-bad metadata digests, a second run after a successful repair is rejected.
 
 ## Current limitations and signing gates
 
