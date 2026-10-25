@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=FileFlow
+Comment=Send files to a phone with light: no network, no pairing
+Exec=fileflow-send %F
+Icon=fileflow
+Terminal=false
+Categories=Utility;FileTransfer;

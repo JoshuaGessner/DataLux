@@ -63,6 +63,8 @@ add_executable(fileflow-send
     ${CMAKE_CURRENT_BINARY_DIR}/fonts.cpp
 )
 target_include_directories(fileflow-send SYSTEM PRIVATE ${STB_DIR})
+# One version for the whole product: the root project's, the Android app's versionName.
+target_compile_definitions(fileflow-send PRIVATE FILEFLOW_VERSION="${PROJECT_VERSION}")
 target_link_libraries(fileflow-send PRIVATE fileflow_core fileflow_warnings SDL3::SDL3-static)
 # Third-party and generated sources: not held to the project's warnings.
 set_source_files_properties(src/stb_impl.cpp ${CMAKE_CURRENT_BINARY_DIR}/fonts.cpp PROPERTIES COMPILE_OPTIONS "-w")
@@ -70,3 +72,55 @@ set_target_properties(fileflow-send PROPERTIES
     CXX_STANDARD 20
     CXX_STANDARD_REQUIRED ON
 )
+
+# The icon, drawn by a small tool at build time at every size each platform asks for.
+add_executable(ff-icon tools/icon.cpp)
+target_link_libraries(ff-icon PRIVATE fileflow_warnings)
+set_target_properties(ff-icon PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+set(ICON_DIR ${CMAKE_CURRENT_BINARY_DIR}/icon)
+set(ICONSET ${ICON_DIR}/FileFlow.iconset)
+add_custom_command(
+    OUTPUT ${ICON_DIR}/FileFlow.ico ${ICON_DIR}/fileflow.png ${ICONSET}/icon_512x512@2x.png
+    COMMAND ff-icon ${ICONSET} ${ICON_DIR}/FileFlow.ico ${ICON_DIR}/fileflow.png
+    DEPENDS ff-icon
+    COMMENT "Drawing the icon"
+    VERBATIM)
+
+if(APPLE)
+    # FileFlow.app: double-clickable, its icon in the Dock, files dropped on that icon sent, and the
+    # camera permission text macOS shows before the camera is used.
+    add_custom_command(
+        OUTPUT ${ICON_DIR}/FileFlow.icns
+        COMMAND iconutil -c icns ${ICONSET} -o ${ICON_DIR}/FileFlow.icns
+        DEPENDS ${ICONSET}/icon_512x512@2x.png
+        COMMENT "Packing the icon for macOS"
+        VERBATIM)
+    target_sources(fileflow-send PRIVATE ${ICON_DIR}/FileFlow.icns)
+    set_source_files_properties(${ICON_DIR}/FileFlow.icns PROPERTIES MACOSX_PACKAGE_LOCATION Resources)
+    set_target_properties(fileflow-send PROPERTIES
+        MACOSX_BUNDLE TRUE
+        OUTPUT_NAME FileFlow
+        MACOSX_BUNDLE_INFO_PLIST ${CMAKE_CURRENT_SOURCE_DIR}/macos/Info.plist.in
+        MACOSX_BUNDLE_SHORT_VERSION_STRING ${PROJECT_VERSION}
+        MACOSX_BUNDLE_BUNDLE_VERSION ${PROJECT_VERSION})
+    # Signed as a whole (ad hoc: no developer certificate needed) under its bundle id. The linker
+    # signs only the bare binary; macOS remembers a camera permission against the bundle's signature,
+    # and without one it asks every launch or not at all.
+    add_custom_command(TARGET fileflow-send POST_BUILD
+        COMMAND codesign --force --sign - --identifier dev.fileflow.desktop $<TARGET_BUNDLE_DIR:fileflow-send>
+        COMMENT "Signing FileFlow.app (ad hoc)"
+        VERBATIM)
+elseif(WIN32)
+    # The icon in Explorer and the taskbar; a window app, not a console one.
+    set(FILEFLOW_ICO ${ICON_DIR}/FileFlow.ico)
+    configure_file(windows/fileflow.rc.in ${CMAKE_CURRENT_BINARY_DIR}/fileflow.rc @ONLY)
+    target_sources(fileflow-send PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/fileflow.rc ${ICON_DIR}/FileFlow.ico)
+    set_target_properties(fileflow-send PROPERTIES WIN32_EXECUTABLE TRUE OUTPUT_NAME FileFlow)
+else()
+    # Linux: the program, its menu entry and its icon, for `cmake --install`.
+    add_custom_target(fileflow-icon ALL DEPENDS ${ICON_DIR}/fileflow.png)
+    include(GNUInstallDirs)
+    install(TARGETS fileflow-send RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+    install(FILES linux/fileflow.desktop DESTINATION ${CMAKE_INSTALL_DATADIR}/applications)
+    install(FILES ${ICON_DIR}/fileflow.png DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor/512x512/apps)
+endif()

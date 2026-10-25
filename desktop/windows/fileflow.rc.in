@@ -1,0 +1,2 @@
+// FileFlow's icon for Windows, from the .ico the build draws (desktop/tools/icon.cpp).
+IDI_APP ICON "@FILEFLOW_ICO@"

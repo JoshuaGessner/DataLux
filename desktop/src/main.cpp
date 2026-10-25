@@ -118,7 +118,7 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "SDL: %s\n", SDL_GetError());
         return 1;
     }
-    SDL_SetAppMetadata("FileFlow", "0.2.0", "dev.fileflow.desktop");
+    SDL_SetAppMetadata("FileFlow", FILEFLOW_VERSION, "dev.fileflow.desktop");
     // Straight to full screen when there are files to send; otherwise a window.
     SDL_WindowFlags flags = SDL_WINDOW_HIGH_PIXEL_DENSITY | SDL_WINDOW_RESIZABLE;
     if (!files.empty() && !options.windowed && !options.code_window) flags |= SDL_WINDOW_FULLSCREEN;

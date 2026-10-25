@@ -7,7 +7,7 @@
 #
 # The Android build consumes core/CMakeLists.txt via Gradle externalNativeBuild.
 cmake_minimum_required(VERSION 3.22)
-project(fileflow LANGUAGES CXX VERSION 0.1.0)
+project(fileflow LANGUAGES CXX VERSION 0.2.0)
 
 set(CMAKE_CXX_STANDARD 20)          # ADR-0013: C++20, NOT C++23 (unreliable in NDK libc++)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)

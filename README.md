@@ -55,9 +55,17 @@ further to the side — one screen, a room full of receivers, each at its own pa
 
 ```sh
 cmake --preset desktop-app && cmake --build build/desktop-app
-build/desktop-app/desktop/fileflow-send              # the home screen
-build/desktop-app/desktop/fileflow-send report.pdf   # or straight to sending
+open build/desktop-app/desktop/FileFlow.app                                 # macOS
+build/desktop-app/desktop/FileFlow.app/Contents/MacOS/FileFlow report.pdf  # straight to sending
 ```
+
+On macOS the build makes `FileFlow.app`, with its icon, ready to drag to Applications; files dropped
+on its Dock icon are sent. On Windows it makes `FileFlow.exe` with its icon; on Linux
+`fileflow-send`, and `cmake --install build/desktop-app` adds it to the applications menu.
+
+With a second display attached — a projector, a TV — **Show the code on** puts the code full screen
+there, while this screen becomes the presenter's view: a live copy of the code, what's going, the
+speed and **Stop**.
 
 On the home screen, drop files on the window or **Choose files…**; several go as one batch, as on
 the phone. **⌘V / Ctrl+V** sends the text on the clipboard — a link, an address, a note — as
