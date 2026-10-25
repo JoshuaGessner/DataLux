@@ -54,6 +54,9 @@ add_custom_command(
 
 add_executable(fileflow-send
     src/main.cpp
+    src/app.cpp
+    src/ui.cpp
+    src/screen_send.cpp
     src/paint.cpp
     src/transfer.cpp
     src/stb_impl.cpp
