@@ -94,19 +94,7 @@ class Pairing private constructor(private val pair: KeyPair) {
         agreement.init(pair.private)
         agreement.doPhase(decodePoint(peer), true)
         val shared = agreement.generateSecret()
-        val (lo, hi) = if (compare(publicPoint, peer) <= 0) publicPoint to peer else peer to publicPoint
-        val salt = hash(LABEL.toByteArray(Charsets.US_ASCII) + lo + hi)
-        val prk = hmac(salt, shared)
-        val okm = expand(prk, "FileFlow v1 keys".toByteArray(Charsets.US_ASCII), 32 + PairingKey.ID_BYTES + 4)
-        shared.fill(0)
-        val code = (BigInteger(1, okm.copyOfRange(40, 44)).toLong() % 1_000_000L)
-            .toString().padStart(6, '0').let { "${it.substring(0, 3)} ${it.substring(3)}" }
-        return PairingKey(
-            SecretKeySpec(okm.copyOfRange(0, 32), "AES"),
-            okm.copyOfRange(32, 32 + PairingKey.ID_BYTES),
-            code,
-            nowMs,
-        )
+        return derive(shared, publicPoint, peer, nowMs).also { shared.fill(0) }
     }
 
     companion object {
@@ -114,6 +102,27 @@ class Pairing private constructor(private val pair: KeyPair) {
         private const val LABEL = "FileFlow pairing v1"
         private const val POINT_BYTES = 65
         private const val ACK_BYTES = 8
+
+        /**
+         * The pairing key from the ECDH [shared] secret and the two public points: HKDF-SHA256 salted
+         * with both points in byte order (so either phone derives the same), expanded to the AES key,
+         * the key id and the six-digit code. Apart from [key] so the desktop's implementation can be
+         * held to the same vectors (SecureVectorsTest, desktop/tests/test_secure.cpp).
+         */
+        internal fun derive(shared: ByteArray, mine: ByteArray, peer: ByteArray, nowMs: Long): PairingKey {
+            val (lo, hi) = if (compare(mine, peer) <= 0) mine to peer else peer to mine
+            val salt = hash(LABEL.toByteArray(Charsets.US_ASCII) + lo + hi)
+            val prk = hmac(salt, shared)
+            val okm = expand(prk, "FileFlow v1 keys".toByteArray(Charsets.US_ASCII), 32 + PairingKey.ID_BYTES + 4)
+            val code = (BigInteger(1, okm.copyOfRange(40, 44)).toLong() % 1_000_000L)
+                .toString().padStart(6, '0').let { "${it.substring(0, 3)} ${it.substring(3)}" }
+            return PairingKey(
+                SecretKeySpec(okm.copyOfRange(0, 32), "AES"),
+                okm.copyOfRange(32, 32 + PairingKey.ID_BYTES),
+                code,
+                nowMs,
+            )
+        }
 
         /** A fresh key pair for one pairing. */
         fun start(): Pairing {

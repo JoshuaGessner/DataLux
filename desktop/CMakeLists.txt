@@ -28,7 +28,25 @@ FetchContent_Declare(inter
     URL      https://github.com/rsms/inter/releases/download/v4.1/Inter-4.1.zip
     URL_HASH SHA256=9883fdd4a49d4fb66bd8177ba6625ef9a64aa45899767dde3d36aa425756b11e
 )
-FetchContent_MakeAvailable(SDL3 inter)
+# Mbed TLS (Apache-2.0): ECDH P-256, AES-GCM, SHA-256 and HMAC for encrypted mode -- the same
+# primitives the phone gets from the JDK. Only its crypto library is built.
+set(ENABLE_PROGRAMS OFF CACHE BOOL "" FORCE)
+set(ENABLE_TESTING OFF CACHE BOOL "" FORCE)
+set(GEN_FILES OFF CACHE BOOL "" FORCE)
+set(MBEDTLS_FATAL_WARNINGS OFF CACHE BOOL "" FORCE)
+set(USE_SHARED_MBEDTLS_LIBRARY OFF CACHE BOOL "" FORCE)
+FetchContent_Declare(mbedtls
+    URL      https://github.com/Mbed-TLS/mbedtls/releases/download/mbedtls-3.6.2/mbedtls-3.6.2.tar.bz2
+    URL_HASH SHA256=8b54fb9bcf4d5a7078028e0520acddefb7900b3e66fec7f7175bb5b7d85ccdca
+    SYSTEM
+)
+FetchContent_MakeAvailable(SDL3 inter mbedtls)
+
+# Encrypted mode: pairing, sealed envelopes, teams -- the app's secure/ package in C++.
+add_library(fileflow_secure STATIC src/secure.cpp)
+target_include_directories(fileflow_secure PUBLIC src)
+target_link_libraries(fileflow_secure PUBLIC fileflow_core PRIVATE fileflow_warnings mbedcrypto)
+set_target_properties(fileflow_secure PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
 
 # stb_truetype v1.26, pinned to its commit.
 set(STB_DIR ${CMAKE_CURRENT_BINARY_DIR}/third_party)
@@ -65,7 +83,7 @@ add_executable(fileflow-send
 target_include_directories(fileflow-send SYSTEM PRIVATE ${STB_DIR})
 # One version for the whole product: the root project's, the Android app's versionName.
 target_compile_definitions(fileflow-send PRIVATE FILEFLOW_VERSION="${PROJECT_VERSION}")
-target_link_libraries(fileflow-send PRIVATE fileflow_core fileflow_warnings SDL3::SDL3-static)
+target_link_libraries(fileflow-send PRIVATE fileflow_secure fileflow_warnings SDL3::SDL3-static)  # core comes with secure
 # Third-party and generated sources: not held to the project's warnings.
 set_source_files_properties(src/stb_impl.cpp ${CMAKE_CURRENT_BINARY_DIR}/fonts.cpp PROPERTIES COMPILE_OPTIONS "-w")
 set_target_properties(fileflow-send PROPERTIES
@@ -123,4 +141,13 @@ else()
     install(TARGETS fileflow-send RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
     install(FILES linux/fileflow.desktop DESTINATION ${CMAKE_INSTALL_DATADIR}/applications)
     install(FILES ${ICON_DIR}/fileflow.png DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor/512x512/apps)
+endif()
+
+# The desktop's own tests: its secure formats held to the phone's vectors, and the rest.
+if(FILEFLOW_BUILD_TESTS)
+    add_executable(desktop_tests tests/test_secure.cpp)
+    target_link_libraries(desktop_tests PRIVATE fileflow_secure fileflow_warnings GTest::gtest_main)
+    set_target_properties(desktop_tests PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+    include(GoogleTest)
+    gtest_discover_tests(desktop_tests DISCOVERY_TIMEOUT 60)
 endif()
