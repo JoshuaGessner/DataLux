@@ -14,19 +14,30 @@ not establish broad hardware or platform compatibility.
    `versionName` in `app/build.gradle.kts`. They must contain the same bare SemVer, such as `0.3.0`.
 2. Merge the version change and all intended release work to `main`. Wait for normal CI
    and desktop build checks to pass.
-3. From **Actions → native milestone release → Run workflow**, enter the version (prefer
-   `vMAJOR.MINOR.PATCH`; bare SemVer is also accepted), the reviewed source ref (normally `main`),
-   and make the explicit publication choice. A version such as `v0.3.0-beta.1` is published as a
-   GitHub prerelease.
-4. For a real milestone, explicitly set **publish_release** to `true`. The owner can do the same from
-   GitHub CLI:
+3. Resolve and record the reviewed `main` commit. Use this same immutable 40-character SHA for both
+   the dry run and publication; do not pass a moving branch name for an actual release:
+
+   ```sh
+   git fetch origin main
+   SOURCE_SHA="$(git rev-parse 'origin/main^{commit}')"
+   ```
+
+4. From **Actions → native milestone release → Run workflow**, enter the version (prefer
+   `vMAJOR.MINOR.PATCH`; bare SemVer is also accepted), the recorded source SHA, and keep
+   **publish_release** false for the required build-only dry run. A version such as
+   `v0.3.0-beta.1` is published as a GitHub prerelease.
+5. After every dry-run platform artifact passes review, run the same version and exact source SHA
+   again with **publish_release** explicitly true:
 
    ```sh
    gh workflow run milestone-release.yml --ref main \
-     -f version=v0.1.0 -f source_ref=main -f publish_release=true
+     -f version=v0.3.0 -f source_ref="$SOURCE_SHA" -f publish_release=false
+   # Wait for and review the complete dry run before continuing.
+   gh workflow run milestone-release.yml --ref main \
+     -f version=v0.3.0 -f source_ref="$SOURCE_SHA" -f publish_release=true
    ```
 
-5. Wait for **native milestone release** to finish. Until its final manifest appears, the website
+6. Wait for **native milestone release** to finish. Until its final manifest appears, the website
    must not offer the release as a download.
 
 The default `publish_release=false` is a build-only dry run. It produces seven-day GitHub Actions
@@ -54,10 +65,10 @@ One successful publication run attaches these packages to the workflow-created G
 | macOS | App-bundle `.zip` | Read from the built Mach-O file | Ad-hoc only; not Developer ID signed or notarized |
 | Android | Sideloadable debug `.apk` | Fixed project ABI, `arm64-v8a` | Ephemeral runner-generated debug certificate; not a persistent release identity |
 
-The workflow reuses the established Linux, Windows, and Android build/test gates. The macOS job
-builds and tests the existing native app bundle, verifies its ad-hoc signature, and records whether
-the actual binary is `x86_64`, `arm64`, or `universal2`. No architecture is inferred from a mutable
-runner label.
+The workflow reuses the established Linux, Windows, and Android build/test gates. The macOS release
+job builds the production app bundle, launch-smoke-tests it, verifies its ad-hoc signature, and
+records whether the actual binary is `x86_64`, `arm64`, or `universal2`. The portable core suite
+remains an ordinary CI gate. No architecture is inferred from a mutable runner label.
 
 GitHub Actions artifacts are retained for only seven days. They are the only output of a build-only
 dry run and staging material during a publication run. The verified copies attached to the GitHub
