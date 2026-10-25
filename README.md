@@ -86,14 +86,19 @@ codes match, you're paired.
 
 A team is a group that sends encrypted files to each other: one sending screen, read by every
 member's camera at once, opens on all their phones and nobody else's. Make one in
-**Settings › Teams**, then tap **Invite someone** while the new member taps **Join a team**, and
-hold the two phones face to face. They pair as above, and the leader's screen then shows the
-team's key **sealed to that pairing**, so a camera across the room learns nothing from it.
+**Settings › Teams** — you lead it — then open it and tap **Invite someone** while the new member
+taps **Join a team**, and hold the two phones face to face. They pair as above, and the leader's
+screen then shows the team's key **sealed to that pairing**, so a camera across the room learns
+nothing from it. The new member's phone answers with their name, which joins the leader's list.
 
 - Each team has one AES-256 key, kept on the phone and wrapped by the Android Keystore.
+- Set the name others see under **Teams › Your name**.
+- The leader sees everyone in the team, and can rename, remove people and delete it; a member sees
+  the team as it was when they joined, and can leave.
 - To send to a team, tap **Encrypted** and choose it. Receiving needs nothing: a file for any team
   you're in opens by itself.
-- Holding the key is membership. To remove someone, make a new team and invite everyone else.
+- Holding the key is membership, and a phone can't be made to forget a key. So removing someone
+  gives the team a new key, and the leader invites everyone else again.
 
 Without encrypted mode, a FileFlow transfer is like a QR code: anyone whose camera can see the
 sending screen could read it. See [SECURITY.md](SECURITY.md) for the details.

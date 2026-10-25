@@ -830,6 +830,16 @@ class MainActivity : AppCompatActivity() {
         private const val PREF_SPEED = "speed"
         private const val PREF_ENCRYPTED = "encrypted"
         private const val PREF_SEAL_TO = "seal_to"
+
+        /**
+         * A team's key was changed ([Team.rotated]) and with it its id: if files were being sealed to
+         * it, they now go to the new key. (MainActivity's preferences: getPreferences names the
+         * file after the activity.)
+         */
+        fun teamRekeyed(context: android.content.Context, oldIdHex: String, newIdHex: String) {
+            val prefs = context.getSharedPreferences(MainActivity::class.java.simpleName, MODE_PRIVATE)
+            if (prefs.getString(PREF_SEAL_TO, null) == oldIdHex) prefs.edit { putString(PREF_SEAL_TO, newIdHex) }
+        }
         private const val PREF_COMPRESSION = "compression"
         private const val PREF_TAB = "tab"
         private const val TAB_SEND = 1

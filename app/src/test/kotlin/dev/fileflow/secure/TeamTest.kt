@@ -72,20 +72,38 @@ class TeamTest {
 
     @Test fun anInviteOpensOnlyOnThePhoneItWasPairedWith() {
         val (leader, member) = paired()
-        val team = Team.create("Search & rescue")
+        val team = Team.create("Search & rescue", myName = "Alex", nowMs = 1000)
+            .withMember(Member("Sam", 2000))
         val invite = TeamInvite.encode(team, leader)
-        val got = TeamInvite.decode(invite, member)
+        val got = TeamInvite.decode(invite, member, "Jo", nowMs = 3000)
         assertNotNull(got)
         assertArrayEquals(team.id, got!!.id)
         assertArrayEquals(team.secret.encoded, got.secret.encoded)
         assertEquals("Search & rescue", got.name)
         assertEquals(team.createdMs, got.createdMs)
+        // The member's view: led by Alex, Sam already in, and this phone itself.
+        assertFalse(got.isLeader)
+        assertEquals(listOf("Alex", "Sam", "Jo"), got.members.map { it.name })
+        assertEquals(listOf(true, false, false), got.members.map { it.leader })
+        assertEquals(listOf(false, false, true), got.members.map { it.you })
 
         // A camera across the room, paired with nobody -- or with someone else -- learns nothing.
         val (_, stranger) = paired()
-        assertNull(TeamInvite.decode(invite, stranger))
-        assertNull(TeamInvite.decode("FFPAIR1:abc", member))
-        assertNull(TeamInvite.decode(TeamInvite.PREFIX + "!!!", member))
+        assertNull(TeamInvite.decode(invite, stranger, "Eve"))
+        assertNull(TeamInvite.decode("FFPAIR1:abc", member, "Jo"))
+        assertNull(TeamInvite.decode(TeamInvite.PREFIX + "!!!", member, "Jo"))
+    }
+
+    @Test fun anInviteListsOnlyWhoHoldsTheCurrentKey() {
+        val (leader, member) = paired()
+        var team = Team.create("Crew", myName = "Alex")
+        repeat(20) { team = team.withMember(Member("m$it", it.toLong())) }
+        val got = TeamInvite.decode(TeamInvite.encode(team, leader), member, "Jo")!!
+        // The newest MAX_LISTED, so the code stays small enough to read.
+        assertEquals(listOf("Alex") + (8 until 20).map { "m$it" } + "Jo", got.members.map { it.name })
+        val rotated = team.rotated()
+        val after = TeamInvite.decode(TeamInvite.encode(rotated, leader), member, "Jo")!!
+        assertEquals(listOf("Alex", "Jo"), after.members.map { it.name })
     }
 
     @Test fun anAlteredInviteIsRefused() {
@@ -95,19 +113,37 @@ class TeamTest {
         for (i in body.indices step 7) {
             val bad = body.copyOf().also { it[i] = (it[i].toInt() xor 1).toByte() }
             val text = TeamInvite.PREFIX + java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(bad)
-            assertNull("byte $i", TeamInvite.decode(text, member))
+            assertNull("byte $i", TeamInvite.decode(text, member, "Jo"))
         }
     }
 
     @Test fun onlyAPhoneHoldingTheTeamKeyCanAcknowledgeIt() {
         val (leader, member) = paired()
-        val team = Team.create("Crew")
-        val joined = TeamInvite.decode(TeamInvite.encode(team, leader), member)!!
-        assertTrue(TeamInvite.isAck(TeamInvite.ack(joined, member), team, leader))
-        assertFalse(TeamInvite.isAck(TeamInvite.ack(Team.create("Crew"), member), team, leader))
+        val team = Team.create("Crew", myName = "Alex")
+        val joined = TeamInvite.decode(TeamInvite.encode(team, leader), member, "Jo")!!
+        assertEquals("Jo", TeamInvite.readAck(TeamInvite.ack(joined, member, "Jo"), team, leader))
+        assertNull(TeamInvite.readAck(TeamInvite.ack(Team.create("Crew"), member, "Jo"), team, leader))
         val (_, other) = paired()
-        assertFalse(TeamInvite.isAck(TeamInvite.ack(joined, other), team, leader))
-        assertFalse(TeamInvite.isAck("FFTEAMOK:", team, leader))
+        assertNull(TeamInvite.readAck(TeamInvite.ack(joined, other, "Jo"), team, leader))
+        assertNull(TeamInvite.readAck(TeamInvite.ACK_PREFIX, team, leader))
+        assertNull(TeamInvite.readAck(TeamInvite.encode(team, leader), team, leader))
+    }
+
+    @Test fun removingSomeoneChangesTheKeyAndAsksForEveryoneElseAgain() {
+        val team = Team.create("Crew", myName = "Alex").withMember(Member("Sam", 1)).withMember(Member("Jo", 2))
+        val sam = team.members.first { it.name == "Sam" }
+        val after = team.without(sam).rotated()
+        assertFalse(after.id.contentEquals(team.id))
+        assertFalse(after.secret.encoded.contentEquals(team.secret.encoded))
+        assertEquals(listOf("Alex", "Jo"), after.members.map { it.name })
+        assertEquals(listOf(false, true), after.members.map { it.needsNewKey })
+        // Jo joining again takes the place of the waiting entry.
+        val back = after.withMember(Member("Jo", 3))
+        assertEquals(listOf("Alex", "Jo"), back.members.map { it.name })
+        assertFalse(back.members.last().needsNewKey)
+        // Files sealed to the old key do not open with the new one.
+        val old = Envelope.pack("before".toByteArray(), "a", team)
+        expectFailure(Envelope.Failure.WrongPairing) { Envelope.unpack(old.bytes, listOf<SealKey>(after), true) }
     }
 
     private class MemoryStorage : TeamStore.Storage {
@@ -139,6 +175,36 @@ class TeamTest {
 
         TeamStore(disk, FlipWrap).remove(a.idHex)
         assertEquals(listOf(b.idHex), TeamStore(disk, FlipWrap).all().map { it.idHex })
+    }
+
+    @Test fun membersAndRoleAreKept() {
+        val disk = MemoryStorage()
+        val led = Team.create("Crew", myName = "Alex", nowMs = 5).withMember(Member("Sam", 6))
+        val (leader, member) = paired()
+        val joined = TeamInvite.decode(TeamInvite.encode(led, leader), member, "Jo", nowMs = 7)!!
+        TeamStore(disk, FlipWrap).apply { add(led); add(joined.rotated()) }
+        val (a, b) = TeamStore(disk, FlipWrap).all()
+        assertTrue(a.isLeader)
+        assertEquals(listOf("Alex", "Sam"), a.members.map { it.name })
+        assertEquals(listOf(true, false), a.members.map { it.you })
+        assertFalse(b.isLeader)
+        assertEquals(listOf("Alex", "Sam", "Jo"), b.members.map { it.name })
+        assertEquals(listOf(false, true, false), b.members.map { it.needsNewKey })
+        assertEquals(listOf(5L, 6L, 7L), b.members.map { it.joinedMs })
+    }
+
+    @Test fun aTeamSavedBeforeMembersExistedStillOpens() {
+        val disk = MemoryStorage()
+        val t = Team.create("Test crew")
+        val e = java.util.Base64.getEncoder()
+        // The line the first release of teams wrote: four fields.
+        disk.s = listOf(e.encodeToString(t.id), e.encodeToString("Test crew".toByteArray()),
+                        e.encodeToString(FlipWrap.wrap(t.secret.encoded)), "1792891803122").joinToString("\t")
+        val got = TeamStore(disk, FlipWrap).all().single()
+        assertEquals("Test crew", got.name)
+        assertTrue(got.isLeader)
+        assertTrue(got.members.isEmpty())
+        assertArrayEquals(t.secret.encoded, got.secret.encoded)
     }
 
     @Test fun aTeamThatWillNotUnwrapIsDroppedNotFatal() {

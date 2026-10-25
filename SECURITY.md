@@ -35,11 +35,14 @@ it sends or receives can leave the two phones by any other route.
   that opens past paired transfers.
 - *Teams.* A team key is a random 256-bit AES key, handed to a new member only over a fresh pairing
   made for the purpose: sealed with AES-256-GCM under that pairing's key, the pairing's key id bound
-  in as associated data. The member answers with an HMAC under the team key, which is how the
-  leader's phone confirms the hand-over. Team keys ARE stored, wrapped by a non-exportable Android
-  Keystore key, so a copy of the app's data alone opens nothing. A team has no forward secrecy:
-  anyone who holds its key can open every transfer ever sent to it, and a phone that leaves the
-  team keeps whatever it already received. Removing a member means making a new team.
+  in as associated data. The member answers, sealed the same way, with their display name and an
+  HMAC under the team key, which is how the leader's phone confirms the hand-over and learns who
+  joined. Team keys ARE stored, wrapped by a non-exportable Android Keystore key, so a copy of the
+  app's data alone opens nothing. A team has no forward secrecy: anyone who holds its key can open
+  every transfer ever sent to it, and a phone that leaves the team keeps whatever it already
+  received. Removing a member replaces the key (and its id) with a new one, which the leader hands
+  to each remaining member again; the removed phone keeps only the old key. The member list is
+  bookkeeping on the leader's phone, not access control: the key is.
 - *No downgrade.* A receiver in encrypted mode refuses unencrypted files and files sealed to any
   key it does not hold.
 
