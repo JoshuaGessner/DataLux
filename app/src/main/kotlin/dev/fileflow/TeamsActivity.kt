@@ -17,7 +17,10 @@ import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import dev.fileflow.secure.Team
 import dev.fileflow.secure.Teams
 import dev.fileflow.ui.Ui.Style
+import dev.fileflow.ui.Ui.avatar
 import dev.fileflow.ui.Ui.button
+import dev.fileflow.ui.Ui.emptyState
+import dev.fileflow.ui.Ui.capped
 import dev.fileflow.ui.Ui.card
 import dev.fileflow.ui.Ui.cardHeader
 import dev.fileflow.ui.Ui.dp
@@ -36,6 +39,7 @@ class TeamsActivity : AppCompatActivity() {
 
     private lateinit var list: LinearLayout
     private lateinit var nameView: TextView
+    private lateinit var avatarSlot: LinearLayout
 
     private val pair = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
         refresh()
@@ -46,6 +50,7 @@ class TeamsActivity : AppCompatActivity() {
         WindowCompat.setDecorFitsSystemWindows(window, false)
         list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         nameView = title("", 18f)
+        avatarSlot = LinearLayout(this)
         val col = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(16), dp(8), dp(16), dp(20))
@@ -69,7 +74,10 @@ class TeamsActivity : AppCompatActivity() {
                 LinearLayout(context).apply {
                     orientation = LinearLayout.HORIZONTAL
                     gravity = Gravity.CENTER_VERTICAL
-                    addView(nameView, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+                    addView(avatarSlot)
+                    addView(nameView, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+                        marginStart = dp(12)
+                    })
                     addView(button("Change", style = Style.Text) { changeName() })
                 },
                 text("What the people in your teams see when you join.", 13f),
@@ -80,7 +88,7 @@ class TeamsActivity : AppCompatActivity() {
                 pair.launch(Intent(this@TeamsActivity, PairActivity::class.java).putExtra(PairActivity.EXTRA_JOIN, true))
             }, matchWidth(dp(8)))
         }
-        setContentView(ScrollView(this).apply { addView(col) }.padForSystemBars())
+        setContentView(ScrollView(this).apply { addView(capped(col)) }.padForSystemBars())
     }
 
     override fun onResume() {
@@ -90,12 +98,14 @@ class TeamsActivity : AppCompatActivity() {
 
     private fun refresh() {
         nameView.text = Profile.name(this)
+        avatarSlot.removeAllViews()
+        avatarSlot.addView(avatar(Profile.name(this), 44))
         list.removeAllViews()
         val teams = Teams.store(this).all()
         if (teams.isEmpty()) {
-            list.addView(text("No teams yet. Make one and invite the others, or join someone else's.").apply {
-                setPadding(dp(4), dp(8), dp(4), dp(8))
-            })
+            list.addView(emptyState(R.drawable.ic_group, "No teams yet",
+                "Make one and invite the others, or join someone else's. Everyone in a team can " +
+                    "send encrypted files to all the others at once."))
         }
         teams.forEach { team ->
             val count = team.members.count { !it.needsNewKey }.coerceAtLeast(1)
@@ -112,8 +122,11 @@ class TeamsActivity : AppCompatActivity() {
                     startActivity(Intent(this@TeamsActivity, TeamActivity::class.java)
                         .putExtra(TeamActivity.EXTRA_TEAM, team.idHex))
                 }
+                dev.fileflow.ui.Motion.pressable(this, 0.98f)
             }, matchWidth(dp(8)))
         }
+        dev.fileflow.ui.Motion.staggerIn((0 until list.childCount).map { list.getChildAt(it) },
+                                         risePx = dp(16).toFloat())
     }
 
     private fun nameInput(initial: String, hint: String) = EditText(this).apply {

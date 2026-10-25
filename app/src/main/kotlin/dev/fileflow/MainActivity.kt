@@ -26,7 +26,13 @@ import dev.fileflow.secure.Envelope
 import dev.fileflow.secure.PairingStore
 import dev.fileflow.secure.Team
 import dev.fileflow.secure.Teams
+import dev.fileflow.ui.HeroView
+import dev.fileflow.ui.LightGridView
+import dev.fileflow.ui.Motion
+import dev.fileflow.ui.ScanView
 import dev.fileflow.ui.Ui.Style
+import dev.fileflow.ui.Ui.capped
+import dev.fileflow.ui.Ui.emptyState
 import dev.fileflow.ui.Ui.button
 import dev.fileflow.ui.Ui.card
 import dev.fileflow.ui.Ui.dp
@@ -56,9 +62,11 @@ import dev.fileflow.ui.Ui.title
 class MainActivity : AppCompatActivity() {
 
     private var speed = Speed.DEFAULT
-    private lateinit var nav: BottomNavigationView
+    private lateinit var nav: com.google.android.material.navigation.NavigationBarView
     private lateinit var speedLabel: MaterialButton
     private val pages = HashMap<Int, View>()
+    /** Per tab, what rises into place when it is shown, in reading order ([Motion.staggerIn]). */
+    private val entrance = HashMap<Int, () -> List<View>>()
     private var receivedList: LinearLayout? = null
 
     private val pickFile = registerForActivityResult(
@@ -72,6 +80,8 @@ class MainActivity : AppCompatActivity() {
     /** How hard the sender compresses: the Settings choice, Auto unless changed. */
     private var compression = Envelope.Mode.Auto
     private val securityRows = ArrayList<Pair<MaterialSwitch, TextView>>()
+    /** Each row's lock, closed and lit when encrypted mode is on. */
+    private val locks = ArrayList<ImageView>()
     private var afterPairing: (() -> Unit)? = null
     private val pair = registerForActivityResult(
         androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult(),
@@ -158,15 +168,23 @@ class MainActivity : AppCompatActivity() {
         pages[TAB_RECEIVE] = receivePage()
         pages[TAB_RECEIVED] = receivedPage()
         pages[TAB_SETTINGS] = settingsPage(prefs)
+        // Each page held to a readable width: on a tablet, or a phone on its side, a column of
+        // text and buttons stretched edge to edge is hard to read and far to reach.
+        pages.keys.toList().forEach { pages[it] = capped(pages.getValue(it), if (twoPane && (it == TAB_SEND || it == TAB_RECEIVE)) 1040 else 600) }
         pages.values.forEach { content.addView(it, FrameLayout.LayoutParams(MATCH, MATCH)) }
 
-        nav = BottomNavigationView(this).apply {
+        // A tablet gets a navigation rail down the side, as Material lays out a large screen; a
+        // phone the bar along the bottom, within reach of a thumb.
+        nav = (if (tablet) com.google.android.material.navigationrail.NavigationRailView(this)
+               else BottomNavigationView(this)).apply {
             menu.add(0, TAB_SEND, 0, "Send").setIcon(R.drawable.ic_upload)
             menu.add(0, TAB_RECEIVE, 1, "Receive").setIcon(R.drawable.ic_camera)
             menu.add(0, TAB_RECEIVED, 2, "Received").setIcon(R.drawable.ic_folder)
             menu.add(0, TAB_SETTINGS, 3, "Settings").setIcon(R.drawable.ic_settings)
             labelVisibilityMode = com.google.android.material.navigation.NavigationBarView
                 .LABEL_VISIBILITY_LABELED
+            // On a tablet, the rail's destinations sit in the middle of its height, in easy reach.
+            (this as? com.google.android.material.navigationrail.NavigationRailView)?.menuGravity = Gravity.CENTER
             setOnItemSelectedListener { item ->
                 show(item.itemId)
                 prefs.edit { putInt(PREF_TAB, item.itemId) }
@@ -175,11 +193,22 @@ class MainActivity : AppCompatActivity() {
         }
 
         val root = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
             setBackgroundColor(themeColor(android.R.attr.colorBackground))
-            addView(content, LinearLayout.LayoutParams(MATCH, 0, 1f))
-            addView(nav, LinearLayout.LayoutParams(MATCH, WRAP))
+            if (tablet) {
+                orientation = LinearLayout.HORIZONTAL
+                addView(nav, LinearLayout.LayoutParams(WRAP, MATCH))
+                addView(content, LinearLayout.LayoutParams(0, MATCH, 1f))
+            } else {
+                orientation = LinearLayout.VERTICAL
+                addView(content, LinearLayout.LayoutParams(MATCH, 0, 1f))
+                addView(nav, LinearLayout.LayoutParams(MATCH, WRAP))
+            }
         }
+        // Nothing on this screen restores itself: what matters (the tab, the settings) is saved in
+        // preferences as it changes. Restoring would crash: the speed buttons' ids are generated,
+        // so a rebuilt screen -- folded, resized, its theme changed -- can hand a button's saved
+        // state to a view of another kind.
+        root.isSaveFromParentEnabled = false
         // Top and sides only: the navigation bar pads itself for the gesture area.
         ViewCompat.setOnApplyWindowInsetsListener(root) { v, insets ->
             val i = insets.getInsets(SYSTEM_INSETS)
@@ -191,7 +220,19 @@ class MainActivity : AppCompatActivity() {
         val tab = prefs.getInt(PREF_TAB, TAB_SEND).takeIf { it in pages } ?: TAB_SEND
         nav.selectedItemId = tab
         show(tab, animate = false)
+        // Opening the app, the first page's contents rise into place too.
+        entrance[tab]?.invoke()?.let { Motion.staggerIn(it, risePx = dp(20).toFloat()) }
         if (savedInstanceState == null) handleShortcut(intent)
+    }
+
+    /**
+     * A tablet turned on its side: the portrait lock doesn't hold on a large screen, and the page
+     * is laid out for its shape -- side by side, or stacked -- so it is built again. The tab is
+     * kept (it is saved as it changes); a phone never gets here.
+     */
+    override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
+        super.onConfigurationChanged(newConfig)
+        if (tablet) recreate()
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -235,16 +276,20 @@ class MainActivity : AppCompatActivity() {
             if (!on) PairingStore.forget()
             refreshSecurity()
         }
+        val lock = ImageView(this)
+        locks += lock
+        setLock(lock, encrypted, animate = false)
         return LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(4), dp(4), 0, dp(8))
-            addView(ImageView(context).apply {
-                setImageResource(R.drawable.ic_lock)
-                imageTintList = ColorStateList.valueOf(
-                    themeColor(com.google.android.material.R.attr.colorOnSurfaceVariant),
-                )
-            }, LinearLayout.LayoutParams(dp(24), dp(24)))
+            // A pill of its own: a control, set apart from the buttons below it.
+            setPadding(dp(16), dp(8), dp(4), dp(8))
+            background = GradientDrawable().apply {
+                cornerRadius = dp(28).toFloat()
+                setColor(themeColor(com.google.android.material.R.attr.colorSurfaceContainer))
+            }
+            layoutParams = matchWidth().apply { bottomMargin = dp(12) }
+            addView(lock, LinearLayout.LayoutParams(dp(24), dp(24)))
             addView(LinearLayout(context).apply {
                 orientation = LinearLayout.VERTICAL
                 setPadding(dp(12), 0, dp(8), 0)
@@ -305,22 +350,49 @@ class MainActivity : AppCompatActivity() {
             if (sw.isChecked != encrypted) sw.isChecked = encrypted
             sub.text = state
         }
+        locks.forEach { setLock(it, encrypted, animate = true) }
     }
 
-    private fun show(tab: Int, animate: Boolean = true) {
-        pages.forEach { (id, page) ->
-            if (id == tab) {
-                if (page.visibility != View.VISIBLE && animate) {
-                    page.alpha = 0f
-                    page.translationY = dp(8).toFloat()
-                    page.animate().alpha(1f).translationY(0f).setDuration(160L).start()
-                }
-                page.visibility = View.VISIBLE
-            } else {
-                page.visibility = View.GONE
-            }
+    /** The lock closes and lights up when encrypted mode goes on -- with a turn, so it's noticed. */
+    private fun setLock(lock: ImageView, on: Boolean, animate: Boolean) {
+        if (lock.tag == on) return
+        lock.tag = on
+        val apply = {
+            lock.setImageResource(if (on) R.drawable.ic_lock else R.drawable.ic_lock_open)
+            lock.imageTintList = ColorStateList.valueOf(themeColor(
+                if (on) androidx.appcompat.R.attr.colorPrimary
+                else com.google.android.material.R.attr.colorOnSurfaceVariant,
+            ))
         }
+        if (!animate || !Motion.enabled) {
+            apply()
+            return
+        }
+        lock.animate().scaleX(0.6f).scaleY(0.6f).rotation(if (on) -20f else 20f).setDuration(Motion.SHORT)
+            .setInterpolator(Motion.EXIT).withEndAction {
+                apply()
+                lock.animate().scaleX(1f).scaleY(1f).rotation(0f).setDuration(Motion.MEDIUM)
+                    .setInterpolator(android.view.animation.OvershootInterpolator(3f)).start()
+            }.start()
+    }
+
+    /**
+     * Brings [tab]'s page in: the old page fades out, the new one fades through, and its contents
+     * rise into place in reading order.
+     */
+    private fun show(tab: Int, animate: Boolean = true) {
+        val into = pages[tab] ?: return
         if (tab == TAB_RECEIVED) refreshReceived()
+        val out = pages.values.firstOrNull { it !== into && it.visibility == View.VISIBLE }
+        pages.values.forEach { if (it !== into && it !== out) it.visibility = View.GONE }
+        if (!animate) {
+            out?.visibility = View.GONE
+            into.visibility = View.VISIBLE
+        }
+        if (into.visibility == View.VISIBLE && out == null) return
+        Motion.fadeThrough(out, into) {
+            entrance[tab]?.invoke()?.let { Motion.staggerIn(it, risePx = dp(20).toFloat()) }
+        }
     }
 
     // ------------------------------------------------------------------------------------ pages
@@ -335,40 +407,74 @@ class MainActivity : AppCompatActivity() {
             if (help != null) addView(helpButton(helpTitle ?: name, help))
         }
 
-    /** A large icon in a soft circle: the one picture on an action page. */
-    private fun hero(icon: Int) = ImageView(this).apply {
-        setImageResource(icon)
-        imageTintList = ColorStateList.valueOf(
-            themeColor(com.google.android.material.R.attr.colorOnPrimaryContainer),
-        )
-        background = GradientDrawable().apply {
-            shape = GradientDrawable.OVAL
-            setColor(themeColor(com.google.android.material.R.attr.colorPrimaryContainer))
-        }
-        val p = dp(30)
-        setPadding(p, p, p, p)
-        layoutParams = LinearLayout.LayoutParams(dp(120), dp(120)).apply {
-            gravity = Gravity.CENTER_HORIZONTAL
-        }
+    /** A tablet, by its shorter side: it gets the rail, bigger pictures, and grouped content. */
+    private val tablet get() = resources.configuration.smallestScreenWidthDp >= 600
+
+    /** Wide enough, on its side, for the picture and the words to stand side by side. */
+    private val twoPane get() = tablet && resources.configuration.screenWidthDp >= 840 &&
+        resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
+
+    /**
+     * The one picture on an action page, animated ([HeroView]). It takes the space the page has
+     * left, up to its own size, so a short screen shrinks it rather than pushing the buttons off.
+     */
+    private fun hero(view: HeroView) = view.apply {
+        if (tablet) maxSidePx = dp(if (twoPane) 340 else 300)
+        layoutParams = LinearLayout.LayoutParams(WRAP, 0, 1f).apply { gravity = Gravity.CENTER_HORIZONTAL }
     }
 
-    /** Header at the top, the content centred in what is left, actions at the bottom. */
-    private fun actionPage(header: View, middle: List<View>, actions: List<View>) =
-        LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            addView(header)
-            addView(LinearLayout(context).apply {
+    /**
+     * An action page: header at the top, then the picture, words and buttons. On a phone the
+     * buttons sit at the bottom, under the thumb. On a tablet the whole group is centred together
+     * -- buttons a long way below their words read as unrelated -- and on a wide tablet the picture
+     * stands to the left of the words and buttons.
+     */
+    private fun actionPage(tab: Int, header: View, middle: List<View>, actions: List<View>): View {
+        entrance[tab] = { middle + actions }
+        val column = { views: List<View>, pad: Int ->
+            LinearLayout(this).apply {
                 orientation = LinearLayout.VERTICAL
                 gravity = Gravity.CENTER
-                setPadding(dp(28), 0, dp(28), 0)
-                middle.forEach { addView(it) }
-            }, LinearLayout.LayoutParams(MATCH, 0, 1f))
-            addView(LinearLayout(context).apply {
-                orientation = LinearLayout.VERTICAL
-                setPadding(dp(20), 0, dp(20), dp(16))
-                actions.forEach { addView(it) }
-            })
+                setPadding(dp(pad), dp(8), dp(pad), dp(8))
+                views.forEach { addView(it) }
+            }
         }
+        val actionBox = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), 0, dp(20), dp(16))
+            actions.forEach { addView(it) }
+        }
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(header)
+            when {
+                twoPane -> addView(LinearLayout(context).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
+                    val picture = middle.first()
+                    picture.layoutParams = LinearLayout.LayoutParams(WRAP, WRAP).apply { gravity = Gravity.CENTER }
+                    addView(android.widget.FrameLayout(context).apply {
+                        addView(picture, android.widget.FrameLayout.LayoutParams(WRAP, WRAP, Gravity.CENTER))
+                    }, LinearLayout.LayoutParams(0, MATCH, 1f))
+                    // The words read from the left beside a picture, not centred under one.
+                    middle.drop(1).forEach { (it as? TextView)?.gravity = Gravity.START }
+                    addView(LinearLayout(context).apply {
+                        orientation = LinearLayout.VERTICAL
+                        gravity = Gravity.CENTER_VERTICAL
+                        setPadding(dp(8), 0, 0, 0)
+                        middle.drop(1).forEach { addView(it) }
+                        addView(space(28))
+                        addView(actionBox.apply { setPadding(0, 0, 0, dp(16)) })
+                    }, LinearLayout.LayoutParams(0, MATCH, 1f))
+                }, LinearLayout.LayoutParams(MATCH, 0, 1f))
+                tablet -> addView(column(middle + space(32) + actionBox, 28), LinearLayout.LayoutParams(MATCH, 0, 1f))
+                else -> {
+                    addView(column(middle, 28), LinearLayout.LayoutParams(MATCH, 0, 1f))
+                    addView(actionBox)
+                }
+            }
+        }
+    }
 
     private fun centred(v: android.widget.TextView) = v.apply { gravity = Gravity.CENTER }
 
@@ -378,12 +484,13 @@ class MainActivity : AppCompatActivity() {
         }.apply { layoutParams = matchWidth(dp(4)) }
         updateSpeedLabel()
         return actionPage(
+            TAB_SEND,
             header("Send", "How it works", HOW_IT_WORKS),
             listOf(
-                hero(R.drawable.ic_upload),
+                hero(LightGridView(this)),
                 space(20),
-                centred(title("Send files", 22f)),
-                space(6),
+                centred(title("Send files", 26f)),
+                space(8),
                 centred(text("They appear on this screen as light for the other phone to scan. " +
                     "Choose several to send them together.")),
             ),
@@ -404,12 +511,13 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun receivePage(): View = actionPage(
+        TAB_RECEIVE,
         header("Receive", "Tips", RECEIVE_HELP),
         listOf(
-            hero(R.drawable.ic_camera),
+            hero(ScanView(this)),
             space(20),
-            centred(title("Receive a file", 22f)),
-            space(6),
+            centred(title("Receive a file", 26f)),
+            space(8),
             centred(text("Fill this camera's picture with the sending screen.")),
         ),
         listOf(
@@ -454,6 +562,7 @@ class MainActivity : AppCompatActivity() {
             visibility = View.GONE
         }
         selectionBar = bar
+        entrance[TAB_RECEIVED] = { listOf<View>(summary) + (0 until list.childCount).map { list.getChildAt(it) } }
         return LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             addView(header("Received", "Received files", RECEIVED_HELP))
@@ -511,8 +620,11 @@ class MainActivity : AppCompatActivity() {
         receivedItems = items
         selected.retainAll(items.map { it.uri }.toSet())  // a deleted file is no longer selected
         if (items.isEmpty()) {
-            list.addView(centred(text("Nothing received yet.")).apply { setPadding(0, dp(48), 0, 0) },
-                matchWidth())
+            list.addView(emptyState(
+                R.drawable.ic_folder, "Nothing here yet",
+                "Files you receive are kept here, and in Downloads › ${LiveDecoder.DOWNLOADS_SUBDIR}.",
+                button("Start receiving", R.drawable.ic_camera, Style.Tonal) { nav.selectedItemId = TAB_RECEIVE },
+            ), matchWidth())
             updateSelection()
             return
         }
@@ -577,7 +689,7 @@ class MainActivity : AppCompatActivity() {
     private fun updateSelection() {
         val selecting = selected.isNotEmpty()
         clearSelectionOnBack.isEnabled = selecting
-        selectionBar?.visibility = if (selecting) View.VISIBLE else View.GONE
+        selectionBar?.let { Motion.reveal(it, selecting) }
         // Each row's chevron gives way to the selection tick, which sits where it does.
         rows.values.forEach { card ->
             card.findViewWithTag<View>(CHEVRON)?.visibility = if (selecting) View.INVISIBLE else View.VISIBLE
@@ -703,7 +815,9 @@ class MainActivity : AppCompatActivity() {
         return LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             addView(header("Settings"))
-            addView(body)
+            // Scrolls: on a small phone, or with the system's text made large, it doesn't all fit.
+            addView(ScrollView(context).apply { addView(body) }, LinearLayout.LayoutParams(MATCH, 0, 1f))
+            entrance[TAB_SETTINGS] = { (0 until body.childCount).map { body.getChildAt(it) } }
         }
     }
 
@@ -729,6 +843,25 @@ class MainActivity : AppCompatActivity() {
                     maxLines = 1
                     // The default 24 dp side padding truncated "Steady" to "Ste…".
                     setPaddingRelative(dp(4), paddingTop, dp(4), paddingBottom)
+                    // Material 3's segmented button: the chosen one filled, ticked, at full contrast.
+                    // The outlined style alone left it a shade darker, with dimmer text than the rest.
+                    val checked = intArrayOf(android.R.attr.state_checked)
+                    backgroundTintList = ColorStateList(arrayOf(checked, intArrayOf()), intArrayOf(
+                        themeColor(androidx.appcompat.R.attr.colorPrimary), android.graphics.Color.TRANSPARENT,
+                    ))
+                    val ink = ColorStateList(arrayOf(checked, intArrayOf()), intArrayOf(
+                        themeColor(com.google.android.material.R.attr.colorOnPrimary),
+                        themeColor(com.google.android.material.R.attr.colorOnSurface),
+                    ))
+                    typeface = android.graphics.Typeface.create("sans-serif-medium", android.graphics.Typeface.NORMAL)
+                    setTextColor(ink)
+                    iconTint = ink
+                    iconSize = dp(18)
+                    iconPadding = dp(6)
+                    iconGravity = MaterialButton.ICON_GRAVITY_TEXT_START
+                    addOnCheckedChangeListener { b, on ->
+                        b.icon = if (on) androidx.core.content.ContextCompat.getDrawable(context, R.drawable.ic_check) else null
+                    }
                 }, LinearLayout.LayoutParams(0, WRAP, 1f))
             }
             check((0 until childCount).map { getChildAt(it) }.first { it.tag == selected }.id)
@@ -802,6 +935,7 @@ class MainActivity : AppCompatActivity() {
             isFocusable = true
             setOnClickListener { onClick() }
             if (onLongClick != null) setOnLongClickListener { onLongClick(it); true }
+            Motion.pressable(this, 0.98f)
         }
 
     companion object {

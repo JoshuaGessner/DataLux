@@ -199,7 +199,22 @@ class PairActivity : AppCompatActivity() {
             mapOf(EncodeHintType.ERROR_CORRECTION to ErrorCorrectionLevel.L, EncodeHintType.MARGIN to 2),
         )
         val px = IntArray(size * size) { i -> if (m.get(i % size, i / size)) Color.BLACK else Color.WHITE }
+        val first = qr.drawable == null
         qr.setImageBitmap(Bitmap.createBitmap(px, size, size, Bitmap.Config.ARGB_8888))
+        // The first code grows into place; each new one -- the acknowledgement, the team -- blinks
+        // in, so a person can see the screen has moved on.
+        if (dev.fileflow.ui.Motion.enabled) {
+            if (first) {
+                qr.alpha = 0f
+                qr.scaleX = 0.9f
+                qr.scaleY = 0.9f
+                qr.animate().alpha(1f).scaleX(1f).scaleY(1f).setDuration(dev.fileflow.ui.Motion.LONG)
+                    .setInterpolator(dev.fileflow.ui.Motion.ENTER).start()
+            } else {
+                qr.alpha = 0.35f
+                qr.animate().alpha(1f).setDuration(dev.fileflow.ui.Motion.MEDIUM).start()
+            }
+        }
         SessionLog.i(TAG, "showing ${describe(text)} (${m.width}px)")
     }
 
@@ -227,6 +242,7 @@ class PairActivity : AppCompatActivity() {
             code.text = k.code
             code.visibility = View.VISIBLE
             done.visibility = View.VISIBLE
+            dev.fileflow.ui.Motion.staggerIn(listOf(code, done), risePx = dp(16).toFloat())
             buzz()
         }
         if (flow.foreignInvite && !saidForeign && flow.stage != PairingFlow.Stage.Done) {

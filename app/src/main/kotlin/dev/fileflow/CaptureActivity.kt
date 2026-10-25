@@ -36,6 +36,7 @@ import dev.fileflow.secure.Teams
 import dev.fileflow.ui.StatusCard
 import dev.fileflow.ui.Ui.Style
 import dev.fileflow.ui.Ui.button
+import dev.fileflow.ui.Ui.capped
 import dev.fileflow.ui.Ui.dp
 import dev.fileflow.ui.Ui.matchWidth
 import dev.fileflow.ui.Ui.showHelp
@@ -1062,12 +1063,20 @@ class CaptureActivity : AppCompatActivity() {
             gravity = Gravity.CENTER_HORIZONTAL
             setPadding(dp(24), dp(48), dp(24), dp(24))
         }
-        col.addView(android.widget.ImageView(this).apply {
-            setImageResource(if (ok) R.drawable.ic_check_circle else R.drawable.ic_error)
-            imageTintList = android.content.res.ColorStateList.valueOf(
-                getColor(if (ok) R.color.ff_ok else R.color.ff_bad),
-            )
-        }, LinearLayout.LayoutParams(dp(88), dp(88)))
+        // Received: a ring draws itself round and the tick in, on a soft disc of the same colour.
+        // Not received: the sign shakes its head.
+        val mark = getColor(if (ok) R.color.ff_ok else R.color.ff_bad)
+        val badge = android.widget.ImageView(this).apply {
+            setImageResource(if (ok) R.drawable.avd_check else R.drawable.ic_error)
+            imageTintList = android.content.res.ColorStateList.valueOf(mark)
+            background = android.graphics.drawable.GradientDrawable().apply {
+                shape = android.graphics.drawable.GradientDrawable.OVAL
+                setColor(androidx.core.graphics.ColorUtils.setAlphaComponent(mark, 36))
+            }
+            val p = dp(14)
+            setPadding(p, p, p, p)
+        }
+        col.addView(badge, LinearLayout.LayoutParams(dp(112), dp(112)))
         col.addView(space(16))
         col.addView(title(
             when {
@@ -1181,8 +1190,23 @@ class CaptureActivity : AppCompatActivity() {
         setContentView(ScrollView(this).apply {
             setBackgroundColor(getColor(R.color.ff_background))
             isFillViewport = true
-            addView(col)
+            addView(capped(col, 560))
         }.padForSystemBars())
+        // Everything after the badge rises in behind it, in reading order.
+        dev.fileflow.ui.Motion.staggerIn((1 until col.childCount).map { col.getChildAt(it) }, stepMs = 35L,
+                                         risePx = dp(16).toFloat())
+        if (ok) {
+            (badge.drawable as? android.graphics.drawable.Animatable)?.start()
+            if (dev.fileflow.ui.Motion.enabled) {
+                badge.scaleX = 0.6f
+                badge.scaleY = 0.6f
+                badge.animate().scaleX(1f).scaleY(1f).setDuration(dev.fileflow.ui.Motion.LONG)
+                    .setInterpolator(android.view.animation.OvershootInterpolator(2f)).start()
+            }
+        } else if (dev.fileflow.ui.Motion.enabled) {
+            android.animation.ObjectAnimator.ofFloat(badge, View.TRANSLATION_X, 0f, -18f, 16f, -12f, 8f, -4f, 0f)
+                .setDuration(520L).start()
+        }
     }
     private var rigEcho: String = "(unset — ffreplay will refuse this bundle)"
 

@@ -17,13 +17,16 @@ import dev.fileflow.secure.Member
 import dev.fileflow.secure.Team
 import dev.fileflow.secure.Teams
 import dev.fileflow.ui.Ui.Style
+import dev.fileflow.ui.Ui.avatar
 import dev.fileflow.ui.Ui.button
+import dev.fileflow.ui.Ui.capped
 import dev.fileflow.ui.Ui.card
 import dev.fileflow.ui.Ui.dp
 import dev.fileflow.ui.Ui.helpButton
 import dev.fileflow.ui.Ui.matchWidth
 import dev.fileflow.ui.Ui.space
 import dev.fileflow.ui.Ui.text
+import dev.fileflow.ui.Ui.themeColor
 import dev.fileflow.ui.Ui.title
 
 /**
@@ -62,7 +65,7 @@ class TeamActivity : AppCompatActivity() {
             })
             addView(body)
         }
-        setContentView(ScrollView(this).apply { addView(col) }.padForSystemBars())
+        setContentView(ScrollView(this).apply { addView(capped(col)) }.padForSystemBars())
         // Filled in onResume, which also catches changes made while away (an invite just finished).
     }
 
@@ -91,7 +94,8 @@ class TeamActivity : AppCompatActivity() {
             space(4),
             rows,
             text(if (team.isLeader) {
-                "Tap someone to remove them from the team."
+                if (members.size > 1) "Tap someone to remove them from the team."
+                else "Just you so far. Invite someone to add the first member."
             } else {
                 "The team as it was when you joined. New members show up on the leader's phone."
             }, 13f).apply { setPadding(0, dp(8), 0, 0) },
@@ -106,23 +110,37 @@ class TeamActivity : AppCompatActivity() {
                 pair.launch(Intent(this, PairActivity::class.java).putExtra(PairActivity.EXTRA_INVITE, team.idHex))
             }, matchWidth(dp(16)))
             body.addView(button("Rename team", style = Style.Tonal) { rename(team) }, matchWidth(dp(8)))
-            body.addView(button("Delete team", R.drawable.ic_delete, Style.Text) { delete(team) }, matchWidth(dp(8)))
+            body.addView(button("Delete team", R.drawable.ic_delete, Style.Text) { delete(team) }.apply {
+                // Destructive: the theme's error colour, not its accent.
+                val error = android.content.res.ColorStateList.valueOf(
+                    themeColor(androidx.appcompat.R.attr.colorError))
+                setTextColor(error)
+                iconTint = error
+            }, matchWidth(dp(8)))
         } else {
             body.addView(button("Leave team", R.drawable.ic_delete, Style.Tonal) { leave(team) }, matchWidth(dp(16)))
         }
+        dev.fileflow.ui.Motion.staggerIn((0 until body.childCount).map { body.getChildAt(it) },
+                                         risePx = dp(16).toFloat())
     }
 
     private fun memberRow(team: Team, m: Member): LinearLayout = LinearLayout(this).apply {
-        orientation = LinearLayout.VERTICAL
+        orientation = LinearLayout.HORIZONTAL
+        gravity = Gravity.CENTER_VERTICAL
         setPadding(0, dp(8), 0, dp(8))
-        addView(text(m.name.ifEmpty { "Unnamed" } + if (m.you) " (you)" else "", 16f,
-                     com.google.android.material.R.attr.colorOnSurface))
+        addView(avatar(m.name.ifEmpty { "?" }).apply { alpha = if (m.needsNewKey) 0.5f else 1f })
         val joined = android.text.format.DateFormat.getMediumDateFormat(context).format(java.util.Date(m.joinedMs))
-        addView(text(when {
-            m.leader -> "Leader · since $joined"
-            m.needsNewKey -> "Needs the new key: invite again"
-            else -> "Joined $joined"
-        }, 13f))
+        addView(LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(14), 0, 0, 0)
+            addView(text(m.name.ifEmpty { "Unnamed" } + if (m.you) " (you)" else "", 16f,
+                         com.google.android.material.R.attr.colorOnSurface))
+            addView(text(when {
+                m.leader -> "Leader · since $joined"
+                m.needsNewKey -> "Needs the new key: invite again"
+                else -> "Joined $joined"
+            }, 13f))
+        }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
         if (team.isLeader && !m.you) {
             val ripple = android.util.TypedValue()
             context.theme.resolveAttribute(android.R.attr.selectableItemBackground, ripple, true)
