@@ -9,6 +9,11 @@
 // and blue. A bigger screen than a phone's means bigger cells, so receivers can stand further back
 // and further off to the side: one screen, a room of phones.
 //
+// On a landscape screen the grid is drawn TURNED a quarter: the same frames, rotated, with cells
+// nearly twice the size of the upright grid's on a 16:10 screen (9 px against 5 at 2560x1600). The
+// receiver needs nothing for it -- a phone's camera sees the grid sideways anyway, and the detector
+// resolves all four rotations from the corner markers.
+//
 // Keys: 1 2 3 speed (Steady, Fast, Fastest) · F full screen · Esc quit.
 //
 // --snapshot OUT.bmp saves the screen exactly as drawn once a few frames have been shown, then
@@ -232,15 +237,24 @@ class Sender {
                 prepared_.reset();
             }
         }
-        if (transfer_ && vsyncs_++ % divisor_ == 0) Advance();
-
-        SDL_SetRenderDrawColor(renderer_, 0, 0, 0, 255);
-        SDL_RenderClear(renderer_);
         int w = 0;
         int h = 0;
         SDL_GetCurrentRenderOutputSize(renderer_, &w, &h);
         const int text_scale = std::max(1, h / 540);
         const int band = 8 * text_scale * 3;
+        if (transfer_) {
+            // Whichever way up gives the bigger cells, re-decided as the window changes shape.
+            const Speed& s = transfer_->speed;
+            const bool turned = Pitch(w, h - band, s.rows, s.cols) > Pitch(w, h - band, s.cols, s.rows);
+            if (texture_ == nullptr || turned != turned_) {
+                turned_ = turned;
+                MakeTexture();
+            }
+            if (vsyncs_++ % divisor_ == 0) Advance();
+        }
+
+        SDL_SetRenderDrawColor(renderer_, 0, 0, 0, 255);
+        SDL_RenderClear(renderer_);
         const bool text = !transfer_ || std::chrono::steady_clock::now() < text_until_;
         if (transfer_) DrawGrid(w, h - band);
         if (text) DrawText(w, h, text_scale);
@@ -275,12 +289,8 @@ class Sender {
             return;
         }
         if (texture_ != nullptr) SDL_DestroyTexture(texture_);
+        texture_ = nullptr;  // made on the next frame, the right way up for the window
         const Speed& s = kSpeeds[speed_];
-        texture_ = SDL_CreateTexture(renderer_, SDL_PIXELFORMAT_XRGB8888, SDL_TEXTUREACCESS_STREAMING,
-                                     static_cast<int>(s.cols), static_cast<int>(s.rows));
-        // Nearest neighbour: every cell a flat square with hard edges, as the phone's GL_NEAREST.
-        SDL_SetTextureScaleMode(texture_, SDL_SCALEMODE_NEAREST);
-        pixels_.assign(static_cast<std::size_t>(s.cols) * s.rows, 0);
         vsyncs_ = 0;
         states_ = 0;
         started_ = std::chrono::steady_clock::now();
@@ -292,25 +302,53 @@ class Sender {
                     static_cast<unsigned long long>(e.original_size), e.bytes.size(), s.name);
     }
 
+    void MakeTexture() {
+        if (texture_ != nullptr) SDL_DestroyTexture(texture_);
+        const Speed& s = transfer_->speed;
+        tex_w_ = static_cast<int>(turned_ ? s.rows : s.cols);
+        tex_h_ = static_cast<int>(turned_ ? s.cols : s.rows);
+        texture_ = SDL_CreateTexture(renderer_, SDL_PIXELFORMAT_XRGB8888, SDL_TEXTUREACCESS_STREAMING,
+                                     tex_w_, tex_h_);
+        // Nearest neighbour: every cell a flat square with hard edges, as the phone's GL_NEAREST.
+        SDL_SetTextureScaleMode(texture_, SDL_SCALEMODE_NEAREST);
+        pixels_.assign(static_cast<std::size_t>(s.cols) * s.rows, 0);
+        Upload();
+    }
+
     void Advance() {
         auto header = transfer_->session->Next(&transfer_->cells);
         if (!header.ok()) return;
-        const auto& cells = transfer_->cells.data();
-        for (std::size_t i = 0; i < pixels_.size(); ++i) pixels_[i] = CellColour(cells[i]);
-        SDL_UpdateTexture(texture_, nullptr, pixels_.data(),
-                          static_cast<int>(transfer_->speed.cols * sizeof(std::uint32_t)));
+        Upload();
         ++states_;
     }
 
-    // Largest whole-pixel cell that fits with a margin, centred: the phone's rule, so no cell edge
-    // ever falls between pixels.
-    void DrawGrid(int w, int h) {
-        const Speed& s = transfer_->speed;
+    // The current cells into the texture, turned a quarter clockwise when the grid is drawn turned:
+    // cell (x, y) of a cols x rows grid lands at (rows - 1 - y, x).
+    void Upload() {
+        const auto& cells = transfer_->cells.data();
+        const std::size_t cols = transfer_->speed.cols;
+        const std::size_t rows = transfer_->speed.rows;
+        for (std::size_t y = 0; y < rows; ++y) {
+            for (std::size_t x = 0; x < cols; ++x) {
+                const std::size_t to = turned_ ? x * rows + (rows - 1 - y) : y * cols + x;
+                pixels_[to] = CellColour(cells[y * cols + x]);
+            }
+        }
+        SDL_UpdateTexture(texture_, nullptr, pixels_.data(), tex_w_ * static_cast<int>(sizeof(std::uint32_t)));
+    }
+
+    // Largest whole-pixel cell for a gw x gh grid in w x h with a margin: the phone's rule, so no
+    // cell edge ever falls between pixels.
+    static int Pitch(int w, int h, std::uint32_t gw, std::uint32_t gh) {
         const int margin = std::max(24, std::min(w, h) / 30);
-        const int pitch = std::max(1, std::min((w - 2 * margin) / static_cast<int>(s.cols),
-                                               (h - 2 * margin) / static_cast<int>(s.rows)));
-        const int gw = pitch * static_cast<int>(s.cols);
-        const int gh = pitch * static_cast<int>(s.rows);
+        return std::max(1, std::min((w - 2 * margin) / static_cast<int>(gw),
+                                    (h - 2 * margin) / static_cast<int>(gh)));
+    }
+
+    void DrawGrid(int w, int h) {
+        const int pitch = Pitch(w, h, static_cast<std::uint32_t>(tex_w_), static_cast<std::uint32_t>(tex_h_));
+        const int gw = pitch * tex_w_;
+        const int gh = pitch * tex_h_;
         const SDL_FRect dst{static_cast<float>((w - gw) / 2), static_cast<float>((h - gh) / 2),
                             static_cast<float>(gw), static_cast<float>(gh)};
         SDL_RenderTexture(renderer_, texture_, nullptr, &dst);
@@ -378,6 +416,9 @@ class Sender {
     std::optional<Prepared> prepared_;
     std::unique_ptr<Transfer> transfer_;
     std::vector<std::uint32_t> pixels_;
+    bool turned_ = false;  // drawn a quarter turn round, for a landscape screen
+    int tex_w_ = 0;
+    int tex_h_ = 0;
     std::string status_;
     std::string snapshot_;
     bool done_ = false;
