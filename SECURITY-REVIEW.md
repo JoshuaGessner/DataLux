@@ -54,7 +54,8 @@ with regression testing, not a claim that every possible defect has been ruled o
 - macOS release: the full native/desktop suite passes, with three pre-existing
   calibration/sweep tests disabled. The application signature verifies and the
   app passes a launch smoke test.
-- Run the same suite under ASan/UBSan, including C dependency code, before delivery.
+- The full ASan/UBSan suite passes, including instrumented C dependency code;
+  final desktop save regressions also pass under both release and sanitizer builds.
 - `.github/workflows/desktop-builds.yml` builds Linux and Windows from `main`,
   tests Linux, smoke-launches both, and uploads revision-labelled artifacts.
 

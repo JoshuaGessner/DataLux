@@ -74,7 +74,7 @@ std::vector<std::uint8_t> Envelope(const std::vector<std::uint8_t>& data, const 
     std::vector<std::uint8_t> out = {'F', 'F', 'E', '1', 0};
     out.push_back(static_cast<std::uint8_t>(name.size() >> 8));
     out.push_back(static_cast<std::uint8_t>(name.size() & 0xFF));
-    out.insert(out.end(), name.begin(), name.end());
+    for (char c : name) out.push_back(static_cast<std::uint8_t>(c));
     const auto size = static_cast<std::uint64_t>(data.size());
     for (int i = 7; i >= 0; --i) out.push_back(static_cast<std::uint8_t>(size >> (8 * i)));
     out.insert(out.end(), data.begin(), data.end());
@@ -88,7 +88,7 @@ std::vector<std::uint8_t> Envelope2(const std::vector<std::uint8_t>& data, const
     std::vector<std::uint8_t> out = {'F', 'F', 'E', '2', 0};
     out.push_back(static_cast<std::uint8_t>(name.size() >> 8));
     out.push_back(static_cast<std::uint8_t>(name.size() & 0xFF));
-    out.insert(out.end(), name.begin(), name.end());
+    for (char c : name) out.push_back(static_cast<std::uint8_t>(c));
     const auto size = static_cast<std::uint64_t>(data.size());
     for (int i = 7; i >= 0; --i) out.push_back(static_cast<std::uint8_t>(size >> (8 * i)));
     out.push_back(codec);
