@@ -96,6 +96,10 @@ int main(int argc, char** argv) {
             options.windowed = true;
         } else if (a == "--code-window") {
             options.code_window = true;
+        } else if (a == "--open" && i + 1 < argc) {
+            options.open = argv[++i];
+        } else if (a == "--no-camera") {
+            options.no_camera = true;
         } else if (a == "--window" && i + 1 < argc) {
             // The window's size in points, e.g. 640x600: for checking the layout at a size.
             if (std::sscanf(argv[++i], "%dx%d", &win_w, &win_h) != 2 || win_w < 320 || win_h < 320) return Usage();

@@ -65,11 +65,28 @@ class Ui {
     bool Switch(const std::string& id, SDL_FRect r, bool on);
     // A rounded card that brightens under the pointer, for a row of a list. True when clicked.
     bool Row(const std::string& id, SDL_FRect r);
+    // A one-line text box: click to type in it. True when Return is pressed in it.
+    bool TextField(const std::string& id, SDL_FRect r, std::string* value, const std::string& placeholder,
+                   std::size_t max_chars = 40);
+    [[nodiscard]] bool typing() const { return !focus_.empty(); }
+    void Unfocus();
+
+    enum class Icon { kSend, kReceive, kReceived, kTeams };
+    // A destination on the navigation rail: its icon over its label, a pill behind it when chosen.
+    bool RailItem(const std::string& id, float cx, float y, Icon icon, const char* label, bool chosen);
+
+    SDL_Window* window = nullptr;  // for text input
 
   private:
     std::map<std::string, Ease> anim_;
     std::map<std::string, bool> seen_;
     SDL_Cursor* hand_ = nullptr;
+    SDL_Cursor* ibeam_ = nullptr;
+    bool over_field_ = false;
+    std::string focus_;      // the text field typed into, if any
+    std::string typed_;      // this frame's typing
+    int backspaces_ = 0;
+    bool enter_ = false;
 };
 
 }  // namespace fileflow::desktop

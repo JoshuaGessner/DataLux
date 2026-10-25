@@ -43,10 +43,9 @@ void App::SendScreen(float x0, float W, float H) {
     const float L = x0;           // the screen's left edge (after the rail)
     const float SW = W - x0;      // and its width
 
-    // Header: the mark, the name, what it does.
-    LightGrid(paint_, L + margin + 14, 40, 28, t_ * 0.6F, 0);
-    paint_.Text("FileFlow", L + margin + 38, 27, 20, Weight::kSemiBold, th::kText);
-    if (SW > 560) paint_.Text("Files, sent with light", W - margin, 30, 14, Weight::kRegular, th::kTextDim, Align::kRight);
+    // Header: the page, and what FileFlow does.
+    paint_.Text("Send", L + margin, 24, 28, Weight::kSemiBold, th::kText);
+    if (SW > 560) paint_.Text("Files, sent with light", W - margin, 34, 14, Weight::kRegular, th::kTextDim, Align::kRight);
 
     // A second screen -- a projector, a TV -- can show the code while this one stays yours.
     const auto displays = Displays();
@@ -59,7 +58,8 @@ void App::SendScreen(float x0, float W, float H) {
     // The drop zone.
     const float cw = std::min(SW - 2 * margin, 760.0F);
     const float cx0 = L + (SW - cw) / 2;
-    const float extra = (recent_.empty() ? 0.0F : 36.0F + 52.0F * static_cast<float>(recent_.size())) + (choose_display ? 104.0F : 0.0F);
+    const float extra = (recent_.empty() ? 0.0F : 36.0F + 52.0F * static_cast<float>(recent_.size())) + (choose_display ? 104.0F : 0.0F) +
+                        (settings_.encrypted ? 126.0F : 76.0F);
     const float ch = std::clamp(H - 360 - extra, 260.0F, 400.0F);
     const SDL_FRect card{cx0, 84, cw, ch};
     const bool dragging = drag_seen_.has_value() && Clock::now() - *drag_seen_ < std::chrono::milliseconds(250);
@@ -108,6 +108,7 @@ void App::SendScreen(float x0, float W, float H) {
             {kCompressionNames[0], kCompressionNames[1], kCompressionNames[2]}, &settings_.compression,
             kCompressionHints[settings_.compression]);
     float bottom = sy + (stacked ? 196 : 98);
+    bottom += 16 + EncryptedRow(card.x, bottom + 16, cw);
     if (choose_display) {
         std::vector<std::string> names;
         const SDL_DisplayID here = SDL_GetDisplayForWindow(window_);

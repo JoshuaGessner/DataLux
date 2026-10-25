@@ -53,6 +53,9 @@ struct Prepared {
     std::string name;     // what the receiver shows: the file's, or "3 files"
     std::size_t files = 0;
     std::string problem;  // non-empty: nothing to send
+    // Sealed to a pairing or team: the link then shows only "Encrypted file" and says nothing of
+    // what it is -- the real name and size are inside the envelope, as on the phone.
+    bool sealed = false;
 };
 
 // Reads and packs `paths`. Slow for a big file -- reading and compressing -- so run it off the

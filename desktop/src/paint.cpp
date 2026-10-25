@@ -317,6 +317,40 @@ void Painter::Circle(float cx, float cy, float radius, Rgba c) {
     Fill(ring, normals, c);
 }
 
+void Painter::Polygon(const std::vector<SDL_FPoint>& points, Rgba c) {
+    const std::size_t n = points.size();
+    if (n < 3) return;
+    // Each corner's normal: the two edges' outward normals, averaged. Which way is out depends on
+    // the winding, so it's read from the polygon's signed area.
+    float area = 0;
+    for (std::size_t i = 0; i < n; ++i) {
+        const auto& a = points[i];
+        const auto& b = points[(i + 1) % n];
+        area += a.x * b.y - b.x * a.y;
+    }
+    const float out = area > 0 ? 1.0F : -1.0F;
+    std::vector<SDL_FPoint> ring;
+    std::vector<SDL_FPoint> normals;
+    for (std::size_t i = 0; i < n; ++i) {
+        const auto& prev = points[(i + n - 1) % n];
+        const auto& cur = points[i];
+        const auto& next = points[(i + 1) % n];
+        const auto edge = [&](SDL_FPoint a, SDL_FPoint b) {
+            const float dx = b.x - a.x;
+            const float dy = b.y - a.y;
+            const float len = std::max(1e-6F, std::sqrt(dx * dx + dy * dy));
+            return SDL_FPoint{out * dy / len, -out * dx / len};
+        };
+        const SDL_FPoint n1 = edge(prev, cur);
+        const SDL_FPoint n2 = edge(cur, next);
+        SDL_FPoint nm{n1.x + n2.x, n1.y + n2.y};
+        const float len = std::max(1e-6F, std::sqrt(nm.x * nm.x + nm.y * nm.y));
+        ring.push_back({cur.x * scale_, cur.y * scale_});
+        normals.push_back({nm.x / len, nm.y / len});
+    }
+    Fill(ring, normals, c);
+}
+
 void Painter::Glow(float cx, float cy, float radius, Rgba c) {
     SDL_SetTextureColorModFloat(glow_, c.r, c.g, c.b);
     SDL_SetTextureAlphaModFloat(glow_, c.a);

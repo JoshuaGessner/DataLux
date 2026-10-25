@@ -42,6 +42,36 @@ FetchContent_Declare(mbedtls
 )
 FetchContent_MakeAvailable(SDL3 inter mbedtls)
 
+# QR codes for pairing: drawn with Nayuki's QR Code generator (MIT), read from the camera with
+# quirc (ISC). Both small and plain; quirc is C.
+enable_language(C)
+FetchContent_Declare(qrcodegen
+    URL      https://github.com/nayuki/QR-Code-generator/archive/refs/tags/v1.8.0.tar.gz
+    URL_HASH SHA256=2ec0a4d33d6f521c942eeaf473d42d5fe139abcfa57d2beffe10c5cf7d34ae60
+)
+FetchContent_Declare(quirc
+    URL      https://github.com/dlbeer/quirc/archive/refs/tags/v1.2.tar.gz
+    URL_HASH SHA256=73c12ea33d337ec38fb81218c7674f57dba7ec0570bddd5c7f7a977c0deb64c5
+)
+FetchContent_GetProperties(qrcodegen)
+if(NOT qrcodegen_POPULATED)
+    FetchContent_Populate(qrcodegen)
+endif()
+FetchContent_GetProperties(quirc)
+if(NOT quirc_POPULATED)
+    FetchContent_Populate(quirc)
+endif()
+add_library(ff_qr STATIC
+    ${qrcodegen_SOURCE_DIR}/cpp/qrcodegen.cpp
+    ${quirc_SOURCE_DIR}/lib/decode.c
+    ${quirc_SOURCE_DIR}/lib/identify.c
+    ${quirc_SOURCE_DIR}/lib/quirc.c
+    ${quirc_SOURCE_DIR}/lib/version_db.c
+)
+target_include_directories(ff_qr SYSTEM PUBLIC ${qrcodegen_SOURCE_DIR}/cpp ${quirc_SOURCE_DIR}/lib)
+set_target_properties(ff_qr PROPERTIES CXX_STANDARD 20 POSITION_INDEPENDENT_CODE ON)
+target_compile_options(ff_qr PRIVATE -w)
+
 # Encrypted mode: pairing, sealed envelopes, teams -- the app's secure/ package in C++.
 add_library(fileflow_secure STATIC src/secure.cpp)
 target_include_directories(fileflow_secure PUBLIC src)
@@ -75,6 +105,8 @@ add_executable(fileflow-send
     src/app.cpp
     src/ui.cpp
     src/screen_send.cpp
+    src/screen_teams.cpp
+    src/camera.cpp
     src/paint.cpp
     src/transfer.cpp
     src/stb_impl.cpp
@@ -83,7 +115,7 @@ add_executable(fileflow-send
 target_include_directories(fileflow-send SYSTEM PRIVATE ${STB_DIR})
 # One version for the whole product: the root project's, the Android app's versionName.
 target_compile_definitions(fileflow-send PRIVATE FILEFLOW_VERSION="${PROJECT_VERSION}")
-target_link_libraries(fileflow-send PRIVATE fileflow_secure fileflow_warnings SDL3::SDL3-static)  # core comes with secure
+target_link_libraries(fileflow-send PRIVATE fileflow_secure ff_qr fileflow_warnings SDL3::SDL3-static)  # core comes with secure
 # Third-party and generated sources: not held to the project's warnings.
 set_source_files_properties(src/stb_impl.cpp ${CMAKE_CURRENT_BINARY_DIR}/fonts.cpp PROPERTIES COMPILE_OPTIONS "-w")
 set_target_properties(fileflow-send PROPERTIES
@@ -145,8 +177,8 @@ endif()
 
 # The desktop's own tests: its secure formats held to the phone's vectors, and the rest.
 if(FILEFLOW_BUILD_TESTS)
-    add_executable(desktop_tests tests/test_secure.cpp)
-    target_link_libraries(desktop_tests PRIVATE fileflow_secure fileflow_warnings GTest::gtest_main)
+    add_executable(desktop_tests tests/test_secure.cpp tests/test_qr.cpp src/camera.cpp)
+    target_link_libraries(desktop_tests PRIVATE fileflow_secure ff_qr SDL3::SDL3-static fileflow_warnings GTest::gtest_main)
     set_target_properties(desktop_tests PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
     include(GoogleTest)
     gtest_discover_tests(desktop_tests DISCOVERY_TIMEOUT 60)

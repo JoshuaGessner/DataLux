@@ -123,10 +123,13 @@ std::unique_ptr<Transfer> Open(const Prepared& p, const Speed& speed, std::strin
     TransmitConfig tc;
     tc.fec_nsym = kFecNsym;
     tc.profile = speed.profile;
-    tc.content = {.original_size = p.envelope.original_size, .codec = p.envelope.codec,
-                  .compress_ms = p.envelope.compress_ms};
-    auto s = TransmitSession::Create(*t->layout, p.envelope.bytes, p.name,
-                                     SessionIdFor(p.envelope.bytes, p.name), tc);
+    if (!p.sealed) {
+        tc.content = {.original_size = p.envelope.original_size, .codec = p.envelope.codec,
+                      .compress_ms = p.envelope.compress_ms};
+    }
+    const std::string link_name = p.sealed ? "Encrypted file" : p.name;
+    auto s = TransmitSession::Create(*t->layout, p.envelope.bytes, link_name,
+                                     SessionIdFor(p.envelope.bytes, link_name), tc);
     if (!s.ok()) {
         *problem = "Transmitter: " + std::string(ErrorName(s.error()));
         return nullptr;

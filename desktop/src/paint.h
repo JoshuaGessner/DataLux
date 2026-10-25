@@ -69,6 +69,8 @@ class Painter {
     void Circle(float cx, float cy, float radius, Rgba c);
     // Soft light, brightest at the centre and gone at [radius].
     void Glow(float cx, float cy, float radius, Rgba c);
+    // A convex polygon through [points] (in order, in points), its edge anti-aliased.
+    void Polygon(const std::vector<SDL_FPoint>& points, Rgba c);
     // An arc [thickness] wide, from [start] through [sweep] radians, with round ends.
     void Arc(float cx, float cy, float radius, float thickness, float start, float sweep, Rgba c);
 

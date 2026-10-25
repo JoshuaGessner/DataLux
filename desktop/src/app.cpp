@@ -55,6 +55,8 @@ Settings Settings::Load() {
         if (key == "speed" && n < kSpeeds.size()) s.speed = n;
         if (key == "compression" && n < kCompressionNames.size()) s.compression = n;
         if (key == "name") s.name = value;
+        if (key == "encrypted") s.encrypted = n != 0;
+        if (key == "seal_to") s.seal_to = value;
     }
     return s;
 }
@@ -63,6 +65,8 @@ void Settings::Save() const {
     std::ofstream out(PrefPath("settings.txt"));
     out << "speed " << speed << "\ncompression " << compression << "\n";
     if (!name.empty()) out << "name " << name << "\n";
+    out << "encrypted " << (encrypted ? 1 : 0) << "\n";
+    if (!seal_to.empty()) out << "seal_to " << seal_to << "\n";
 }
 
 // One entry per block: "name<TAB>bytes<TAB>when", then a line per path, then a blank line.
@@ -161,12 +165,18 @@ App::CodeView::~CodeView() {
 }
 
 App::App(SDL_Window* w, SDL_Renderer* r, Settings settings, Options options)
-    : window_(w), renderer_(r), paint_(r), ui_(paint_), settings_(std::move(settings)), options_(std::move(options)) {
+    : window_(w), renderer_(r), paint_(r), ui_(paint_), settings_(std::move(settings)), options_(std::move(options)),
+      teams_(PrefPath("teams.txt")) {
+    ui_.window = w;
     // The display's stated rate until one is measured.
     const SDL_DisplayMode* m = SDL_GetCurrentDisplayMode(SDL_GetDisplayForWindow(w));
     if (m != nullptr && m->refresh_rate > 0.0F) hz_ = static_cast<double>(m->refresh_rate);
     began_ = last_frame_ = Clock::now();
     recent_ = Recent::Load();
+    if (options_.open == "teams") tab_ = Tab::kTeams;
+    if (options_.open == "pair") StartPairing(secure::PairingFlow::Mode::kPair);
+    if (options_.open == "join") StartPairing(secure::PairingFlow::Mode::kJoin);
+    if (options_.open == "encrypted") settings_.encrypted = true;
 }
 
 App::~App() {
@@ -222,8 +232,10 @@ void App::Event(const SDL_Event& e) {
             break;
         case SDL_EVENT_KEY_DOWN: {
             Wake();
+            if (ui_.typing()) break;  // keys are letters while a text field has them
             const bool command = (e.key.mod & (SDL_KMOD_CTRL | SDL_KMOD_GUI)) != 0;
-            if (e.key.key == SDLK_ESCAPE && phase_ == Phase::kSending) Stop();
+            if (e.key.key == SDLK_ESCAPE && pair_) pair_.reset();
+            else if (e.key.key == SDLK_ESCAPE && phase_ == Phase::kSending) Stop();
             else if (e.key.key == SDLK_O && command && phase_ == Phase::kIdle) Choose();
             else if (e.key.key == SDLK_V && command && phase_ == Phase::kIdle) SendClipboard();
             else if (e.key.key == SDLK_1) SetSpeed(0);
@@ -297,8 +309,13 @@ void App::Frame() {
             if (controls_.value > 0.01F) SendingOverlay(W, H, controls_.value);
             if (controls_.value > 0.01F) SDL_ShowCursor(); else SDL_HideCursor();
         }
+    } else if (pair_) {
+        PairScreen(W, H);
     } else {
-        SendScreen(0, W, H);
+        constexpr float kRail = 92;
+        if (tab_ == Tab::kTeams) TeamsScreen(kRail, W, H);
+        else SendScreen(kRail, W, H);
+        Rail(H);
     }
     ui_.End();
     MaybeSnapshot();
@@ -388,6 +405,18 @@ void App::TakePrepared() {
         prepared_.reset();
         phase_ = Phase::kIdle;
         return;
+    }
+    if (settings_.encrypted) {
+        // Sealed here, never sent in the clear by mistake: no key, no sending.
+        const auto key = SealTarget();
+        if (!key) {
+            problem_ = "Encrypted is on, but no phone is paired and no team chosen. Pair, or choose a team.";
+            prepared_.reset();
+            phase_ = Phase::kIdle;
+            return;
+        }
+        prepared_->envelope.bytes = secure::Seal(prepared_->envelope.bytes, *key);
+        prepared_->sealed = true;
     }
     OpenCodeView();
     Restart();

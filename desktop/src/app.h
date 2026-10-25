@@ -7,7 +7,9 @@
 // while the app's window becomes the presenter's view.
 #pragma once
 
+#include "camera.h"
 #include "paint.h"
+#include "secure.h"
 #include "transfer.h"
 #include "ui.h"
 
@@ -33,6 +35,8 @@ struct Settings {
     std::size_t speed = 1;        // Fast: the setting that works on the most receivers
     std::size_t compression = 1;  // Auto
     std::string name;             // what teams see; empty until set
+    bool encrypted = false;       // files sealed to the paired phone or a team
+    std::string seal_to;          // a team's id (hex); empty for the paired phone
 
     static Settings Load();
     void Save() const;
@@ -61,6 +65,8 @@ class App {
     struct Options {
         bool windowed = false;
         bool code_window = false;  // present in a separate window even on one display (testing)
+        std::string open;          // a screen to open at start: teams, pair, join (testing)
+        bool no_camera = false;    // never open the camera (unattended runs: no permission prompt)
         std::string snapshot;
         double snapshot_after = 0;
     };
@@ -97,11 +103,23 @@ class App {
 
     // Screens (screen_*.cpp).
     void Rail(float H);
+    void TeamsScreen(float x, float W, float H);
+    void TeamDetail(float x, float W, float H, const secure::Team& team);
+    void PairScreen(float W, float H);
+    float EncryptedRow(float x, float y, float w);  // returns its height
     void SendScreen(float x, float W, float H);
     void SendingOverlay(float W, float H, float alpha);
     void Presenter(float W, float H);
     void Setting(const std::string& id, float x, float y, float w, const char* label,
                  const std::vector<std::string>& options, std::size_t* value, const std::string& hint);
+
+    // Encrypted mode (screen_teams.cpp).
+    void StartPairing(secure::PairingFlow::Mode mode, std::optional<secure::Team> team = std::nullopt);
+    void PairFinished();
+    [[nodiscard]] std::string MyName() const;
+    [[nodiscard]] std::optional<secure::SealKey> SealTarget();
+    [[nodiscard]] std::vector<secure::SealKey> Keys();
+    [[nodiscard]] const secure::PairingKey* Paired() const;
 
     // Actions.
     void SendClipboard();
@@ -161,6 +179,26 @@ class App {
     std::vector<std::string> sending_paths_;  // what is being sent, for the recent list
     std::vector<Recent> recent_;
     std::size_t display_choice_ = 0;  // index into Displays(): where the code is shown
+
+    // Encrypted mode.
+    secure::TeamStore teams_;
+    std::optional<secure::PairingKey> paired_;  // held in memory only, 30 minutes, as on the phone
+    std::string team_open_;                     // the team shown in detail, by id
+    std::string new_team_;                      // a name being typed for a new team
+    bool naming_team_ = false;
+    std::string name_edit_;
+    bool editing_name_ = false;
+    struct PairState {
+        std::unique_ptr<secure::PairingFlow> flow;
+        secure::PairingFlow::Mode mode = secure::PairingFlow::Mode::kPair;
+        std::optional<secure::Team> team;  // inviting to
+        Camera camera;
+        Clock::time_point last_read;
+        std::optional<Clock::time_point> done_at;
+        bool finished = false;
+        std::string outcome;
+    };
+    std::unique_ptr<PairState> pair_;
 
     // Sending.
     std::optional<Prepared> prepared_;
