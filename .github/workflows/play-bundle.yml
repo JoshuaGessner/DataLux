@@ -1,0 +1,142 @@
+name: prepare Play internal-test bundle
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: Reviewed source branch, tag, or commit reachable from main
+        required: true
+        default: main
+        type: string
+      version_code:
+        description: New positive version code; must exceed every code already uploaded to Play
+        required: true
+        type: string
+      version_name:
+        description: User-facing version, such as 0.3.0-preview
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: play-internal-bundle
+  cancel-in-progress: false
+
+jobs:
+  bundle:
+    name: build and verify an AAB for owner review (no publishing)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    environment: play-internal
+    steps:
+      - name: Require the owner and valid release inputs
+        env:
+          ACTOR: ${{ github.actor }}
+          OWNER: ${{ github.repository_owner }}
+          VERSION_CODE: ${{ inputs.version_code }}
+          VERSION_NAME: ${{ inputs.version_name }}
+        run: |
+          set -euo pipefail
+          [[ "$ACTOR" == "$OWNER" ]] || { echo "::error::Only the repository owner may prepare a Play bundle."; exit 1; }
+          [[ "$VERSION_CODE" =~ ^[1-9][0-9]{0,9}$ ]] && (( VERSION_CODE <= 2100000000 )) || { echo "::error::Invalid version code."; exit 1; }
+          [[ "$VERSION_NAME" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] || { echo "::error::Invalid version name."; exit 1; }
+
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ inputs.source_ref }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Require a reviewed mainline commit
+        id: source
+        run: |
+          set -euo pipefail
+          git merge-base --is-ancestor HEAD origin/main || { echo "::error::Source must be reachable from main."; exit 1; }
+          echo "revision=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@07d1f8453baaff67fb503883367f8b13e6158a54 # v6
+        with:
+          gradle-version: '9.8.1'
+          cache-read-only: true
+
+      - name: Install pinned Android tooling
+        run: |
+          set -euo pipefail
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          yes | "$SDKMANAGER" --licenses > /dev/null || true
+          "$SDKMANAGER" --install "ndk;29.0.14206865" "cmake;3.22.1" "platforms;android-37.0" "build-tools;37.0.0"
+          curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' --tlsv1.2 \
+            https://github.com/google/bundletool/releases/download/1.18.3/bundletool-all-1.18.3.jar \
+            --output "$RUNNER_TEMP/bundletool.jar"
+          echo "a099cfa1543f55593bc2ed16a70a7c67fe54b1747bb7301f37fdfd6d91028e29  $RUNNER_TEMP/bundletool.jar" | sha256sum --check --status
+
+      - name: Configure the private upload identity
+        env:
+          UPLOAD_KEYSTORE_BASE64: ${{ secrets.PLAY_UPLOAD_KEYSTORE_BASE64 }}
+          UPLOAD_STORE_PASSWORD: ${{ secrets.PLAY_UPLOAD_STORE_PASSWORD }}
+          UPLOAD_KEY_ALIAS: ${{ secrets.PLAY_UPLOAD_KEY_ALIAS }}
+          UPLOAD_KEY_PASSWORD: ${{ secrets.PLAY_UPLOAD_KEY_PASSWORD }}
+          LICENSE_PUBLIC_KEY: ${{ vars.FILEFLOW_LICENSE_PUBLIC_KEY }}
+        run: |
+          set -euo pipefail
+          set +x
+          [[ -n "$UPLOAD_KEYSTORE_BASE64" && -n "$UPLOAD_STORE_PASSWORD" && -n "$UPLOAD_KEY_ALIAS" && -n "$UPLOAD_KEY_PASSWORD" && -n "$LICENSE_PUBLIC_KEY" ]] || { echo "::error::Configure the play-internal environment's upload secrets and license public key first."; exit 1; }
+          umask 077
+          printf '%s' "$UPLOAD_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/fileflow-upload.jks"
+          # Only non-secret paths are written to the job environment. Passwords stay scoped
+          # to the build step through GitHub Secrets; no private material is an artifact.
+          echo "FILEFLOW_UPLOAD_KEYSTORE=$RUNNER_TEMP/fileflow-upload.jks" >> "$GITHUB_ENV"
+
+      - name: Build the store profile and validate its release identity
+        env:
+          FILEFLOW_UPLOAD_STORE_PASSWORD: ${{ secrets.PLAY_UPLOAD_STORE_PASSWORD }}
+          FILEFLOW_UPLOAD_KEY_ALIAS: ${{ secrets.PLAY_UPLOAD_KEY_ALIAS }}
+          FILEFLOW_UPLOAD_KEY_PASSWORD: ${{ secrets.PLAY_UPLOAD_KEY_PASSWORD }}
+          ORG_GRADLE_PROJECT_fileflowLicensePublicKey: ${{ vars.FILEFLOW_LICENSE_PUBLIC_KEY }}
+          ORG_GRADLE_PROJECT_fileflowAccountOrigin: ${{ vars.FILEFLOW_ACCOUNT_ORIGIN || 'https://fileflow.anomalousinteractive.com' }}
+          ORG_GRADLE_PROJECT_fileflowVersionCode: ${{ inputs.version_code }}
+          ORG_GRADLE_PROJECT_fileflowVersionName: ${{ inputs.version_name }}
+          ORG_GRADLE_PROJECT_store: 'true'
+        run: |
+          set -euo pipefail
+          gradle :app:validatePlayRelease :app:testDebugUnitTest :app:lintRelease :app:bundleRelease :app:assembleRelease --no-daemon --no-configuration-cache
+
+      - name: Verify the AAB, upload certificate and native alignment
+        env:
+          VERSION_CODE: ${{ inputs.version_code }}
+          VERSION_NAME: ${{ inputs.version_name }}
+          REVISION: ${{ steps.source.outputs.revision }}
+          ACCOUNT_ORIGIN: ${{ vars.FILEFLOW_ACCOUNT_ORIGIN || 'https://fileflow.anomalousinteractive.com' }}
+        run: |
+          set -euo pipefail
+          python3 scripts/tests/test_play_bundle.py
+          python3 scripts/check_play_bundle.py \
+            --bundle app/build/outputs/bundle/release/app-release.aab \
+            --apk app/build/outputs/apk/release/app-release.apk \
+            --sdk-root "$ANDROID_HOME" --bundletool "$RUNNER_TEMP/bundletool.jar" \
+            --certificate app/build/play-review/upload-certificate.der \
+            --license-public-key app/build/play-review/license-public-key.der --account-origin "$ACCOUNT_ORIGIN" \
+            --expected-version-code "$VERSION_CODE" --expected-version-name "$VERSION_NAME" \
+            --revision "$REVISION" --report app/build/play-review/PLAY-BUNDLE-REVIEW.json
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: fileflow-play-review-${{ inputs.version_code }}
+          path: |
+            app/build/outputs/bundle/release/app-release.aab
+            app/build/play-review/upload-certificate.der
+            app/build/play-review/license-public-key.der
+            app/build/play-review/PLAY-BUNDLE-REVIEW.json
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Remove the temporary upload keystore
+        if: always()
+        run: rm -f "$RUNNER_TEMP/fileflow-upload.jks"

@@ -25,6 +25,8 @@ data class ProSession(
     val email: String,
     val expiresAt: Long,
     val license: String? = null,
+    val verificationRequested: Boolean = false,
+    val verificationResendAt: Long = 0,
 )
 
 data class ProStatus(
@@ -34,6 +36,7 @@ data class ProStatus(
     val purchaseAccountId: String,
     val emailVerified: Boolean,
     val verificationAvailable: Boolean,
+    val verificationResendAt: Long = 0,
 )
 
 /** Small HTTPS account client. Called on a worker thread, never by the optical transfer path. */
@@ -62,7 +65,9 @@ object ProAccount {
             // A staging build must never send a cached production bearer to another origin.
             require(account.getString("origin") == BuildConfig.ACCOUNT_ORIGIN)
             ProSession(account.getString("token"), account.getString("userId"), account.getString("email"),
-                account.getLong("expiresAt"), account.optString("license").takeIf { it.isNotEmpty() })
+                account.getLong("expiresAt"), account.optString("license").takeIf { it.isNotEmpty() },
+                account.optBoolean("verificationRequested", false),
+                VerificationCooldown.serverDeadline(account.optLong("verificationResendAt", 0)))
         }.getOrNull()
         Entitlements.useVerifiedLicense(session?.license, session?.userId.orEmpty())
     }
@@ -71,8 +76,10 @@ object ProAccount {
         val result = request("/api/native/login", JSONObject().put("email", email).put("password", password))
         val user = result.getJSONObject("user")
         val id = user.getString("id")
-        val cached = session?.takeIf { it.userId == id }?.license
-        val next = ProSession(result.getString("token"), id, user.getString("email"), result.getLong("expiresAt"), cached)
+        val previous = session?.takeIf { it.userId == id }
+        val cached = previous?.license
+        val next = ProSession(result.getString("token"), id, user.getString("email"), result.getLong("expiresAt"), cached,
+            previous?.verificationRequested ?: false, previous?.verificationResendAt ?: 0)
         persist(next)
         session = next
         authenticationRejected = false
@@ -101,9 +108,26 @@ object ProAccount {
     }
 
     @Synchronized fun requestVerification(): String {
-        val response = request("/api/native/account/verification/request", JSONObject(), requireSession().token)
-        return response.optString("message").takeIf { it.isNotBlank() && it.length <= 300 }
-            ?: "If verification is needed, a message will arrive in your email shortly."
+        val account = requireSession()
+        if (requiresSignIn) throw AccountError("Sign in again before requesting a verification email.")
+        if (status?.emailVerified == true) return "Your email is already verified."
+        if (VerificationCooldown.secondsRemaining(account.verificationResendAt) > 0)
+            return "Please wait before requesting another verification email."
+        // A lost response may still have queued mail. Pace retries without claiming delivery.
+        updateVerification(account.copy(verificationResendAt = System.currentTimeMillis() + VerificationCooldown.REQUEST_MILLIS))
+        val response = request("/api/native/account/verification/request", JSONObject(), account.token)
+        val verified = response.optBoolean("emailVerified", false)
+        val resendAt = if (verified) 0 else if (response.has("verificationResendAt"))
+            VerificationCooldown.serverDeadline(response.optLong("verificationResendAt", 0))
+            else System.currentTimeMillis() + VerificationCooldown.REQUEST_MILLIS
+        updateVerification(requireSession().copy(verificationRequested = !verified, verificationResendAt = resendAt))
+        status = status?.copy(emailVerified = verified, verificationResendAt = resendAt)
+        return if (verified) "Your email is already verified." else "Verification email requested. Check your inbox and spam folder."
+    }
+
+    private fun updateVerification(account: ProSession) {
+        persist(account)
+        session = account
     }
 
     @Synchronized fun deleteAccount(password: String, confirmation: String, expectedUserId: String) {
@@ -146,13 +170,17 @@ object ProAccount {
         if (billing.getString("productId") != "fileflow_pro") throw AccountError("This Pro product is not supported by this version.")
         val accountId = body.getString("purchaseAccountId")
         if (accountId != expectedPurchaseAccountId()) throw AccountError("The account response could not be verified.")
-        val next = previous.copy(license = license)
+        val emailVerified = body.optBoolean("emailVerified", false)
+        val serverRequested = body.optLong("verificationResendAt", 0) > 0
+        val serverResendAt = VerificationCooldown.serverDeadline(body.optLong("verificationResendAt", 0))
+        val resendAt = if (emailVerified) 0 else maxOf(previous.verificationResendAt, serverResendAt)
+        val next = previous.copy(license = license, verificationRequested = !emailVerified &&
+            (previous.verificationRequested || serverRequested), verificationResendAt = resendAt)
         persist(next)
         session = next
         Entitlements.useVerifiedLicense(license, next.userId)
-        val emailVerified = body.optBoolean("emailVerified", false)
         return ProStatus(pro, billing.getBoolean("enabled") && emailVerified, billing.getString("productId"), accountId,
-            emailVerified, body.optBoolean("verificationAvailable", false)).also { status = it }
+            emailVerified, body.optBoolean("verificationAvailable", false), resendAt).also { status = it }
     }
 
     private fun requireSession() = session ?: throw AccountError("Sign in to your FileFlow account first.")
@@ -161,6 +189,7 @@ object ProAccount {
         val json = JSONObject().put("origin", BuildConfig.ACCOUNT_ORIGIN)
             .put("token", account.token).put("userId", account.userId).put("email", account.email)
             .put("expiresAt", account.expiresAt).put("license", account.license.orEmpty())
+            .put("verificationRequested", account.verificationRequested).put("verificationResendAt", account.verificationResendAt)
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
         cipher.init(Cipher.ENCRYPT_MODE, encryptionKey())
         val encrypted = cipher.doFinal(json.toString().toByteArray(Charsets.UTF_8))
@@ -206,6 +235,10 @@ object ProAccount {
                 val errorBytes = connection.errorStream?.use { it.readNBytes(8193) }
                 val errorCode = if (errorBytes != null && errorBytes.size <= 8192)
                     runCatching { JSONObject(errorBytes.toString(Charsets.UTF_8)).optString("code") }.getOrDefault("") else ""
+                if (code == 429 && route == "/api/native/account/verification/request") {
+                    session?.let { updateVerification(it.copy(verificationResendAt =
+                        VerificationCooldown.retryDeadline(connection.getHeaderField("Retry-After")))) }
+                }
                 val error = AccountError.fromResponse(code, errorCode, token != null,
                     route == "/api/native/account/delete", route == "/api/native/account/verification/request")
                 if (error.invalidatesAuthentication) { status = null; authenticationRejected = true }

@@ -3,9 +3,11 @@ package dev.fileflow
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
+import android.os.Handler
 import android.os.Looper
 import android.text.InputType
 import android.view.View
+import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ScrollView
@@ -37,6 +39,15 @@ class ProActivity : AppCompatActivity() {
     private lateinit var body: LinearLayout
     private var busy = false
     private var notice = ""
+    private var verificationRequestInFlight = false
+    private val verificationTimer = Handler(Looper.getMainLooper())
+    private var verificationButton: Button? = null
+    private val verificationTick = object : Runnable {
+        override fun run() {
+            updateVerificationButton()
+            verificationTimer.postDelayed(this, 1000)
+        }
+    }
     private var billing: BillingClient? = null
     private var billingAccountId: String? = null
     private var product: ProductDetails? = null
@@ -59,14 +70,22 @@ class ProActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
+        verificationTimer.removeCallbacks(verificationTick)
+        verificationTimer.post(verificationTick)
         if (!busy && ProAccount.session != null) {
             if (billing?.isReady == true) restore() else refresh()
         }
     }
 
+    override fun onPause() {
+        verificationTimer.removeCallbacks(verificationTick)
+        super.onPause()
+    }
+
     private fun render() {
         if (Looper.myLooper() != Looper.getMainLooper()) { runOnUiThread { render() }; return }
         if (isFinishing || isDestroyed) return
+        verificationButton = null
         body.removeAllViews()
         add(button("Back", style = Ui.Style.Text) { finish() })
         add(title("FileFlow Pro", 30f))
@@ -79,10 +98,15 @@ class ProActivity : AppCompatActivity() {
             add(space(12))
         }
         if (session == null || ProAccount.requiresSignIn) {
-            add(text(if (session == null) "Sign in to link Pro across your devices. An account is optional for free transfers."
+            if (session?.verificationRequested == true) {
+                add(card(title("Return from verification?", 20f), space(6),
+                    text("Verifying your email signs you out for security. Sign in again below to confirm it is complete. Your saved offline Pro access remains available.")))
+                add(space(12))
+            } else add(text(if (session == null) "Sign in to link Pro across your devices. An account is optional for free transfers."
                 else "Sign in again to sync your account. Your saved offline Pro access remains available."))
             val email = EditText(this).apply {
                 hint = "Email"
+                setText(session?.email.orEmpty())
                 inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS
                 setSingleLine()
                 isEnabled = !busy
@@ -114,21 +138,12 @@ class ProActivity : AppCompatActivity() {
             add(text(session.email))
             add(space(8))
             val pro = session.license?.let { ProLicense.verify(it, BuildConfig.LICENSE_PUBLIC_KEY, session.userId) } == true
+            val status = ProAccount.status
+            addVerification(session, status)
+            add(space(12))
             add(card(title(if (pro) "Pro is active" else "Free", 20f), space(6), text(if (pro)
                 "Your verified Pro access is saved on this device and works offline. Sign in to the same FileFlow account on your other devices."
             else "Sign in on each device to share your FileFlow Pro purchase.")))
-            add(space(12))
-            val status = ProAccount.status
-            add(card(title(if (status?.emailVerified == true) "Email verified" else "Verify your email", 18f), space(6),
-                text(if (status?.emailVerified == true) "Your account is ready to link paid features across devices."
-                    else "Verify your email before buying Pro or linking a new device. Open the verification email, confirm your FileFlow password, then refresh this account.")))
-            if (status?.emailVerified != true) {
-                add(button(if (busy) "Please wait…" else "Send verification email", style = Ui.Style.Tonal) {
-                    work("Verification request failed", "Check your email for the verification link.") { ProAccount.requestVerification() }
-                }.apply { isEnabled = !busy && status?.verificationAvailable == true })
-                if (status?.verificationAvailable == false)
-                    add(text("Verification email is not configured yet. Free transfers and your existing offline access continue to work."))
-            }
             add(space(12))
             val offer = permanentOffer(product)
             if (BuildConfig.STORE && !pro) {
@@ -148,7 +163,49 @@ class ProActivity : AppCompatActivity() {
             add(button("Delete FileFlow account", style = Ui.Style.Text) { confirmDeletion(session.userId) }
                 .apply { isEnabled = !busy })
         }
+        add(button("Privacy & data", style = Ui.Style.Text) { openAccountPage("/privacy.html") })
         if (notice.isNotEmpty()) { add(space(12)); add(text(notice)) }
+    }
+
+    private fun addVerification(session: ProSession, status: ProStatus?) {
+        if (status?.emailVerified == true) {
+            add(card(title("Email verified", 20f), space(6),
+                text("${session.email} is verified. Your account is ready to connect devices and share Pro access.")))
+            return
+        }
+        val requested = session.verificationRequested
+        val instructions = if (requested)
+            "A verification email was requested for ${session.email}. Delivery can take a few minutes. Check your inbox and spam folder."
+        else "Verify ${session.email} before buying Pro or connecting a PC. Free transfers remain available."
+        val resend = button("Send verification email", style = Ui.Style.Tonal) {
+            verificationRequestInFlight = true
+            work("Verification request failed", "Verification request complete. Check the email status above.") { ProAccount.requestVerification() }
+        }
+        verificationButton = resend
+        val check = button("I’ve verified — check account", style = Ui.Style.Text) { refresh() }.apply { isEnabled = !busy }
+        add(card(title(if (requested) "Check your inbox" else "Verify your email", 20f), space(8), text(instructions), space(8),
+            text("1. Open the FileFlow verification email.\n2. Follow its link and confirm your FileFlow password.\n3. Return here and check your account. Verification signs you out, so you may need to sign in again."),
+            space(8), resend, check))
+        if (requested) add(button("Open email app", style = Ui.Style.Text) {
+            runCatching { startActivity(Intent.makeMainSelectorActivity(Intent.ACTION_MAIN, Intent.CATEGORY_APP_EMAIL)) }
+                .onFailure { showNotice("Open your email app or webmail, then look for the FileFlow verification email.") }
+        }.apply { isEnabled = !busy })
+        if (status?.verificationAvailable == false)
+            add(text("Verification email is unavailable right now. Your free transfers and existing offline access still work."))
+        updateVerificationButton()
+    }
+
+    /** Update just the button: a countdown must not rebuild forms or steal input focus. */
+    private fun updateVerificationButton() {
+        val button = verificationButton ?: return
+        val seconds = VerificationCooldown.secondsRemaining(ProAccount.session?.verificationResendAt ?: 0)
+        button.text = when {
+            busy -> if (verificationRequestInFlight) "Requesting email…" else "Please wait…"
+            seconds > 0 -> "Resend available in ${seconds}s"
+            ProAccount.session?.verificationRequested == true -> "Resend verification email"
+            else -> "Send verification email"
+        }
+        button.isEnabled = !busy && seconds == 0L && ProAccount.status?.verificationAvailable == true && !ProAccount.requiresSignIn
     }
 
     private fun add(view: View) = body.addView(view, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
@@ -216,7 +273,12 @@ class ProActivity : AppCompatActivity() {
             val result = runCatching(action)
             runOnUiThread {
                 busy = false
-                notice = result.exceptionOrNull()?.let { if (it is AccountError) it.message.orEmpty() else "$failure. Check your connection and try again." }
+                verificationRequestInFlight = false
+                notice = result.exceptionOrNull()?.let {
+                    if (it is AccountError && it.invalidatesAuthentication && ProAccount.session?.verificationRequested == true)
+                        "If you just verified your email, sign in again below to finish. Your saved offline access is kept."
+                    else if (it is AccountError) it.message.orEmpty() else "$failure. Check your connection and try again."
+                }
                     ?: success
                 render()
                 if (ProAccount.session == null) {
@@ -352,6 +414,7 @@ class ProActivity : AppCompatActivity() {
     private fun showNotice(message: String) = runOnUiThread { notice = message; render() }
 
     override fun onDestroy() {
+        verificationTimer.removeCallbacks(verificationTick)
         billing?.endConnection()
         worker.shutdown()
         super.onDestroy()
