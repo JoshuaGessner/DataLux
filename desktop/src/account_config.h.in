@@ -1,0 +1,4 @@
+#pragma once
+namespace fileflow::desktop::account::config {
+inline constexpr char kAccountOrigin[] = "@FILEFLOW_ACCOUNT_ORIGIN@";
+}

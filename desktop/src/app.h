@@ -8,6 +8,8 @@
 #pragma once
 
 #include "camera.h"
+#include "account.h"
+#include "license.h"
 #include "paint.h"
 #include "receiver.h"
 #include "secure.h"
@@ -88,7 +90,7 @@ class App {
     std::size_t pending_files = 0;
 
   private:
-    enum class Tab { kSend, kReceive, kReceived, kTeams };
+    enum class Tab { kSend, kReceive, kReceived, kTeams, kAccount };
     enum class Phase { kIdle, kPreparing, kSending };
 
     // Where the code is drawn: the app's window, or a full-screen window of its own on another
@@ -107,6 +109,14 @@ class App {
     // Screens (screen_*.cpp).
     void Rail(float H);
     void TeamsScreen(float x, float W, float H);
+    void AccountScreen(float x, float W, float H);
+    void ChooseLicense();
+    void ImportLicense(const std::string& path);
+    void TakeChosenLicense();
+    void PumpAccount();
+    void BeginAccountSignIn();
+    void RefreshAccount();
+    void SignOutAccount();
     void TeamDetail(float x, float W, float H, const secure::Team& team);
     void PairScreen(float W, float H);
     void ReceiveScreen(float x, float W, float H);
@@ -183,6 +193,18 @@ class App {
         bool ready = false;
     };
     std::shared_ptr<ChosenFiles> chosen_ = std::make_shared<ChosenFiles>();
+    std::shared_ptr<ChosenFiles> chosen_license_ = std::make_shared<ChosenFiles>();
+    std::optional<license::Grant> pro_grant_;
+    std::string account_message_;
+    std::optional<account::Session> account_session_;
+    std::optional<account::Device> account_device_;
+    std::future<account::Reply> account_request_;
+    std::optional<account::Reply> account_reply_;
+    Clock::time_point account_poll_at_;
+    Clock::time_point account_device_until_;
+    Clock::time_point account_refresh_at_;
+    bool account_cancelled_ = false;
+    bool account_needs_sign_in_ = false;
     std::future<Prepared> pending_;
     std::string preparing_name_;
     std::string problem_;

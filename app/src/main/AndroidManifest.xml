@@ -2,10 +2,10 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
-    <!-- The receiver needs the camera. Nothing else is requested: NG7 rules out network code of
-         any kind, including for capability exchange, so there is deliberately no INTERNET
-         permission and adding one would contradict the project's premise. -->
+    <!-- Transfers and pairing remain offline. Internet access is only for the optional account
+         and Google Play purchase flow; file contents never go to the licensing service. -->
     <uses-permission android:name="android.permission.CAMERA" />
+    <uses-permission android:name="android.permission.INTERNET" />
 
     <!-- Every screen is portrait, by design: the sender's pattern and the receiver's framing are
          laid out for two phones held upright, face to back. Hence the lint suppression on each. -->
@@ -56,6 +56,7 @@
         <activity
             android:name=".TeamsActivity"
             android:exported="false" />
+        <activity android:name=".ProActivity" android:exported="false" />
         <activity
             android:name=".TeamActivity"
             android:exported="false" />

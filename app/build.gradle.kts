@@ -1,5 +1,25 @@
+import java.net.URI
+import java.security.KeyFactory
+import java.security.interfaces.ECPublicKey
+import java.security.spec.X509EncodedKeySpec
+import java.util.Base64
+
 plugins {
     id("com.android.application")
+}
+
+val licensePublicKey = providers.gradleProperty("fileflowLicensePublicKey").orElse("").get()
+require(licensePublicKey.matches(Regex("[A-Za-z0-9+/=]*"))) { "fileflowLicensePublicKey must be base64 SPKI DER" }
+require(licensePublicKey.isEmpty() || runCatching {
+    val key = KeyFactory.getInstance("EC").generatePublic(X509EncodedKeySpec(Base64.getDecoder().decode(licensePublicKey))) as ECPublicKey
+    require(key.params.curve.field.fieldSize == 256 && key.params.order.bitLength() == 256)
+}.isSuccess) { "fileflowLicensePublicKey must contain a valid P-256 SPKI public key" }
+val accountOrigin = providers.gradleProperty("fileflowAccountOrigin")
+    .orElse("https://fileflow.anomalousinteractive.com").get()
+val accountUri = URI(accountOrigin)
+require(accountUri.scheme == "https" && accountUri.host != null && accountUri.userInfo == null &&
+    accountUri.rawQuery == null && accountUri.rawFragment == null && accountUri.path.isNullOrEmpty()) {
+    "fileflowAccountOrigin must be an HTTPS origin without a path"
 }
 
 android {
@@ -17,6 +37,8 @@ android {
         // A store build (`-Pstore=true`) locks paid features behind what was bought
         // (Entitlements.kt). Every other build -- yours, from this source -- has them all.
         buildConfigField("boolean", "STORE", (findProperty("store") == "true").toString())
+        buildConfigField("String", "LICENSE_PUBLIC_KEY", "\"$licensePublicKey\"")
+        buildConfigField("String", "ACCOUNT_ORIGIN", "\"$accountOrigin\"")
 
         ndk {
             // arm64 only (ADR-0013). HWASan is ARM64-only anyway, and the emulator is useless
@@ -75,6 +97,7 @@ android {
 }
 
 dependencies {
+    implementation("com.android.billingclient:billing:9.1.0")
     implementation("androidx.core:core-ktx:1.19.1")
     implementation("androidx.appcompat:appcompat:1.8.0")
     implementation("androidx.activity:activity-ktx:1.13.0")

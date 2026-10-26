@@ -71,7 +71,7 @@ class Ui {
     [[nodiscard]] bool typing() const { return !focus_.empty(); }
     void Unfocus();
 
-    enum class Icon { kSend, kReceive, kReceived, kTeams };
+    enum class Icon { kSend, kReceive, kReceived, kTeams, kAccount };
     // A destination on the navigation rail: its icon over its label, a pill behind it when chosen.
     bool RailItem(const std::string& id, float cx, float y, Icon icon, const char* label, bool chosen);
 

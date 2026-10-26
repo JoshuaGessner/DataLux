@@ -7,6 +7,7 @@ import com.google.android.material.color.DynamicColors
 class FileFlowApp : Application() {
     override fun onCreate() {
         super.onCreate()
+        ProAccount.initialize(this)
         DynamicColors.applyToActivitiesIfAvailable(this)
     }
 }

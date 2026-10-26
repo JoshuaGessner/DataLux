@@ -137,7 +137,8 @@ void App::Rail(float H) {
     const Item items[] = {{Tab::kSend, Ui::Icon::kSend, "Send"},
                           {Tab::kReceive, Ui::Icon::kReceive, "Receive"},
                           {Tab::kReceived, Ui::Icon::kReceived, "Received"},
-                          {Tab::kTeams, Ui::Icon::kTeams, "Teams"}};
+                          {Tab::kTeams, Ui::Icon::kTeams, "Teams"},
+                          {Tab::kAccount, Ui::Icon::kAccount, "Account"}};
     float y = 96;
     for (const auto& it : items) {
         if (ui_.RailItem(std::string("rail/") + it.label, 46, y, it.icon, it.label, tab_ == it.tab)) {

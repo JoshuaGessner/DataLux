@@ -1,0 +1,39 @@
+// Test-only public key and signed fixtures. The ephemeral private key was discarded.
+#pragma once
+namespace license_fixture {
+inline constexpr char kPublicKey[] = R"fixture(-----BEGIN PUBLIC KEY-----
+MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEXRzuqILx1xFIaDKkuZqxxBUJYhEQ
+QZAZdgnH5ivy6ZUULVr/HZkxCQM03CXOTqmtzAaiiOeQCpURSwq9sKaKuQ==
+-----END PUBLIC KEY-----
+)fixture";
+inline constexpr char kValid[] = R"fixture(FILEFLOW-PRO-1
+2fe9fa17d7b7cdde
+ZmlsZWZsb3ctcHJvLXYxCjExMTExMTExLTExMTEtNDExMS04MTExLTExMTExMTExMTExMQoyMjIyMjIyMi0yMjIyLTQyMjItODIyMi0yMjIyMjIyMjIyMjIKMTc5Mjg4NjQwMDAwMApwZXJwZXR1YWwKYmF0Y2gsYnVsa19tYW5hZ2UK
+MEQCIAdhxhAGoBDfK1bX5mCF34QdhBL4U11YNbf4dtY97Nn8AiBKeFG5aYVqm-IrdBw5poH9rHqJ9UNv3comuLNwO9XYEA
+)fixture";
+inline constexpr char kWrongFeatures[] = R"fixture(FILEFLOW-PRO-1
+2fe9fa17d7b7cdde
+ZmlsZWZsb3ctcHJvLXYxCjExMTExMTExLTExMTEtNDExMS04MTExLTExMTExMTExMTExMQoyMjIyMjIyMi0yMjIyLTQyMjItODIyMi0yMjIyMjIyMjIyMjIKMTc5Mjg4NjQwMDAwMApwZXJwZXR1YWwKYmF0Y2gsYnVsa19tYW5hZ2UsZW50ZXJwcmlzZQo
+MEYCIQCHQ1RqLxGlLnPA1G0fXGA507DhS3pNE2U690672O6GtwIhAJYMhpKDkHUXF1SQ1WH-rhusgUVZjzrA8gT4L5MoQnRU
+)fixture";
+inline constexpr char kBadAccount[] = R"fixture(FILEFLOW-PRO-1
+2fe9fa17d7b7cdde
+ZmlsZWZsb3ctcHJvLXYxCmludmFsaWQtYWNjb3VudAoyMjIyMjIyMi0yMjIyLTQyMjItODIyMi0yMjIyMjIyMjIyMjIKMTc5Mjg4NjQwMDAwMApwZXJwZXR1YWwKYmF0Y2gsYnVsa19tYW5hZ2UK
+MEUCIQD_gb4FTql5KJ0YkBTyPak9QzFhd3gAO5R6NeooEw4Y3gIgXHZzl3Y8USsDBpLRekz1I0UZs0faZFr0q3tvxFdBxFE
+)fixture";
+inline constexpr char kBadTime[] = R"fixture(FILEFLOW-PRO-1
+2fe9fa17d7b7cdde
+ZmlsZWZsb3ctcHJvLXYxCjExMTExMTExLTExMTEtNDExMS04MTExLTExMTExMTExMTExMQoyMjIyMjIyMi0yMjIyLTQyMjItODIyMi0yMjIyMjIyMjIyMjIKOTIyMzM3MjAzNjg1NDc3NTgwOApwZXJwZXR1YWwKYmF0Y2gsYnVsa19tYW5hZ2UK
+MEUCIDpD4UDSRSCSpt_jQImUU0L6K9Ep6hvmsCGp1Qlq4ColAiEAxBc5PXZIAXsLV6zFmxhXmobjmLcjq9thwrCKCdEr2KA
+)fixture";
+inline constexpr char kWrongVersion[] = R"fixture(FILEFLOW-PRO-1
+2fe9fa17d7b7cdde
+ZmlsZWZsb3ctcHJvLXYyCjExMTExMTExLTExMTEtNDExMS04MTExLTExMTExMTExMTExMQoyMjIyMjIyMi0yMjIyLTQyMjItODIyMi0yMjIyMjIyMjIyMjIKMTc5Mjg4NjQwMDAwMApwZXJwZXR1YWwKYmF0Y2gsYnVsa19tYW5hZ2UK
+MEQCICeHP4SEX0JWKb09QosxrMbx28OMMLHSpwlCdltgSQvBAiA5II3af_8InKoHBY7DI_QafkVnF4wiHIR9MRC7PFCwNw
+)fixture";
+inline constexpr char kWrongKey[] = R"fixture(-----BEGIN PUBLIC KEY-----
+MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAExQxbknXENHNhZ5goaQyWqhei5dpD
++hE0OPd8H1DK+ZCCcIufpdVYqIiDBMlH6mPB595qXONzXEuEJ3AyEze3Og==
+-----END PUBLIC KEY-----
+)fixture";
+}

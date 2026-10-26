@@ -16,7 +16,7 @@ jobs:
       - name: Install desktop build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y ninja-build libasound2-dev libpulse-dev libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev libxfixes-dev libxss-dev libxtst-dev libwayland-dev libxkbcommon-dev libdrm-dev libgbm-dev libegl1-mesa-dev libgl1-mesa-dev libudev-dev
+          sudo apt-get install -y ninja-build libcurl4-openssl-dev libasound2-dev libpulse-dev libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev libxfixes-dev libxss-dev libxtst-dev libwayland-dev libxkbcommon-dev libdrm-dev libgbm-dev libegl1-mesa-dev libgl1-mesa-dev libudev-dev
       - name: Configure and build
         run: |
           cmake --preset desktop-app -G Ninja -DFILEFLOW_BUILD_TESTS=ON -DFILEFLOW_BUILD_SIM=ON
@@ -32,6 +32,7 @@ jobs:
         run: |
           mkdir -p dist/FileFlow-linux-x86_64
           cp build/desktop-app/desktop/fileflow-send LICENSE README.md dist/FileFlow-linux-x86_64/
+          cp desktop/third_party/nlohmann-json-LICENSE.txt desktop/ACCOUNTS.md dist/FileFlow-linux-x86_64/
           mkdir -p dist/FileFlow-linux-x86_64/share/icons/hicolor/512x512/apps dist/FileFlow-linux-x86_64/share/applications
           cp build/desktop-app/desktop/icon/fileflow.png dist/FileFlow-linux-x86_64/share/icons/hicolor/512x512/apps/
           cp desktop/linux/fileflow.desktop dist/FileFlow-linux-x86_64/share/applications/
@@ -69,6 +70,7 @@ jobs:
         run: |
           mkdir -p dist/FileFlow-windows-x86_64
           cp build/desktop-app/desktop/FileFlow.exe LICENSE README.md dist/FileFlow-windows-x86_64/
+          cp desktop/third_party/nlohmann-json-LICENSE.txt desktop/ACCOUNTS.md dist/FileFlow-windows-x86_64/
           git rev-parse HEAD > dist/FileFlow-windows-x86_64/SOURCE_REVISION.txt
       - uses: actions/upload-artifact@v7
         with:

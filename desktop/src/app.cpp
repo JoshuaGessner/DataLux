@@ -173,12 +173,20 @@ App::App(SDL_Window* w, SDL_Renderer* r, Settings settings, Options options)
     if (m != nullptr && m->refresh_rate > 0.0F) hz_ = static_cast<double>(m->refresh_rate);
     began_ = last_frame_ = Clock::now();
     recent_ = Recent::Load();
+    pro_grant_ = license::VerifyTrusted(license::ReadFile(PrefPath("pro.fileflow-license")));
+    account_session_ = account::LoadSession(PrefPath("account-session.json"));
+    if (account_session_) {
+        pro_grant_ = license::VerifyTrusted(account_session_->license);
+        if (pro_grant_ && pro_grant_->account_id != account_session_->user_id) pro_grant_.reset();
+    }
+    account_refresh_at_ = Clock::now();
     if (options_.open == "teams") tab_ = Tab::kTeams;
     if (options_.open == "pair") StartPairing(secure::PairingFlow::Mode::kPair);
     if (options_.open == "join") StartPairing(secure::PairingFlow::Mode::kJoin);
     if (options_.open == "encrypted") settings_.encrypted = true;
     if (options_.open == "receive") tab_ = Tab::kReceive;
     if (options_.open == "received") tab_ = Tab::kReceived;
+    if (options_.open == "account") tab_ = Tab::kAccount;
 }
 
 App::~App() {
@@ -198,6 +206,17 @@ void App::ReportFailure(const std::string& message) {
 
 void App::Send(std::vector<std::string> paths) {
     if (paths.empty() || phase_ == Phase::kPreparing) return;
+    if (paths.size() == 1 && std::filesystem::path(PathOf(paths.front())).extension() == ".fileflow-license") {
+        ImportLicense(paths.front());
+        return;
+    }
+    // Enforce at the operation boundary: dialog, drop, CLI and Recent all pass here.
+    // A denied new send must never stop an existing transfer or receiving session.
+    if (paths.size() > 1 && license::StoreBuild() && !pro_grant_) {
+        account_message_ = "Sending several files together is part of FileFlow Pro.";
+        if (phase_ == Phase::kIdle && !receiver_ && !pair_) tab_ = Tab::kAccount;
+        return;
+    }
     preparing_name_ = paths.size() == 1 ? NameOf(PathOf(paths[0])) : std::to_string(paths.size()) + " files";
     transfer_.reset();
     phase_ = Phase::kPreparing;
@@ -282,7 +301,9 @@ void App::Frame() {
     last_frame_ = now;
     t_ = std::chrono::duration<float>(now - began_).count();
     TakeChosenFiles();
+    TakeChosenLicense();
     TakePrepared();
+    PumpAccount();
 
     int pw = 0;
     int ph = 0;
@@ -330,6 +351,7 @@ void App::Frame() {
             case Tab::kReceive: ReceiveScreen(kRail, W, H); break;
             case Tab::kReceived: ReceivedScreen(kRail, W, H); break;
             case Tab::kTeams: TeamsScreen(kRail, W, H); break;
+            case Tab::kAccount: AccountScreen(kRail, W, H); break;
         }
         Rail(H);
     }

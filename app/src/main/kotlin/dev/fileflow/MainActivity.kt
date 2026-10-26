@@ -254,6 +254,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
+        ProAccount.refreshInBackground()
         refreshReceived()
         refreshSecurity()  // a pairing expires on its own
     }
@@ -798,6 +799,9 @@ class MainActivity : AppCompatActivity() {
                 if (Entitlements.check(this@MainActivity, Entitlements.Feature.Teams)) {
                     startActivity(Intent(this@MainActivity, TeamsActivity::class.java))
                 }
+            }, matchWidth(dp(12)))
+            addView(row(R.drawable.ic_tune, "FileFlow Pro", "Your account, purchases, and offline Pro access") {
+                startActivity(Intent(this@MainActivity, ProActivity::class.java))
             }, matchWidth(dp(12)))
             addView(row(R.drawable.ic_help, "How it works", null) {
                 showHelp("How it works", HOW_IT_WORKS)

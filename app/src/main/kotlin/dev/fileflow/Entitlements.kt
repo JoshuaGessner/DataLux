@@ -1,7 +1,8 @@
 package dev.fileflow
 
 import android.content.Context
-import dev.fileflow.ui.Ui.showHelp
+import android.content.Intent
+import com.google.android.material.dialog.MaterialAlertDialogBuilder
 
 /**
  * What this copy of FileFlow may do.
@@ -12,30 +13,39 @@ import dev.fileflow.ui.Ui.showHelp
  */
 object Entitlements {
 
-    enum class Tier { Free, Supporter, Pro, Enterprise }
+    enum class Tier { Free, Pro }
 
     enum class Feature(val tier: Tier, val label: String) {
         /** Several files as one transfer. */
-        Batch(Tier.Supporter, "Sending several files at once"),
+        Batch(Tier.Pro, "Sending several files at once"),
         /** Selecting received files to share, send or delete together. */
-        BulkManage(Tier.Supporter, "Managing several received files at once"),
+        BulkManage(Tier.Pro, "Managing several received files at once"),
         /** Encrypted sending to a group that holds one key. */
-        Teams(Tier.Pro, "Teams"),
+        Teams(Tier.Free, "Teams"),
     }
 
-    /** What was bought, in a store build. Set by billing; Free until then. */
+    /** Updated only after signature verification, never from a client-side purchase flag. */
     @Volatile
-    var purchased: Tier = Tier.Free
+    private var purchased: Tier = Tier.Free
 
-    val tier: Tier get() = if (BuildConfig.STORE) purchased else Tier.Enterprise
+    val tier: Tier get() = if (BuildConfig.STORE) purchased else Tier.Pro
+
+    internal fun useVerifiedLicense(license: String?, userId: String) {
+        purchased = if (license != null && ProLicense.verify(license, BuildConfig.LICENSE_PUBLIC_KEY, userId))
+            Tier.Pro else Tier.Free
+    }
 
     fun has(f: Feature): Boolean = tier >= f.tier
 
     /** True when [f] is available; otherwise says which plan has it, and false. */
     fun check(context: Context, f: Feature): Boolean {
         if (has(f)) return true
-        context.showHelp(f.label, "${f.label} is part of FileFlow ${f.tier}. Everything you've " +
-            "already received stays yours, and sending and receiving single files is always free.")
+        MaterialAlertDialogBuilder(context)
+            .setTitle("FileFlow Pro")
+            .setMessage("${f.label} is part of FileFlow Pro. Basic transfers, encryption, and your received files remain free.")
+            .setPositiveButton("View Pro") { _, _ -> context.startActivity(Intent(context, ProActivity::class.java)) }
+            .setNegativeButton("Not now", null)
+            .show()
         return false
     }
 }

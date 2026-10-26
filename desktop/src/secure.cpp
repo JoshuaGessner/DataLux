@@ -737,10 +737,14 @@ void TeamStore::Save(const std::vector<Team>& teams) {
         out << Hex(t.id) << '\t' << B64Url(Ascii(t.name)) << '\t' << Hex(t.key) << '\t' << t.created_ms << '\t'
             << (t.is_leader ? "L" : "M") << '\t' << B64Url(members) << '\n';
     }
-    const std::string bytes = out.str();
+    WritePrivateFile(path_, out.str());
+    cache_ = teams;
+}
+
+void WritePrivateFile(const std::string& path, std::string_view bytes) {
     Bytes nonce(16);
     SystemRandom(nonce.data(), nonce.size());
-    const std::filesystem::path target{std::u8string(path_.begin(), path_.end())};
+    const std::filesystem::path target{std::u8string(path.begin(), path.end())};
     auto temp = target;
     temp += "." + Hex(nonce) + ".tmp";
     bool ok = false;
@@ -780,7 +784,6 @@ void TeamStore::Save(const std::vector<Team>& teams) {
         std::filesystem::remove(temp, ec);
         throw std::runtime_error("Could not save the team keys. Check available disk space and folder permissions.");
     }
-    cache_ = teams;
 }
 
 // --------------------------------------------------------------------------------- pairing flow

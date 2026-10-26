@@ -78,6 +78,56 @@ if(WIN32)
 endif()
 set_target_properties(fileflow_secure PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
 
+# Only explicitly configured official builds gate Pro features. Community/source builds stay open.
+option(FILEFLOW_STORE_BUILD "Gate Pro features in an official distribution build" OFF)
+set(FILEFLOW_LICENSE_PUBLIC_KEY_FILE "" CACHE FILEPATH "Trusted Pro signing public key (PEM SPKI; never a private key)")
+set(FILEFLOW_LICENSE_PUBLIC_KEY_PEM "")
+if(FILEFLOW_LICENSE_PUBLIC_KEY_FILE)
+    file(READ "${FILEFLOW_LICENSE_PUBLIC_KEY_FILE}" FILEFLOW_LICENSE_PUBLIC_KEY_PEM LIMIT 4097)
+    string(LENGTH "${FILEFLOW_LICENSE_PUBLIC_KEY_PEM}" FILEFLOW_LICENSE_KEY_LENGTH)
+    if(FILEFLOW_LICENSE_KEY_LENGTH GREATER 4096 OR
+       NOT FILEFLOW_LICENSE_PUBLIC_KEY_PEM MATCHES "^-----BEGIN PUBLIC KEY-----" OR
+       FILEFLOW_LICENSE_PUBLIC_KEY_PEM MATCHES "fflicense")
+        message(FATAL_ERROR "FILEFLOW_LICENSE_PUBLIC_KEY_FILE must be a public PEM SPKI key")
+    endif()
+endif()
+configure_file(src/license_config.h.in ${CMAKE_CURRENT_BINARY_DIR}/license_config.h @ONLY)
+add_library(fileflow_license STATIC src/license.cpp)
+target_include_directories(fileflow_license PUBLIC src PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
+target_link_libraries(fileflow_license PUBLIC fileflow_secure PRIVATE fileflow_warnings mbedcrypto)
+set_target_properties(fileflow_license PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+
+# Account sign-in is opt-in and separate from optical transfer. Platform TLS trusts remain intact.
+set(FILEFLOW_ACCOUNT_ORIGIN "https://fileflow.anomalousinteractive.com" CACHE STRING "HTTPS account origin (no path, query or credentials)")
+if(NOT FILEFLOW_ACCOUNT_ORIGIN MATCHES "^https://[A-Za-z0-9.-]+(:[0-9]+)?$" OR FILEFLOW_ACCOUNT_ORIGIN MATCHES "[\"\\\\]")
+    message(FATAL_ERROR "FILEFLOW_ACCOUNT_ORIGIN must be an HTTPS origin without a path")
+endif()
+configure_file(src/account_config.h.in ${CMAKE_CURRENT_BINARY_DIR}/account_config.h @ONLY)
+set(JSON_BuildTests OFF CACHE BOOL "" FORCE)
+set(JSON_SystemInclude ON CACHE BOOL "" FORCE)
+FetchContent_Declare(ff_json
+    URL https://github.com/nlohmann/json/releases/download/v3.12.0/json.tar.xz
+    URL_HASH SHA256=42f6e95cad6ec532fd372391373363b62a14af6d771056dbfc86160e6dfff7aa
+)
+FetchContent_MakeAvailable(ff_json)
+add_library(fileflow_account STATIC src/account.cpp)
+target_include_directories(fileflow_account PUBLIC src PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
+target_link_libraries(fileflow_account PUBLIC fileflow_license PRIVATE nlohmann_json::nlohmann_json fileflow_warnings)
+set_target_properties(fileflow_account PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+if(APPLE)
+    target_sources(fileflow_account PRIVATE src/account_http_macos.mm)
+    set_source_files_properties(src/account_http_macos.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+    target_link_libraries(fileflow_account PRIVATE "-framework Foundation")
+    set_target_properties(fileflow_account PROPERTIES OBJCXX_STANDARD 20 OBJCXX_STANDARD_REQUIRED ON)
+elseif(WIN32)
+    target_sources(fileflow_account PRIVATE src/account_http.cpp)
+    target_link_libraries(fileflow_account PRIVATE winhttp)
+else()
+    find_package(CURL 7.85 REQUIRED)
+    target_sources(fileflow_account PRIVATE src/account_http.cpp)
+    target_link_libraries(fileflow_account PRIVATE CURL::libcurl)
+endif()
+
 # stb_truetype v1.26, pinned to its commit.
 set(STB_DIR ${CMAKE_CURRENT_BINARY_DIR}/third_party)
 if(NOT EXISTS ${STB_DIR}/stb_truetype.h)
@@ -105,6 +155,7 @@ add_executable(fileflow-send
     src/app.cpp
     src/ui.cpp
     src/screen_send.cpp
+    src/screen_account.cpp
     src/screen_teams.cpp
     src/camera.cpp
     src/receiver.cpp
@@ -117,7 +168,7 @@ add_executable(fileflow-send
 target_include_directories(fileflow-send SYSTEM PRIVATE ${STB_DIR})
 # One version for the whole product: the root project's, the Android app's versionName.
 target_compile_definitions(fileflow-send PRIVATE FILEFLOW_VERSION="${PROJECT_VERSION}")
-target_link_libraries(fileflow-send PRIVATE fileflow_secure ff_qr fileflow_warnings SDL3::SDL3-static)  # core comes with secure
+target_link_libraries(fileflow-send PRIVATE fileflow_account ff_qr fileflow_warnings SDL3::SDL3-static)  # core comes with secure
 # Third-party and generated sources: not held to the project's warnings.
 set_source_files_properties(src/stb_impl.cpp ${CMAKE_CURRENT_BINARY_DIR}/fonts.cpp PROPERTIES COMPILE_OPTIONS "-w")
 set_target_properties(fileflow-send PROPERTIES
@@ -149,6 +200,8 @@ if(APPLE)
         VERBATIM)
     target_sources(fileflow-send PRIVATE ${ICON_DIR}/FileFlow.icns)
     set_source_files_properties(${ICON_DIR}/FileFlow.icns PROPERTIES MACOSX_PACKAGE_LOCATION Resources)
+    target_sources(fileflow-send PRIVATE third_party/nlohmann-json-LICENSE.txt)
+    set_source_files_properties(third_party/nlohmann-json-LICENSE.txt PROPERTIES MACOSX_PACKAGE_LOCATION Resources)
     set_target_properties(fileflow-send PROPERTIES
         MACOSX_BUNDLE TRUE
         OUTPUT_NAME FileFlow
@@ -174,6 +227,7 @@ else()
     include(GNUInstallDirs)
     install(TARGETS fileflow-send RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
     install(FILES linux/fileflow.desktop DESTINATION ${CMAKE_INSTALL_DATADIR}/applications)
+    install(FILES third_party/nlohmann-json-LICENSE.txt DESTINATION ${CMAKE_INSTALL_DATADIR}/doc/fileflow)
     install(FILES ${ICON_DIR}/fileflow.png DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor/512x512/apps)
 endif()
 
@@ -187,8 +241,8 @@ if(FILEFLOW_BUILD_TESTS)
     endif()
     add_test(NAME Qr.DegenerateTransformHasBoundedWork COMMAND quirc_limits_test)
     set_tests_properties(Qr.DegenerateTransformHasBoundedWork PROPERTIES TIMEOUT 5)
-    add_executable(desktop_tests tests/test_secure.cpp tests/test_qr.cpp tests/test_receive.cpp src/camera.cpp src/receiver.cpp)
-    target_link_libraries(desktop_tests PRIVATE fileflow_secure ff_qr SDL3::SDL3-static fileflow_warnings GTest::gtest_main)
+    add_executable(desktop_tests tests/test_secure.cpp tests/test_qr.cpp tests/test_receive.cpp tests/test_license.cpp tests/test_account.cpp src/camera.cpp src/receiver.cpp)
+    target_link_libraries(desktop_tests PRIVATE fileflow_account nlohmann_json::nlohmann_json ff_qr SDL3::SDL3-static fileflow_warnings GTest::gtest_main)
     set_target_properties(desktop_tests PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
     include(GoogleTest)
     gtest_discover_tests(desktop_tests DISCOVERY_TIMEOUT 60)

@@ -147,6 +147,10 @@ bool Ui::RailItem(const std::string& id, float cx, float y, Icon icon, const cha
             paint.RoundRect({cx - 10, iy + 1, 12, 8}, 4, ink);
             paint.RoundRect({cx + 1, iy + 2, 9, 6.5F}, 3.2F, WithAlpha(ink, 0.8F));
             break;
+        case Icon::kAccount:
+            paint.Circle(cx, iy - 5, 4.2F, ink);
+            paint.RoundRect({cx - 8, iy + 1, 16, 9}, 4.5F, ink);
+            break;
     }
     paint.Text(label, cx, y + 40, 12, chosen ? Weight::kSemiBold : Weight::kRegular, ink, Align::kCenter);
     return over && pointer.released;

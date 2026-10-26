@@ -1,0 +1,6 @@
+#pragma once
+
+#cmakedefine01 FILEFLOW_STORE_BUILD
+namespace fileflow::desktop::license::config {
+inline constexpr char kPublicKey[] = R"fflicense(@FILEFLOW_LICENSE_PUBLIC_KEY_PEM@)fflicense";
+}

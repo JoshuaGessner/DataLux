@@ -21,6 +21,8 @@ using Bytes = std::vector<std::uint8_t>;
 // Fills a buffer with random bytes: the system's, or -- in a test -- a fixed pattern.
 using Random = std::function<void(std::uint8_t*, std::size_t)>;
 void SystemRandom(std::uint8_t* out, std::size_t n);
+// Exclusive private temporary file, flushed then atomically replaced; preserves old data on failure.
+void WritePrivateFile(const std::string& path, std::string_view bytes);
 
 std::string B64Url(const Bytes& b);
 std::optional<Bytes> UnB64Url(std::string_view s);
