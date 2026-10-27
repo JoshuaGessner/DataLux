@@ -1,5 +1,18 @@
 # Native milestone releases
 
+The proposed in-app desktop update experience and rollout gates are documented in
+[DESKTOP_UPDATES_PLAN.md](DESKTOP_UPDATES_PLAN.md). That feature is planned; current v0.2.0 binaries
+do not auto-update. Mobile updates will be managed through their app stores.
+
+The first Free/Pro integration is documented in `web/LICENSING.md` in the separate web repository.
+Current milestone builds remain fully enabled community builds. Store paywalls require explicit
+Android/desktop build settings, a pinned public signing key, verified backend purchase configuration,
+and real Google Play internal testing before a paid release. No public sales have been enabled.
+Browser-assisted PC account sign-in is implemented; see [desktop/ACCOUNTS.md](desktop/ACCOUNTS.md).
+The matching account and email-verification service is live on web v0.3.1-preview. Native v0.3.0
+includes the account integration and clearer Android verification flow; older binaries do not
+gain these features automatically. Desktop automatic updates remain a proposal.
+
 FileFlow's native downloads are built only for milestones that the repository owner chooses. Every
 owner-dispatched run builds a reviewed source commit. Only a run with explicit publication approval
 creates the tag and GitHub Release after every platform build succeeds. Application binaries are
@@ -11,7 +24,8 @@ not establish broad hardware or platform compatibility.
 ## Owner release procedure
 
 1. Choose the milestone version and update both `project(... VERSION ...)` in `CMakeLists.txt` and
-   `versionName` in `app/build.gradle.kts`. They must contain the same bare SemVer, such as `0.3.0`.
+   the `fileflowVersionName` default in `app/build.gradle.kts`. They must contain the same bare
+   SemVer, such as `0.3.0`. Increment the `fileflowVersionCode` default for each Android release.
 2. Merge the version change and all intended release work to `main`. Wait for normal CI
    and desktop build checks to pass.
 3. Resolve and record the reviewed `main` commit. Use this same immutable 40-character SHA for both

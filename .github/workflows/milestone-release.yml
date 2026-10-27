@@ -93,20 +93,8 @@ jobs:
             echo "::error::$SOURCE_REF does not resolve to a commit reachable from origin/main."
             exit 1
           fi
-          python3 - <<'PY'
-          import os, pathlib, re, sys
-          expected = os.environ["EXPECTED_VERSION"].split("-", 1)[0]
-          files = {
-              "CMakeLists.txt": r"project\(fileflow LANGUAGES CXX VERSION ([0-9]+\.[0-9]+\.[0-9]+)\)",
-              "app/build.gradle.kts": r'versionName\s*=\s*"([0-9]+\.[0-9]+\.[0-9]+)"',
-          }
-          for filename, pattern in files.items():
-              match = re.search(pattern, pathlib.Path(filename).read_text(encoding="utf-8"))
-              if not match or match.group(1) != expected:
-                  actual = match.group(1) if match else "missing"
-                  print(f"::error::{filename} version is {actual}; expected {expected}")
-                  sys.exit(1)
-          PY
+          python3 -m unittest discover -s scripts/tests
+          python3 scripts/validate_native_version.py "$EXPECTED_VERSION"
           echo "commit=$TAG_COMMIT" >> "$GITHUB_OUTPUT"
 
   linux:

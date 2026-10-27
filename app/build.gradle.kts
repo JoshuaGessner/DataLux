@@ -27,9 +27,9 @@ require(accountUri.scheme == "https" && accountUri.host != null && accountUri.us
     "fileflowAccountOrigin must be an HTTPS origin without a path"
 }
 val storeBuild = providers.gradleProperty("store").orElse("false").get() == "true"
-val releaseVersionCode = providers.gradleProperty("fileflowVersionCode").orElse("2").get().toIntOrNull()
+val releaseVersionCode = providers.gradleProperty("fileflowVersionCode").orElse("3").get().toIntOrNull()
 require(releaseVersionCode != null && releaseVersionCode in 1..2_100_000_000) { "fileflowVersionCode must be a positive Play-compatible integer" }
-val releaseVersionName = providers.gradleProperty("fileflowVersionName").orElse("0.2.0").get()
+val releaseVersionName = providers.gradleProperty("fileflowVersionName").orElse("0.3.0").get()
 require(releaseVersionName.matches(Regex("[0-9]+\\.[0-9]+\\.[0-9]+(?:-[0-9A-Za-z.-]+)?"))) { "fileflowVersionName must be a release version" }
 
 // Upload signing and offline-Pro signing are separate identities. Only the public Pro key
