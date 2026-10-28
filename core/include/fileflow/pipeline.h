@@ -231,11 +231,12 @@ struct PipelineDiagnostics {
     }
 };
 
-// The chroma planes of a YUV 4:2:0 capture, each half the luma size in both directions, centred
-// as Android and JPEG site them. Only an M5 payload needs them.
+// Chroma defaults to centred YUV 4:2:0, as Android and JPEG site it. RGB capture sources can
+// preserve their existing colour detail with full-size, co-sited U/V planes instead.
 struct ChromaPlanes {
     ImageView8 u;
     ImageView8 v;
+    bool full_resolution = false;
 };
 
 class FramePipeline {

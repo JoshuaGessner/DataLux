@@ -7,6 +7,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cstdio>
 #include <vector>
 
@@ -93,6 +94,47 @@ Outcome Transfer(const std::vector<std::uint8_t>& file, ModulationProfile profil
     out.stats = rx.value().session().stats();
     out.lens = rx.value().pipeline().lens_strength();
     return out;
+}
+
+struct PlanarCapture {
+    Image8 y, u, v;
+};
+
+PlanarCapture FullColorCapture(const CellMatrix& frame) {
+    constexpr int pitch = 4, margin = 40;
+    const int width = static_cast<int>(kGrid.cols) * pitch + margin * 2 + 1;
+    const int height = static_cast<int>(kGrid.rows) * pitch + margin * 2 + 1;
+    PlanarCapture out{Image8(width, height), Image8(width, height, 128), Image8(width, height, 128)};
+    for (std::uint32_t row = 0; row < kGrid.rows; ++row) {
+        for (std::uint32_t col = 0; col < kGrid.cols; ++col) {
+            const auto cell = frame.at(col, row);
+            const int r = ColorChannelOn(cell, 0) ? 255 : 0;
+            const int g = ColorChannelOn(cell, 1) ? 255 : 0;
+            const int b = ColorChannelOn(cell, 2) ? 255 : 0;
+            for (int dy = 0; dy < pitch; ++dy) for (int dx = 0; dx < pitch; ++dx) {
+                const int x = margin + static_cast<int>(col) * pitch + dx;
+                const int y = margin + static_cast<int>(row) * pitch + dy;
+                out.y.set(x, y, static_cast<std::uint8_t>((77 * r + 150 * g + 29 * b) >> 8));
+                out.u.set(x, y, static_cast<std::uint8_t>(std::clamp(((-43 * r - 85 * g + 128 * b) >> 8) + 128, 0, 255)));
+                out.v.set(x, y, static_cast<std::uint8_t>(std::clamp(((128 * r - 107 * g - 21 * b) >> 8) + 128, 0, 255)));
+            }
+        }
+    }
+    return out;
+}
+
+Image8 HalfPlane(const Image8& full) {
+    Image8 half((full.width() + 1) / 2, (full.height() + 1) / 2);
+    for (int y = 0; y < half.height(); ++y) for (int x = 0; x < half.width(); ++x) {
+        int sum = 0, count = 0;
+        for (int dy = 0; dy < 2 && y * 2 + dy < full.height(); ++dy)
+            for (int dx = 0; dx < 2 && x * 2 + dx < full.width(); ++dx) {
+                sum += full.at(x * 2 + dx, y * 2 + dy);
+                ++count;
+            }
+        half.set(x, y, static_cast<std::uint8_t>(sum / count));
+    }
+    return half;
 }
 
 }  // namespace
@@ -368,6 +410,48 @@ TEST(ColorTransfer, ALensRememberedFromLastTimeIsWhereLearningStarts) {
     EXPECT_DOUBLE_EQ(FramePipeline::Create(layout, pc).value().lens_strength(), -0.04);
     pc.subcell.lens_k1_initial = 5.0;
     EXPECT_DOUBLE_EQ(FramePipeline::Create(layout, pc).value().lens_strength(), pc.subcell.lens_k1_max);
+}
+
+TEST(ColorTransfer, FullAndHalfResolutionChromaVerifyOddSizedCaptures) {
+    const auto layout = FrameLayout::Create(kGrid, {}).value();
+    const auto file = File(2048);
+    for (const bool full : {false, true}) {
+        for (const auto profile : {ModulationProfile::kM0BinaryLuminance, ModulationProfile::kM3FourColor,
+                                   ModulationProfile::kM5EightColor}) {
+            TransmitConfig cfg;
+            cfg.profile = profile;
+            auto tx = TransmitSession::Create(layout, file, "odd.bin", 0x1234, cfg).value();
+            auto rx = LiveReceiver::Create(kGrid).value();
+            CellMatrix cells(kGrid.cols, kGrid.rows);
+            for (int i = 0; i < 8 && rx.status().phase != LivePhase::kVerified; ++i) {
+                ASSERT_TRUE(tx.Next(&cells).ok());
+                auto image = FullColorCapture(cells);
+                if (!full) { image.u = HalfPlane(image.u); image.v = HalfPlane(image.v); }
+                const ChromaPlanes chroma{image.u.view(), image.v.view(), full};
+                rx.Ingest(image.y.view(), i * 33'333'333LL + 1, 0, &chroma);
+            }
+            ASSERT_EQ(rx.status().phase, LivePhase::kVerified) << full << "/" << static_cast<int>(profile);
+            EXPECT_EQ(rx.File().value(), file);
+        }
+    }
+}
+
+TEST(ColorTransfer, MalformedFullResolutionChromaIsUnavailableRatherThanMisregistered) {
+    const auto layout = FrameLayout::Create(kGrid, {}).value();
+    CellMatrix cells(kGrid.cols, kGrid.rows);
+    ASSERT_TRUE(M0Modulator(layout).Render({}, {}, &cells).ok());
+    const auto image = FullColorCapture(cells);
+    for (const int malformed : {0, 1, 2}) {
+        auto pipeline = FramePipeline::Create(layout).value();
+        auto u = image.u.view(), v = image.v.view();
+        if (malformed == 0) u = {image.u.data().data(), image.u.width() - 1, image.u.height(), image.u.width()};
+        if (malformed == 1) v = {image.v.data().data(), image.v.width(), image.v.height() - 1, image.v.width()};
+        if (malformed == 2) u = {image.u.data().data(), image.u.width(), image.u.height(), image.u.width() - 1};
+        const ChromaPlanes chroma{u, v, true};
+        const auto captured = pipeline.Process(image.y.view(), 0, 1, &chroma);
+        EXPECT_TRUE(pipeline.last_ok());
+        EXPECT_TRUE(captured.cell_rgb.empty());
+    }
 }
 
 }  // namespace fileflow

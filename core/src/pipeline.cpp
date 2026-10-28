@@ -379,21 +379,23 @@ std::vector<double> FramePipeline::SampleColor(const ChromaPlanes& chroma, const
     const std::size_t n = raw_y.size();
     std::vector<double> rgb(n * 3, std::nan(""));
 
-    // Grid to CHROMA pixels: chroma pixel j covers luma pixels 2j and 2j+1, whose centres average
-    // to 2j + 0.5, so x_chroma = (x_luma - 0.5) / 2 -- folded into the homography's rows.
+    // Centred 4:2:0 maps x_chroma = (x_luma - 0.5) / 2. Full-resolution chroma shares luma's
+    // pixel centres, so its mapping (including the lens model) is unchanged.
+    const double scale = chroma.full_resolution ? 1.0 : 0.5;
+    const double offset = chroma.full_resolution ? 0.0 : -0.25;
     const auto& m = h.m();
     std::array<double, 9> cm{};
     for (std::size_t k = 0; k < 3; ++k) {
-        cm[k] = 0.5 * m[k] - 0.25 * m[6 + k];
-        cm[3 + k] = 0.5 * m[3 + k] - 0.25 * m[6 + k];
+        cm[k] = scale * m[k] + offset * m[6 + k];
+        cm[3 + k] = scale * m[3 + k] + offset * m[6 + k];
         cm[6 + k] = m[6 + k];
     }
     const Homography hc(cm);
     // The lens model in chroma pixels: the same distortion, about the same point.
     RadialDistortion lens_c = lens_;
-    lens_c.cx = (lens_.cx - 0.5) / 2.0;
-    lens_c.cy = (lens_.cy - 0.5) / 2.0;
-    lens_c.inv_norm2 = lens_.inv_norm2 * 4.0;
+    lens_c.cx = lens_.cx * scale + offset;
+    lens_c.cy = lens_.cy * scale + offset;
+    lens_c.inv_norm2 = lens_.inv_norm2 / (scale * scale);
     const std::vector<double> u = chroma_sampler_.Sample(chroma.u, hc, lens_c);
     const std::vector<double> v = chroma_sampler_.Sample(chroma.v, hc, lens_c);
     if (u.size() != n || v.size() != n) return rgb;
@@ -527,7 +529,12 @@ CapturedFrame FramePipeline::Process(const ImageView8& img, std::uint64_t index,
         pf.nodes_above_residual(cfg_.photometric.max_pilot_residual_ratio);
 
     out.cell_samples = pf.Normalise(raw);
-    if (chroma != nullptr && !chroma->u.empty() && !chroma->v.empty()) {
+    const bool valid_chroma = chroma != nullptr && !chroma->u.empty() && !chroma->v.empty() &&
+        chroma->u.stride() >= chroma->u.width() && chroma->v.stride() >= chroma->v.width() &&
+        (!chroma->full_resolution || (chroma->u.width() == img.width() &&
+         chroma->v.width() == img.width() && chroma->u.height() == img.height() &&
+         chroma->v.height() == img.height()));
+    if (valid_chroma) {
         out.cell_rgb = SampleColor(*chroma, h, raw);
     }
     out.phase = FramePhase::kClean;  // temporal classification is component C07, not here
