@@ -19,8 +19,9 @@ the price qualified until Console configuration and real purchase acceptance are
 | `full-description.txt` | Full description | At most 4,000 characters; must match the uploaded build |
 | `release-notes.txt` | Internal-test release notes | Test coordinator must confirm the purchase-testing instructions |
 
-The retained Android package is `dev.fileflow`; the retained Pro product is `fileflow_pro`.
-These compatibility identifiers are not display branding and must not be renamed casually.
+The owner-confirmed Play package is `dev.datalux`; the retained Pro product is `fileflow_pro`.
+Kotlin/JNI classes stay `dev.fileflow`. Historical APKs with the old package install separately;
+preserve files and sign in/re-pair rather than assuming private state moves to the new app.
 All text is plain text. Do not include this README in a public store field.
 
 ## Existing artwork inventory
@@ -96,7 +97,7 @@ uploaded build. Fill credentials directly in Console; do not put real passwords 
 
 ```text
 App: DataLux
-Package: dev.fileflow
+Package: dev.datalux
 Review account email: <dedicated preverified reviewer account>
 Review account password: <enter privately in Play Console>
 Pro access: <describe the legitimate, rehearsed entitlement supplied to this account>

@@ -84,7 +84,8 @@ android {
     compileSdk = 37
 
     defaultConfig {
-        applicationId = "dev.fileflow"
+        // Play registration chosen by the owner. Kotlin/JNI namespace remains dev.fileflow.
+        applicationId = "dev.datalux"
         // ADR-0013 / ADR-0004: FrameTimeline and AChoreographer_postVsyncCallback are API 33.
         minSdk = 33
         targetSdk = 37

@@ -59,7 +59,7 @@ class NativeAlignmentTests(unittest.TestCase):
 class ReleaseManifestTests(unittest.TestCase):
     def manifest(self):
         return ET.fromstring('''<manifest xmlns:android="http://schemas.android.com/apk/res/android"
-            package="dev.fileflow" android:versionCode="5" android:versionName="0.4.1">
+            package="dev.datalux" android:versionCode="5" android:versionName="0.4.1">
             <uses-sdk android:minSdkVersion="33" android:targetSdkVersion="37"/>
             <application android:label="DataLux" android:allowBackup="false"
                 android:fullBackupContent="false" android:dataExtractionRules="@xml/data_extraction_rules"
@@ -86,12 +86,23 @@ class ReleaseManifestTests(unittest.TestCase):
                     MODULE.check_manifest(manifest, 5, "0.4.1")
 
     def test_rejects_wrong_package_and_version(self):
-        manifest = self.manifest()
-        manifest.set("package", "another.app")
-        with self.assertRaisesRegex(ValueError, "application ID"):
-            MODULE.check_manifest(manifest)
+        for package in ("dev.fileflow", "another.app"):
+            with self.subTest(package=package):
+                manifest = self.manifest()
+                manifest.set("package", package)
+                with self.assertRaisesRegex(ValueError, "application ID"):
+                    MODULE.check_manifest(manifest)
         with self.assertRaisesRegex(ValueError, "version code"):
             MODULE.check_manifest(self.manifest(), 6, "0.4.1")
+
+    def test_launcher_shortcuts_target_registered_package_and_existing_classes(self):
+        project = Path(__file__).parents[2]
+        root = ET.parse(project / "app/src/main/res/xml/shortcuts.xml").getroot()
+        intents = root.findall("shortcut/intent")
+        self.assertEqual(len(intents), 2)
+        for intent in intents:
+            self.assertEqual(intent.get(MODULE.ANDROID + "targetPackage"), "dev.datalux")
+            self.assertEqual(intent.get(MODULE.ANDROID + "targetClass"), "dev.fileflow.MainActivity")
 
     def test_source_policy_excludes_all_app_storage_from_both_transports(self):
         project = Path(__file__).parents[2]

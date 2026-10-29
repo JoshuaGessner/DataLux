@@ -2,6 +2,8 @@
 
 The next Play preparation candidate is **0.4.1 / code 5**, with explicit app-data backup exclusions
 and DataLux identity checks in bundle validation. This does not indicate a published Play release.
+Its package is `dev.datalux`, confirmed after the owner created the Play app. Earlier experimental
+`dev.fileflow` APKs remain immutable and install separately; see [migration notes](DATALUX_MIGRATION.md).
 See [upload readiness](store/google-play/UPLOAD-READINESS.md) for actual configuration and tests.
 
 > **Status:** Accepted milestone workflow; Play production acceptance pending

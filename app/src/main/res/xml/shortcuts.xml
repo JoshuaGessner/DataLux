@@ -10,7 +10,7 @@
         android:shortcutLongLabel="@string/shortcut_receive_long">
         <intent
             android:action="dev.fileflow.action.RECEIVE"
-            android:targetPackage="dev.fileflow"
+            android:targetPackage="dev.datalux"
             android:targetClass="dev.fileflow.MainActivity" />
     </shortcut>
     <shortcut
@@ -21,7 +21,7 @@
         android:shortcutLongLabel="@string/shortcut_send_long">
         <intent
             android:action="dev.fileflow.action.SEND_FILE"
-            android:targetPackage="dev.fileflow"
+            android:targetPackage="dev.datalux"
             android:targetClass="dev.fileflow.MainActivity" />
     </shortcut>
 </shortcuts>

@@ -6,19 +6,20 @@
 > **Related:** [Product policy](../../PRODUCT.md), [US listing materials](en-US/README.md), [Data Safety draft](DATA-SAFETY.md)
 
 The owner chose **DataLux** and resumed Play preparation on October 29, 2026. The Android
-application ID stays `dev.fileflow`, and the permanent Pro product stays `fileflow_pro`, as
-documented in [the migration plan](../../DATALUX_MIGRATION.md). A display-name change does not
-require breaking installed-app, account, purchase or protocol identities.
+application ID is now **`dev.datalux`**, confirmed by the owner after creating the Play entry.
+The permanent Pro product stays `fileflow_pro`; Kotlin/JNI remains `dev.fileflow`. See
+[the migration plan](../../DATALUX_MIGRATION.md): the new package is a separate Android
+installation and does not inherit private state from historical `dev.fileflow` builds.
 
 ## Current evidence
 
 | Item | Recorded state |
 | --- | --- |
-| Developer account | Verified Personal account; first-app creation awaits owner declarations |
-| Console draft | DataLux / `dev.fileflow` / English (United States) / App / Free; package available; declarations unchecked |
+| Developer account | Verified Personal account; owner reports the DataLux app entry is created |
+| Console app | Owner-confirmed `dev.datalux`; dashboard app ID `4975860505031813621`. Browser access is disabled, so remaining Console settings have not been independently rechecked |
 | Previous CI | Native main `9a5e16f` and web main `9943cf2` passed; earlier paywall CI also completed successfully |
 | Candidate version | 0.4.1 / Android version code 5; recheck unused Play version code before upload |
-| Local candidate checks | Android debug APK, unit tests, debug/release lint, release manifest generation, 15 release-helper tests and relative documentation links passed |
+| Local candidate checks | Android debug APK, unit tests, debug/release lint, release manifest with `dev.datalux` and existing JNI classes, 16 release-helper tests and relative documentation links passed. Backend tests cover DataLux Publisher URLs and rejection of old-package notifications |
 | Signed Play bundle | Not built: the production license public key and permanent upload identity are required; release guard correctly refuses missing trust |
 | Play upload identity | No `play-internal` environment/secrets configured when inspected; permanent upload keystore not yet verified |
 | License trust | Production signer's public key and backup not yet verified; never substitute an ephemeral test key |
@@ -27,8 +28,9 @@ require breaking installed-app, account, purchase or protocol identities.
 
 ## Build and review sequence
 
-1. Owner reviews and completes first-app declarations in Play Console. Creating the draft app
-   is separate from distributing any release. Keep production closed.
+1. App creation is reported complete by the owner. Confirm the Console package matches
+   `dev.datalux` before upload and inspect any remaining registration/signing tasks. Creating
+   the app is separate from distributing a release. Keep production closed.
 2. Reuse or securely establish a permanent, backed-up upload keystore outside the checkout.
    Keep it separate from Google's distribution signing key and the backend's license signer.
    Configure the protected GitHub `play-internal` environment using the settings in

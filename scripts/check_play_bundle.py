@@ -69,7 +69,7 @@ def run(command, message, allowed=(0,)):
 
 
 def check_manifest(manifest, expected_code=None, expected_name=None):
-    require(manifest.get("package") == "dev.fileflow", "Unexpected Play application ID")
+    require(manifest.get("package") == "dev.datalux", "Unexpected Play application ID")
     application = manifest.find("application")
     require(application is not None, "Missing application")
     require(application.get(ANDROID + "label") == "DataLux", "Unexpected Play app label")
@@ -84,7 +84,7 @@ def check_manifest(manifest, expected_code=None, expected_name=None):
     name = manifest.get(ANDROID + "versionName")
     require(code > 0 and (expected_code is None or code == expected_code), "Unexpected AAB version code")
     require(name and (expected_name is None or name == expected_name), "Unexpected AAB version name")
-    return {"package": "dev.fileflow", "appLabel": "DataLux", "versionCode": code, "versionName": name,
+    return {"package": "dev.datalux", "appLabel": "DataLux", "versionCode": code, "versionName": name,
             "targetSdk": int(sdk.get(ANDROID + "targetSdkVersion")), "appDataBackup": False,
             "cleartextTraffic": False}
 

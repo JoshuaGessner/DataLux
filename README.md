@@ -34,6 +34,8 @@ complete feature matrix, receiver behavior, offline/refund limits and release ga
 
 The next Play review candidate is 0.4.1 (version code 5). Its app-managed settings and diagnostics
 are excluded from Android cloud backup and device migration; sign in and re-pair on a new phone.
+The registered Play application ID is `dev.datalux`. It installs separately from historical
+`dev.fileflow` APKs; it does not automatically copy their private account or pairing state.
 See [upload readiness](store/google-play/UPLOAD-READINESS.md) for verified setup status and
 [store materials](store/google-play/en-US/README.md) for the listing and artwork drafts.
 
