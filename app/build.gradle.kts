@@ -99,8 +99,8 @@ android {
         buildConfigField("String", "ACCOUNT_ORIGIN", "\"$accountOrigin\"")
 
         ndk {
-            // arm64 only (ADR-0013). HWASan is ARM64-only anyway, and the emulator is useless
-            // to us -- it has neither a real camera nor a real display pipeline.
+            // arm64 only (ADR-0013). ARM64 emulators cover native/page-size compatibility;
+            // real optical camera/display acceptance still requires physical devices.
             abiFilters += listOf("arm64-v8a")
         }
 

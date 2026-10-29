@@ -30,6 +30,7 @@ installation and does not inherit private state from historical `dev.fileflow` b
 | Remaining Console declarations | Sign-in/reviewer access, target audience and Data Safety remain incomplete. Dashboard shows 8 of 11 setup tasks complete. Audience is blocked until legitimate reviewer access exists; do not submit placeholder credentials. Nothing sent for Google app review |
 | Artwork and listing | US text, icon, feature graphic and four genuine 1080 × 1920 phone screenshots saved; Console says Ready to send for review. AI labels applied to prepared icon/feature artwork, not direct screenshots. No Google app-review submission or publication |
 | Connected phone | Debug `dev.datalux` 0.4.1/code 5 launches; Send/Receive home, Settings, Pro, Received and Teams visually checked on SM-S948U1 / Android 17. Display restored after captures; no camera permission, account, purchase or file changes. Runtime page size 4096: 16 KB runtime still untested |
+| Native compatibility | [Compatibility record](ANDROID-COMPATIBILITY.md): debug ELF/RELRO and 16 KB ZIP alignment passed; isolated API 37 16 KB image/emulator and native runtime harness prepared. Runtime still pending; no production acceptance claimed |
 | Test preparation | [Tester guide and acceptance matrix](TESTING.md) prepared; planned transfer/billing cases remain NOT RUN. [Screenshot provenance](en-US/screenshots/README.md) records the actual debug build and device checks |
 
 ## Product setup after the first upload
