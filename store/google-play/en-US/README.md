@@ -10,10 +10,12 @@ Play app entry, enable checkout or attest that production approval has been gran
 release policy is a free Android download and a planned $10 USD one-time US Pro upgrade. Keep
 the price qualified until Console configuration and real purchase acceptance are complete.
 
-On October 29 the text, icon and feature graphic were attached to the English (United States)
-listing and saved as a Console draft. Nothing was sent for review or published. Genuine Android
-screenshots remain pending; installing the debug candidate on a phone is not a completed visual
-or optical acceptance test. The phone capture paused while the device was in use.
+On October 29 the text, icon, feature graphic and four genuine Android screenshots were saved
+to the English (United States) listing. Console reports **Ready to send for review**; nothing
+was sent for Google app review or published. The icon and feature graphic carry AI asset labels
+for their assisted preparation; direct device screenshots are unlabeled. Debug launch/navigation
+were visually checked, while signed-build, optical and billing acceptance remain pending. See
+[screenshot provenance](screenshots/README.md) and the [content-rating record](../CONTENT-RATING.md).
 
 ## Text fields
 
@@ -74,7 +76,8 @@ native-rendered PNG extends the original tile gradient to fill Play's square.
    [Play icon specification](https://developer.android.com/distribute/google-play/resources/icon-design-specifications).
 2. **Feature graphic — prepared above:** 1,024 × 500, JPEG or 24-bit PNG without alpha. The
    prepared graphic extends the existing colours and artwork without repeating the complete icon.
-3. **Phone screenshots — still required:** capture the actual release-candidate Android app with DataLux visible.
+3. **Phone screenshots — captured and attached:** four actual DataLux debug UI captures are attached.
+   Recheck them against the final signed candidate; capture any changed UI again.
    Google requires at least two listing screenshots. Aim for four or more useful 1,080 × 1,920
    portrait images, with no private files, account identifiers or notifications. Keep originals
    and record the app version, source SHA and capture device alongside the captures.
@@ -129,6 +132,8 @@ If instructions rely on a browser sender, rehearse that exact browser-to-Android
 the browser remains an experimental preview, so the native desktop sender is the default here.
 
 ## Internal tester handoff
+
+Use the [test guide and acceptance matrix](../TESTING.md) for track setup, safe fixtures and result records.
 
 1. Owner creates the internal track, supplies the opt-in link and adds the chosen tester accounts.
 2. Testers install from that Play track. Preserve files before replacing a debug APK: its signing

@@ -26,9 +26,11 @@ installation and does not inherit private state from historical `dev.fileflow` b
 | Server access | Owner is off the NUC network and explicitly deferred server work; [NUC handoff](NUC-HANDOFF.md) records all pending checks |
 | Play-managed signing | Console shows the app-signing key in use. It is separate from the locally created upload key |
 | Payments and testers | Merchant setup still required; no Play bundle uploaded; closed-test dashboard shows 0 testers |
-| Remaining Console declarations | Sign-in/reviewer access, content rating, target audience and Data Safety remain incomplete. Console shows 6 actioned declarations and 4 requiring attention; nothing sent for review |
-| Artwork and listing | US text, 512 × 512 icon and 1024 × 500 feature graphic uploaded/attached and saved as a listing draft; genuine Android screenshots and reviewer rehearsal remain required |
-| Connected phone | `dev.datalux` 0.4.1/code 5 installed successfully on SM-S948U1 / Android 17. No old app or user data removed; screenshot/UI check paused while phone was in use |
+| Content rating | IARC completed October 29; North America ESRB Teen, Users Interact and In-App Purchases. [Answer record](CONTENT-RATING.md) explains the actual file-sharing behavior; Google app review/release remain pending |
+| Remaining Console declarations | Sign-in/reviewer access, target audience and Data Safety remain incomplete. Dashboard shows 8 of 11 setup tasks complete. Audience is blocked until legitimate reviewer access exists; do not submit placeholder credentials. Nothing sent for Google app review |
+| Artwork and listing | US text, icon, feature graphic and four genuine 1080 × 1920 phone screenshots saved; Console says Ready to send for review. AI labels applied to prepared icon/feature artwork, not direct screenshots. No Google app-review submission or publication |
+| Connected phone | Debug `dev.datalux` 0.4.1/code 5 launches; Send/Receive home, Settings, Pro, Received and Teams visually checked on SM-S948U1 / Android 17. Display restored after captures; no camera permission, account, purchase or file changes. Runtime page size 4096: 16 KB runtime still untested |
+| Test preparation | [Tester guide and acceptance matrix](TESTING.md) prepared; planned transfer/billing cases remain NOT RUN. [Screenshot provenance](en-US/screenshots/README.md) records the actual debug build and device checks |
 
 ## Build and review sequence
 
