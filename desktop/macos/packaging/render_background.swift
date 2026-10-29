@@ -1,14 +1,15 @@
 import AppKit
 import Foundation
 
-guard CommandLine.arguments.count == 4 else {
-    fputs("usage: render_background.swift OUTPUT.png VERSION ARCH\n", stderr)
+guard CommandLine.arguments.count == 5, ["FileFlow", "DataLux"].contains(CommandLine.arguments[4]) else {
+    fputs("usage: render_background.swift OUTPUT.png VERSION ARCH FileFlow|DataLux\n", stderr)
     exit(64)
 }
 
 let output = URL(fileURLWithPath: CommandLine.arguments[1])
 let version = CommandLine.arguments[2]
 let arch = CommandLine.arguments[3]
+let product = CommandLine.arguments[4]
 let width: CGFloat = 660
 let height: CGFloat = 380
 let canvas = NSRect(x: 0, y: 0, width: width, height: height)
@@ -78,7 +79,7 @@ let titleAttributes: [NSAttributedString.Key: Any] = [
     .foregroundColor: NSColor(calibratedWhite: 0.96, alpha: 1),
     .kern: -0.7,
 ]
-let title = "FileFlow" as NSString
+let title = product as NSString
 title.draw(at: NSPoint(x: 36, y: 319), withAttributes: titleAttributes)
 let titleWidth = title.size(withAttributes: titleAttributes).width
 ("." as NSString).draw(
@@ -91,7 +92,7 @@ let subtitleAttributes: [NSAttributedString.Key: Any] = [
     .foregroundColor: NSColor(calibratedWhite: 0.76, alpha: 1),
     .kern: 0.15,
 ]
-("Drag FileFlow to Applications" as NSString).draw(
+("Drag \(product) to Applications" as NSString).draw(
     at: NSPoint(x: 38, y: 289),
     withAttributes: subtitleAttributes
 )
@@ -133,7 +134,7 @@ let footerAttributes: [NSAttributedString.Key: Any] = [
     .font: NSFont.monospacedSystemFont(ofSize: 10, weight: .regular),
     .foregroundColor: NSColor(calibratedWhite: 0.47, alpha: 1),
 ]
-("FileFlow \(version)  ·  macOS \(arch)" as NSString).draw(
+("\(product) \(version)  ·  macOS \(arch)" as NSString).draw(
     at: NSPoint(x: 38, y: 25),
     withAttributes: footerAttributes
 )

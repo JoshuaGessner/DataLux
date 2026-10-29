@@ -2,6 +2,7 @@ import os
 
 
 application = os.path.abspath(defines["app"])  # noqa: F821
+app_name = os.path.basename(application)
 metadata = os.path.abspath(defines["metadata"])  # noqa: F821
 background = os.path.abspath(defines["background"])  # noqa: F821
 volume_icon = os.path.abspath(defines["volume_icon"])  # noqa: F821
@@ -11,7 +12,7 @@ filesystem = "HFS+"
 compression_level = 9
 
 files = [
-    (application, "FileFlow.app"),
+    (application, app_name),
     (metadata, ".fileflow"),
 ]
 symlinks = {"Applications": "/Applications"}
@@ -37,6 +38,6 @@ label_pos = "bottom"
 text_size = 13
 icon_size = 112
 icon_locations = {
-    "FileFlow.app": (170, 220),
+    app_name: (170, 220),
     "Applications": (490, 220),
 }

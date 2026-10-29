@@ -20,7 +20,7 @@
 
     <application
         android:name=".FileFlowApp"
-        android:label="FileFlow"
+        android:label="DataLux"
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher"
         android:supportsRtl="true"
@@ -44,7 +44,7 @@
         </activity>
 
         <!-- Pairing for encrypted mode: both phones show a QR code and read each other's with the
-             front camera. Not exported: only FileFlow itself starts a pairing. -->
+             front camera. Not exported: only DataLux itself starts a pairing. -->
         <activity
             android:name=".PairActivity"
             android:exported="false"
@@ -102,14 +102,14 @@
             tools:ignore="LockedOrientationActivity,DiscouragedApi"
             android:theme="@style/Theme.FileFlow.Fullscreen"
             android:configChanges="orientation|screenSize|keyboardHidden|screenLayout|smallestScreenSize">
-            <!-- "Share → FileFlow" from any app sends what was shared, the same as picking it with
+            <!-- "Share → DataLux" from any app sends what was shared, the same as picking it with
                  "Choose files": one file, or several as one batch. -->
-            <intent-filter android:label="Send with FileFlow">
+            <intent-filter android:label="Send with DataLux">
                 <action android:name="android.intent.action.SEND" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <data android:mimeType="*/*" />
             </intent-filter>
-            <intent-filter android:label="Send with FileFlow">
+            <intent-filter android:label="Send with DataLux">
                 <action android:name="android.intent.action.SEND_MULTIPLE" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <data android:mimeType="*/*" />

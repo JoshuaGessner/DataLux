@@ -20,7 +20,7 @@ require(licensePublicKey.isEmpty() || runCatching {
     require(key.params.curve.field.fieldSize == 256 && key.params.order.bitLength() == 256)
 }.isSuccess) { "fileflowLicensePublicKey must contain a valid P-256 SPKI public key" }
 val accountOrigin = providers.gradleProperty("fileflowAccountOrigin")
-    .orElse("https://fileflow.anomalousinteractive.com").get()
+    .orElse("https://datalux.anomalousinteractive.com").get()
 val accountUri = URI(accountOrigin)
 require(accountUri.scheme == "https" && accountUri.host != null && accountUri.userInfo == null &&
     accountUri.rawQuery == null && accountUri.rawFragment == null && accountUri.path.isNullOrEmpty()) {

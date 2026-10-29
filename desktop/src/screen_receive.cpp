@@ -99,7 +99,7 @@ void App::ReceiveScreen(float x0, float W, float H) {
             SDL_RenderTextureRotated(renderer_, rx_camera_.preview(), nullptr, &dst, 0, nullptr, SDL_FLIP_HORIZONTAL);
         } else {
             const char* msg = state == Camera::State::kNone     ? "This computer has no camera to receive with."
-                              : state == Camera::State::kDenied ? "FileFlow can't use the camera. Allow it in your system's privacy settings."
+                              : state == Camera::State::kDenied ? "DataLux can't use the camera. Allow it in your system's privacy settings."
                                                                 : "Starting the camera… (allow it if you're asked)";
             paint_.Text(msg, L + cw / 2, 76 + vh / 2 - 10, 14, Weight::kRegular, th::kTextDim, Align::kCenter);
         }

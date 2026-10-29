@@ -136,7 +136,7 @@ jobs:
             aarch64|arm64) ARCH=arm64 ;;
             *) echo "::error::Unsupported runner architecture: $(uname -m)"; exit 1 ;;
           esac
-          PACKAGE_BASE="FileFlow-$TAG-linux-$ARCH"
+          PACKAGE_BASE="DataLux-$TAG-linux-$ARCH"
           mkdir -p "dist/$PACKAGE_BASE/share/icons/hicolor/512x512/apps" "dist/$PACKAGE_BASE/share/applications" release-staging
           cp build/desktop-app/desktop/fileflow-send LICENSE README.md "dist/$PACKAGE_BASE/"
           cp desktop/third_party/nlohmann-json-LICENSE.txt desktop/ACCOUNTS.md "dist/$PACKAGE_BASE/"
@@ -183,7 +183,7 @@ jobs:
           cmake --preset desktop-app -G Ninja -DCMAKE_EXE_LINKER_FLAGS="-static -static-libgcc -static-libstdc++"
           cmake --build build/desktop-app -j 4
       - name: Launch smoke test
-        run: build/desktop-app/desktop/FileFlow.exe --windowed --no-camera --seconds 2
+        run: build/desktop-app/desktop/DataLux.exe --windowed --no-camera --seconds 2
       - name: Package experimental portable ZIP
         env:
           TAG: ${{ needs.validate.outputs.tag }}
@@ -194,9 +194,9 @@ jobs:
             aarch64|arm64) ARCH=arm64 ;;
             *) echo "::error::Unsupported runner architecture: $(uname -m)"; exit 1 ;;
           esac
-          PACKAGE_BASE="FileFlow-$TAG-windows-$ARCH"
+          PACKAGE_BASE="DataLux-$TAG-windows-$ARCH"
           mkdir -p "dist/$PACKAGE_BASE" release-staging
-          cp build/desktop-app/desktop/FileFlow.exe LICENSE README.md "dist/$PACKAGE_BASE/"
+          cp build/desktop-app/desktop/DataLux.exe LICENSE README.md "dist/$PACKAGE_BASE/"
           cp desktop/third_party/nlohmann-json-LICENSE.txt desktop/ACCOUNTS.md "dist/$PACKAGE_BASE/"
           git rev-parse HEAD > "dist/$PACKAGE_BASE/SOURCE_REVISION.txt"
           (cd dist && zip -9 -r "../release-staging/$PACKAGE_BASE.zip" "$PACKAGE_BASE")
@@ -232,15 +232,15 @@ jobs:
         env:
           SDL_VIDEODRIVER: dummy
           SDL_RENDER_DRIVER: software
-        run: build/desktop-app/desktop/FileFlow.app/Contents/MacOS/FileFlow --windowed --no-camera --seconds 2
+        run: build/desktop-app/desktop/DataLux.app/Contents/MacOS/DataLux --windowed --no-camera --seconds 2
       - name: Verify app and build drag-and-drop DMG
         env:
           TAG: ${{ needs.validate.outputs.tag }}
           COMMIT: ${{ needs.validate.outputs.commit }}
         run: |
           set -euo pipefail
-          APP=build/desktop-app/desktop/FileFlow.app
-          BINARY="$APP/Contents/MacOS/FileFlow"
+          APP=build/desktop-app/desktop/DataLux.app
+          BINARY="$APP/Contents/MacOS/DataLux"
           codesign --verify --deep --strict "$APP"
           BINARY_ARCHES="$(lipo -archs "$BINARY")"
           if [[ "$BINARY_ARCHES" == *x86_64* && "$BINARY_ARCHES" == *arm64* ]]; then
@@ -249,7 +249,7 @@ jobs:
           elif [[ "$BINARY_ARCHES" == "arm64" ]]; then ARCH=arm64
           else echo "::error::Unsupported Mach-O architectures: $BINARY_ARCHES"; exit 1
           fi
-          PACKAGE_BASE="FileFlow-$TAG-macos-$ARCH"
+          PACKAGE_BASE="DataLux-$TAG-macos-$ARCH"
           mkdir -p release-staging
           bash scripts/build_macos_dmg.sh \
             --app "$APP" --output "release-staging/$PACKAGE_BASE.dmg" \
@@ -312,7 +312,7 @@ jobs:
           TAG: ${{ needs.validate.outputs.tag }}
         run: |
           mkdir -p release-staging
-          cp app/build/outputs/apk/debug/app-debug.apk "release-staging/FileFlow-$TAG-android-arm64-v8a-debug.apk"
+          cp app/build/outputs/apk/debug/app-debug.apk "release-staging/DataLux-$TAG-android-arm64-v8a-debug.apk"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: release-android
@@ -350,10 +350,10 @@ jobs:
           root, tag, commit = pathlib.Path("release-staging"), os.environ["TAG"], os.environ["COMMIT"]
           files = sorted(path for path in root.iterdir() if path.is_file() and path.name != "macos-package-validation.json")
           patterns = {
-              "linux": re.compile(rf"^FileFlow-{re.escape(tag)}-linux-(x86_64|arm64)\.tar\.gz$"),
-              "windows": re.compile(rf"^FileFlow-{re.escape(tag)}-windows-(x86_64|arm64)\.zip$"),
-              "macos": re.compile(rf"^FileFlow-{re.escape(tag)}-macos-(x86_64|arm64|universal2)\.dmg$"),
-              "android": re.compile(rf"^FileFlow-{re.escape(tag)}-android-(arm64-v8a)-debug\.apk$"),
+              "linux": re.compile(rf"^DataLux-{re.escape(tag)}-linux-(x86_64|arm64)\.tar\.gz$"),
+              "windows": re.compile(rf"^DataLux-{re.escape(tag)}-windows-(x86_64|arm64)\.zip$"),
+              "macos": re.compile(rf"^DataLux-{re.escape(tag)}-macos-(x86_64|arm64|universal2)\.dmg$"),
+              "android": re.compile(rf"^DataLux-{re.escape(tag)}-android-(arm64-v8a)-debug\.apk$"),
           }
           found = {}
           for path in files:
@@ -383,7 +383,7 @@ jobs:
                       raise SystemExit(f"::error::{path.name} has a corrupt member: {bad}")
                   names = archive.namelist()
                   revisions = [name for name in names if name.endswith("/SOURCE_REVISION.txt")]
-                  suffix = "/FileFlow.exe"
+                  suffix = "/DataLux.exe"
                   binaries = [name for name in names if name.endswith(suffix)]
                   if len(revisions) != 1 or len(binaries) != 1:
                       raise SystemExit(f"::error::{platform} archive contents are incomplete")
@@ -455,7 +455,7 @@ jobs:
             gh release create "$TAG" \
               --draft \
               --target "$COMMIT" \
-              --title "FileFlow $TAG" \
+              --title "DataLux $TAG" \
               --notes "Experimental native milestone built from $COMMIT. See NATIVE_RELEASES.md before publishing."
             gh release view "$TAG" --json databaseId,isDraft,isImmutable,tagName,targetCommitish > release-state.json
           fi
@@ -511,7 +511,7 @@ jobs:
           details = {
               "linux": ({"status": "unsigned", "details": "No Linux package signature."}, "Experimental portable tarball; no installer or distribution package.", ["Compatibility is not validated across Linux distributions."]),
               "windows": ({"status": "unsigned", "details": "No Authenticode signature."}, "Experimental portable ZIP; no installer.", ["Windows SmartScreen may warn because the executable is unsigned."]),
-              "macos": ({"status": "ad-hoc", "details": "Ad-hoc app-bundle signature only; not Developer ID signed or notarized."}, "Experimental drag-and-drop DMG. Open the disk image, then drag FileFlow to Applications.", ["Gatekeeper may block the app because it is not notarized."]),
+              "macos": ({"status": "ad-hoc", "details": "Ad-hoc app-bundle signature only; not Developer ID signed or notarized."}, "Experimental drag-and-drop DMG. Open the disk image, then drag DataLux to Applications.", ["Gatekeeper may block the app because it is not notarized."]),
               "android": ({"status": "ad-hoc", "details": "Ephemeral debug certificate generated for this GitHub-hosted runner build; not a persistent release identity."}, "Experimental Android Free/Pro debug APK; not a Play Store build.", ["The per-run debug key is not a supported in-place upgrade path; another build may require uninstalling the existing app, which removes app-local state.", "Stable Android release signing is not configured.", "Pro purchase/restore requires the production license public key and billing configuration; this review APK must not be sold as the Play release."]),
           }
           manifest_artifacts = []

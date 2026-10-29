@@ -71,7 +71,7 @@ class ProbeActivity : AppCompatActivity() {
             addView(button("Share report", R.drawable.ic_share, Style.Tonal) {
                 val send = android.content.Intent(android.content.Intent.ACTION_SEND)
                     .setType("text/plain")
-                    .putExtra(android.content.Intent.EXTRA_SUBJECT, "FileFlow device check")
+                    .putExtra(android.content.Intent.EXTRA_SUBJECT, "DataLux device check")
                     .putExtra(android.content.Intent.EXTRA_TEXT, body)
                 runCatching { startActivity(android.content.Intent.createChooser(send, null)) }
             }, matchWidth(dp(12)))
@@ -91,7 +91,7 @@ class ProbeActivity : AppCompatActivity() {
     }
 
     /**
-     * What this phone means for FileFlow, in plain words: what the receiver will run at, how
+     * What this phone means for DataLux, in plain words: what the receiver will run at, how
      * close it can focus, how many cores it will decode on. Claims, labelled as such -- the full
      * report below is the evidence.
      */
@@ -164,7 +164,7 @@ class ProbeActivity : AppCompatActivity() {
     }.getOrElse { "?" }
 
     private fun report(): String = buildString {
-        appendLine("FileFlow capability probe (C02)")
+        appendLine("DataLux capability probe (C02)")
         appendLine("=".repeat(52))
         appendLine()
 

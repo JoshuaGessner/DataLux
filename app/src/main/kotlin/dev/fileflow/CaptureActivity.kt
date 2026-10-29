@@ -1269,7 +1269,7 @@ class CaptureActivity : AppCompatActivity() {
     private var rigEcho: String = "(unset — ffreplay will refuse this bundle)"
 
     private fun format(o: CameraRecorder.Outcome, dir: File): String = buildString {
-        appendLine("FileFlow capture run (C05 CPU path) — EXP-007 verification half")
+        appendLine("DataLux capture run (C05 CPU path) — EXP-007 verification half")
         appendLine("=".repeat(64))
         appendLine()
         appendLine("PROVENANCE")

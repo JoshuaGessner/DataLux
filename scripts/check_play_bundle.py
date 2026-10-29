@@ -107,7 +107,7 @@ def main():
     parser.add_argument("--bundletool", type=Path)
     parser.add_argument("--certificate", type=Path)
     parser.add_argument("--license-public-key", type=Path)
-    parser.add_argument("--account-origin", default="https://fileflow.anomalousinteractive.com")
+    parser.add_argument("--account-origin", default="https://datalux.anomalousinteractive.com")
     parser.add_argument("--jdk-bin", type=Path, help="Optional JDK bin directory; otherwise use tools on PATH")
     parser.add_argument("--expected-version-code", type=int)
     parser.add_argument("--expected-version-name")

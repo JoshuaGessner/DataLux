@@ -3,7 +3,7 @@ set -euo pipefail
 
 usage() {
   cat <<'EOF'
-Usage: build_macos_dmg.sh --app FileFlow.app --output FileFlow-vVERSION-macos-ARCH.dmg \
+Usage: build_macos_dmg.sh --app DataLux.app --output DataLux-vVERSION-macos-ARCH.dmg \
   --version VERSION --arch arm64|x86_64|universal2 --source-revision 40_HEX_SHA \
   [--license LICENSE] [--readme README.md] [--report REPORT.json] \
   [--background-preview BACKGROUND.png]
@@ -57,10 +57,12 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 REPOSITORY_ROOT="$(cd "$SCRIPT_DIR/.." && pwd -P)"
 PACKAGING_DIR="$REPOSITORY_ROOT/desktop/macos/packaging"
 APP="$(cd "$(dirname "$APP")" && pwd -P)/$(basename "$APP")"
-if [[ ! -d "$APP" || "$(basename "$APP")" != "FileFlow.app" ]]; then
-  echo "--app must name an existing FileFlow.app bundle" >&2
+APP_NAME="$(basename "$APP")"
+if [[ ! -d "$APP" || ( "$APP_NAME" != "FileFlow.app" && "$APP_NAME" != "DataLux.app" ) ]]; then
+  echo "--app must name an existing DataLux.app or historical FileFlow.app bundle" >&2
   exit 1
 fi
+PRODUCT_NAME="${APP_NAME%.app}"
 OUTPUT_PARENT="$(dirname "$OUTPUT")"
 mkdir -p "$OUTPUT_PARENT"
 OUTPUT="$(cd "$OUTPUT_PARENT" && pwd -P)/$(basename "$OUTPUT")"
@@ -73,10 +75,10 @@ if [[ -e "$OUTPUT" ]]; then
   exit 1
 fi
 
-APP_BINARY="$APP/Contents/MacOS/FileFlow"
+APP_BINARY="$APP/Contents/MacOS/$PRODUCT_NAME"
 APP_ICON="$APP/Contents/Resources/FileFlow.icns"
 if [[ ! -x "$APP_BINARY" || ! -f "$APP_ICON" || ! -f "$APP/Contents/Info.plist" ]]; then
-  echo "FileFlow.app is missing its executable, icon, or Info.plist" >&2
+  echo "$APP_NAME is missing its executable, icon, or Info.plist" >&2
   exit 1
 fi
 NORMALIZED_VERSION="${VERSION#v}"
@@ -134,7 +136,7 @@ printf '%s\n' "$SOURCE_REVISION" > "$METADATA_DIR/SOURCE_REVISION.txt"
 if [[ -n "$LICENSE_PATH" ]]; then cp "$LICENSE_PATH" "$METADATA_DIR/LICENSE"; fi
 if [[ -n "$README_PATH" ]]; then cp "$README_PATH" "$METADATA_DIR/README.md"; fi
 
-swift "$PACKAGING_DIR/render_background.swift" "$BACKGROUND" "$NORMALIZED_VERSION" "$ARCH"
+swift "$PACKAGING_DIR/render_background.swift" "$BACKGROUND" "$NORMALIZED_VERSION" "$ARCH" "$PRODUCT_NAME"
 if [[ -n "$BACKGROUND_PREVIEW" ]]; then
   mkdir -p "$(dirname "$BACKGROUND_PREVIEW")"
   cp "$BACKGROUND" "$BACKGROUND_PREVIEW"
@@ -152,7 +154,7 @@ ORIGINAL_BUNDLE_DIGEST="$(python3 "$PACKAGING_DIR/package_tools.py" bundle-diges
   -D "metadata=$METADATA_DIR" \
   -D "background=$BACKGROUND" \
   -D "volume_icon=$APP_ICON" \
-  "FileFlow" "$OUTPUT"
+  "$PRODUCT_NAME" "$OUTPUT"
 
 hdiutil verify "$OUTPUT"
 ATTACH_OUTPUT="$(hdiutil attach -readonly -nobrowse -mountpoint "$MOUNT_DIR" "$OUTPUT")"
@@ -161,22 +163,22 @@ if [[ -z "$DEVICE" ]]; then
   echo "could not identify the mounted DMG device" >&2
   exit 1
 fi
-if [[ ! -d "$MOUNT_DIR/FileFlow.app" || ! -L "$MOUNT_DIR/Applications" || \
+if [[ ! -d "$MOUNT_DIR/$APP_NAME" || ! -L "$MOUNT_DIR/Applications" || \
       "$(readlink "$MOUNT_DIR/Applications")" != "/Applications" ]]; then
-  echo "DMG is missing FileFlow.app or the /Applications symlink" >&2
+  echo "DMG is missing $APP_NAME or the /Applications symlink" >&2
   exit 1
 fi
 cmp "$METADATA_DIR/SOURCE_REVISION.txt" "$MOUNT_DIR/.fileflow/SOURCE_REVISION.txt"
-MOUNTED_BUNDLE_DIGEST="$(python3 "$PACKAGING_DIR/package_tools.py" bundle-digest "$MOUNT_DIR/FileFlow.app")"
+MOUNTED_BUNDLE_DIGEST="$(python3 "$PACKAGING_DIR/package_tools.py" bundle-digest "$MOUNT_DIR/$APP_NAME")"
 if [[ "$MOUNTED_BUNDLE_DIGEST" != "$ORIGINAL_BUNDLE_DIGEST" ]]; then
-  echo "FileFlow.app changed while packaging" >&2
+  echo "$APP_NAME changed while packaging" >&2
   exit 1
 fi
-if [[ "$(lipo -archs "$MOUNT_DIR/FileFlow.app/Contents/MacOS/FileFlow")" != "$APP_ARCHES" ]]; then
+if [[ "$(lipo -archs "$MOUNT_DIR/$APP_NAME/Contents/MacOS/$PRODUCT_NAME")" != "$APP_ARCHES" ]]; then
   echo "mounted application architectures changed" >&2
   exit 1
 fi
-codesign --verify --deep --strict --verbose=2 "$MOUNT_DIR/FileFlow.app"
+codesign --verify --deep --strict --verbose=2 "$MOUNT_DIR/$APP_NAME"
 hdiutil detach "$DEVICE" >/dev/null
 DEVICE=""
 hdiutil verify "$OUTPUT"

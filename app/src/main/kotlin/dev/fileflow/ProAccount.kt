@@ -102,7 +102,7 @@ object ProAccount {
     @Synchronized fun claim(productId: String, purchaseToken: String, expectedUserId: String): ProStatus {
         val account = requireSession()
         if (account.userId != expectedUserId || requiresSignIn)
-            throw AccountError("Sign in to the FileFlow account used to buy Pro, then restore purchases.")
+            throw AccountError("Sign in to the DataLux account used to buy Pro, then restore purchases.")
         return applyStatus(request("/api/native/play-purchase",
             JSONObject().put("productId", productId).put("purchaseToken", purchaseToken), account.token))
     }
@@ -183,7 +183,7 @@ object ProAccount {
             emailVerified, body.optBoolean("verificationAvailable", false), resendAt).also { status = it }
     }
 
-    private fun requireSession() = session ?: throw AccountError("Sign in to your FileFlow account first.")
+    private fun requireSession() = session ?: throw AccountError("Sign in to your DataLux account first.")
 
     private fun persist(account: ProSession) {
         val json = JSONObject().put("origin", BuildConfig.ACCOUNT_ORIGIN)

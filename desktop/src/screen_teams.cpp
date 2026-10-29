@@ -255,7 +255,7 @@ void App::TeamsScreen(float x0, float W, float H) {
         const auto left = std::chrono::duration_cast<std::chrono::minutes>(
             kPairingLifetime - std::chrono::milliseconds(secure::NowMs() - k->created_ms));
         paint_.Text("Paired with a phone · " + k->code, pr.x + 62, pr.y + 12, 15, Weight::kSemiBold, th::kText);
-        paint_.Text(std::to_string(std::max<long>(1, static_cast<long>(left.count()))) + " min left · kept only while FileFlow is open",
+        paint_.Text(std::to_string(std::max<long>(1, static_cast<long>(left.count()))) + " min left · kept only while DataLux is open",
                     pr.x + 62, pr.y + 34, 13, Weight::kRegular, th::kTextDim);
         if (ui_.Button("forget", {pr.x + cw - 112, pr.y + 12, 96, 40}, "Forget", false)) paired_.reset();
     } else {
@@ -427,7 +427,7 @@ void App::PairScreen(float W, float H) {
         SDL_RenderTextureRotated(renderer_, p.camera.preview(), nullptr, &dst, 0, nullptr, SDL_FLIP_HORIZONTAL);
     } else {
         const char* msg = state == Camera::State::kNone     ? "This computer has no camera to read the phone's code."
-                          : state == Camera::State::kDenied ? "FileFlow can't use the camera. Allow it in your system's privacy settings."
+                          : state == Camera::State::kDenied ? "DataLux can't use the camera. Allow it in your system's privacy settings."
                                                             : "Starting the camera… (allow it if you're asked)";
         paint_.Text(paint_.Fit(msg, rw - 32, 14, Weight::kRegular), rx + rw / 2, qy + ph / 2 - 10, 14, Weight::kRegular, th::kTextDim,
                     Align::kCenter);

@@ -43,7 +43,7 @@ void App::SendScreen(float x0, float W, float H) {
     const float L = x0;           // the screen's left edge (after the rail)
     const float SW = W - x0;      // and its width
 
-    // Header: the page, and what FileFlow does.
+    // Header: the page, and what DataLux does.
     paint_.Text("Send", L + margin, 24, 28, Weight::kSemiBold, th::kText);
     if (SW > 560) paint_.Text("Files, sent with light", W - margin, 34, 14, Weight::kRegular, th::kTextDim, Align::kRight);
 
@@ -163,7 +163,7 @@ void App::SendScreen(float x0, float W, float H) {
     }
 
     // The one line of instruction, where there's room for it.
-    const char* footer = "Point a phone running FileFlow at the code. No network, no pairing, nothing to install.";
+    const char* footer = "Point a phone running DataLux at the code. No network, no pairing, nothing to install.";
     if (bottom + 20 <= footer_y && paint_.Measure(footer, 13, Weight::kRegular) <= SW - 2 * margin) {
         paint_.Text(footer, L + SW / 2, footer_y, 13, Weight::kRegular, th::kTextDim, Align::kCenter);
     }

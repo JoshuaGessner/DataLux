@@ -104,7 +104,7 @@ Reply ParseAccess(const HttpResponse& response, std::string_view user_id, std::s
     } catch (...) { return Failure(0); }
 }
 
-Reply Start() { return ParseDevice(Request("/api/native/device/start", R"({"label":"FileFlow PC"})")); }
+Reply Start() { return ParseDevice(Request("/api/native/device/start", R"({"label":"DataLux PC"})")); }
 Reply Poll(const Device& device) { return ParsePoll(Request("/api/native/device/poll", Json{{"deviceCode", device.secret}}.dump()), license::config::kPublicKey); }
 Reply Refresh(const Session& session) { return ParseAccess(Request("/api/native/entitlements", {}, session.token), session.user_id, license::config::kPublicKey); }
 Reply Logout(const Session& session) {

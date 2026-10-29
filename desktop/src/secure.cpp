@@ -473,11 +473,11 @@ Bytes Seal(const Bytes& plain, const SealKey& key, const Random& random) {
 std::string Describe(OpenFailure f) {
     switch (f) {
         case OpenFailure::kNone: return "";
-        case OpenFailure::kNotAnEnvelope: return "This isn't a FileFlow file.";
+        case OpenFailure::kNotAnEnvelope: return "This isn't a DataLux file.";
         case OpenFailure::kNeedsPairing: return "This file is encrypted. Pair with the sender, or join their team, then have it sent again.";
         case OpenFailure::kWrongKey: return "This file is encrypted for a pairing or team this computer isn't in, or was altered. Nothing was saved.";
         case OpenFailure::kNotEncrypted: return "The sender isn't in encrypted mode, so the file was refused.";
-        case OpenFailure::kUnknownCodec: return "This file was compressed in a way this version can't open. Update FileFlow.";
+        case OpenFailure::kUnknownCodec: return "This file was compressed in a way this version can't open. Update DataLux.";
         case OpenFailure::kCorrupt: return "The file is damaged. Nothing was saved.";
     }
     return "";

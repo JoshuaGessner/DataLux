@@ -557,7 +557,7 @@ class MainActivity : AppCompatActivity() {
             })
             // Passed on to another phone, as one batch: a file that reached one person in the
             // field often needs to reach the next.
-            addView(iconButton(R.drawable.ic_upload, "Send with FileFlow") {
+            addView(iconButton(R.drawable.ic_upload, "Send with DataLux") {
                 if (!Entitlements.check(this@MainActivity, Entitlements.Feature.BulkManage)) return@iconButton
                 val uris = selected.toList()
                 clearSelection()
@@ -727,7 +727,7 @@ class MainActivity : AppCompatActivity() {
     private fun singleFileActions(uri: android.net.Uri, name: String, mime: String) {
         com.google.android.material.dialog.MaterialAlertDialogBuilder(this)
             .setTitle(name)
-            .setItems(arrayOf("Open", "Share", "Send with FileFlow", "Delete", "Select multiple · Pro")) { _, action ->
+            .setItems(arrayOf("Open", "Share", "Send with DataLux", "Delete", "Select multiple · Pro")) { _, action ->
                 when (action) {
                     0 -> runCatching { startActivity(Intent.createChooser(Intent(Intent.ACTION_VIEW)
                         .setDataAndType(uri, mime).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION), name)) }
@@ -825,7 +825,7 @@ class MainActivity : AppCompatActivity() {
                     startActivity(Intent(this@MainActivity, TeamsActivity::class.java))
                 }
             }, matchWidth(dp(12)))
-            addView(row(R.drawable.ic_tune, "FileFlow Pro", "Your account, purchases, and offline Pro access") {
+            addView(row(R.drawable.ic_tune, "DataLux Pro", "Your account, purchases, and offline Pro access") {
                 startActivity(Intent(this@MainActivity, ProActivity::class.java))
             }, matchWidth(dp(12)))
             addView(row(R.drawable.ic_help, "How it works", null) {
@@ -1046,7 +1046,7 @@ class MainActivity : AppCompatActivity() {
         private const val RECEIVED_HELP =
             "Verified files are saved to Downloads › ${LiveDecoder.DOWNLOADS_SUBDIR}.\n\n" +
                 "Tap a file to open it. Press and hold to select it, then tap others to select " +
-                "them too; share, delete, or send them on to another phone with FileFlow, " +
+                "them too; share, delete, or send them on to another phone with DataLux, " +
                 "all at once."
 
         private const val HOW_IT_WORKS =
@@ -1069,7 +1069,7 @@ class MainActivity : AppCompatActivity() {
                 "On: each file is sealed with AES-256 to a key only the two paired phones hold. " +
                 "Pair by holding the phones face to face — each reads the other's code with its " +
                 "front camera. Nothing goes over a network, and the key is never stored: it lasts " +
-                "until you close FileFlow, or 30 minutes.\n\n" +
+                "until you close DataLux, or 30 minutes.\n\n" +
                 "Turn it on on BOTH phones. In encrypted mode the receiver refuses any file that " +
                 "isn't sealed to its pairing or one of its teams.\n\n" +
                 "Teams (Settings › Teams) keep one key for a whole group, so one screen can send " +

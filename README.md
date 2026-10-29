@@ -1,4 +1,4 @@
-# FileFlow
+# DataLux
 
 > **Status:** Accepted product direction; experimental builds; Play launch pending
 > **Owner:** Product / native apps
@@ -48,7 +48,7 @@ camera that sees colour sharply; four colours are much easier to tell apart, so 
 default and works with more phones. If the receiver says it can read the screen but not its
 colours, step the sender down a setting.
 
-Text, documents and other compressible files go faster still: FileFlow compresses them with
+Text, documents and other compressible files go faster still: DataLux compresses them with
 Zstandard before sending, so a 1 MB text file may need only a few hundred kilobytes on the link.
 Photos and videos are already compressed; a quick check spots them and sends them as they are.
 **Settings › Compression** offers **Auto** (the default), **Maximum** (smallest transfer, longer to
@@ -62,7 +62,7 @@ own.
 
 ## Using it
 
-**To send:** open FileFlow, tap **Choose a file** (or share a file to FileFlow from any app), and
+**To send:** open DataLux, tap **Choose a file** (or share a file to DataLux from any app), and
 hold the phone steady with its screen facing the other phone.
 
 **To receive:** tap **Start receiving** and point the camera at the sending screen. Fill the corner
@@ -71,7 +71,9 @@ transfer pauses; aim back and it carries on from where it was. Nothing received 
 
 Received files are saved to **Downloads › FileFlow** and listed in the **Received** tab.
 
-## FileFlow on a computer
+<a id="fileflow-on-a-computer"></a>
+
+## DataLux on a computer
 
 The desktop app does what the phone app does — **Send**, **Receive**, **Received**, **Teams** — with a
 laptop, monitor, TV or projector as the sending screen and the computer's own camera to receive and
@@ -80,12 +82,12 @@ side: one screen, a room full of receivers, each at its own pace.
 
 ```sh
 cmake --preset desktop-app && cmake --build build/desktop-app
-open build/desktop-app/desktop/FileFlow.app                                 # macOS
-build/desktop-app/desktop/FileFlow.app/Contents/MacOS/FileFlow report.pdf  # straight to sending
+open build/desktop-app/desktop/DataLux.app                                 # macOS
+build/desktop-app/desktop/DataLux.app/Contents/MacOS/DataLux report.pdf  # straight to sending
 ```
 
-On macOS the build makes `FileFlow.app`, with its icon, ready to drag to Applications; files dropped
-on its Dock icon are sent. On Windows it makes `FileFlow.exe` with its icon; on Linux
+On macOS the build makes `DataLux.app`, with its icon, ready to drag to Applications; files dropped
+on its Dock icon are sent. On Windows it makes `DataLux.exe` with its icon; on Linux
 `fileflow-send`, and `cmake --install build/desktop-app` adds it to the applications menu.
 
 With a second display attached — a projector, a TV — **Show the code on** puts the code full screen
@@ -136,14 +138,14 @@ repository's README for setup, tests, offline limits, and the licensing roadmap.
 ## Encrypted mode
 
 Turn on **Encrypted** on both phones (the switch is on the Send and Receive tabs). The first time,
-FileFlow asks you to **pair**: hold the two phones face to face, screens together. Each shows a QR
+DataLux asks you to **pair**: hold the two phones face to face, screens together. Each shows a QR
 code and reads the other's with its front camera; both then show the same six-digit code. If the
 codes match, you're paired.
 
 - Each file is encrypted with **AES-256-GCM** under a key that only the two paired phones hold.
   The file's name travels inside the encryption too.
 - The key comes from a fresh **ECDH (P-256)** exchange made just for that pairing and is never
-  stored: it lasts until FileFlow closes, or 30 minutes.
+  stored: it lasts until DataLux closes, or 30 minutes.
 - In encrypted mode the receiver refuses anything that isn't sealed to its pairing, including
   unencrypted files, so encryption can't be quietly switched off by the sender.
 
@@ -165,7 +167,7 @@ nothing from it. The new member's phone answers with their name, which joins the
 - Holding the key is membership, and a phone can't be made to forget a key. So removing someone
   gives the team a new key, and the leader invites everyone else again.
 
-Without encrypted mode, a FileFlow transfer is like a QR code: anyone whose camera can see the
+Without encrypted mode, a DataLux transfer is like a QR code: anyone whose camera can see the
 sending screen could read it. See [SECURITY.md](SECURITY.md) for the details.
 
 ## Requirements
@@ -190,14 +192,14 @@ sales automatically. See [PRODUCT.md](PRODUCT.md) for the remaining owner and te
 
 ## License
 
-FileFlow is free software under the **GNU Affero General Public License v3.0** — see
+DataLux is free software under the **GNU Affero General Public License v3.0** — see
 [LICENSE](LICENSE). You may use, study, change and share it; if you distribute it or offer it as a
 service, modified or not, you must make your complete source available under the same license.
 
-**Commercial licensing:** to build FileFlow's technology into a closed-source product, contact the
+**Commercial licensing:** to build DataLux's technology into a closed-source product, contact the
 copyright holder for a commercial license.
 
-"FileFlow" and the FileFlow logo identify this project; the license does not grant permission to
+"DataLux" and the DataLux logo identify this project; the license does not grant permission to
 use them for other products.
 
 ## Contributing

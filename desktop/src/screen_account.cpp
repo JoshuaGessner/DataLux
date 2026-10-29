@@ -12,7 +12,7 @@ void App::AccountScreen(float x, float W, float /*H*/) {
     paint_.Text("Account", left, 28, 28, Weight::kSemiBold, th::kText);
     const SDL_FRect card{left, 96, width, 142};
     paint_.RoundRect(card, 24, th::kSurface);
-    paint_.Text(paint_.Fit("FileFlow Desktop — all features free", width - 48, 23, Weight::kSemiBold),
+    paint_.Text(paint_.Fit("DataLux Desktop — all features free", width - 48, 23, Weight::kSemiBold),
                 left + 24, 118, 23, Weight::kSemiBold, th::kText);
     const std::string status = account_session_ ? account_session_->email : "No account or purchase is needed on this computer.";
     paint_.Text(paint_.Fit(status, width - 48, 15, Weight::kRegular), left + 24, 158, 15, Weight::kRegular, th::kTextDim);
@@ -37,9 +37,9 @@ void App::AccountScreen(float x, float W, float /*H*/) {
         } else if (ui_.Button("account/signin", {left, 266, width, 46}, busy ? "Connecting…" : "Sign in through your browser", true) && !busy) {
             BeginAccountSignIn();
         }
-        if (ui_.Button("account/open", {left, 330, width, 42}, "Manage FileFlow account", false)) {
+        if (ui_.Button("account/open", {left, 330, width, 42}, "Manage DataLux account", false)) {
             const auto url = account::Origin() + "/account.html";
-            if (!SDL_OpenURL(url.c_str())) account_message_ = "Could not open your browser. Visit the FileFlow website.";
+            if (!SDL_OpenURL(url.c_str())) account_message_ = "Could not open your browser. Visit the DataLux website.";
         }
         paint_.Text(paint_.Fit("Android Pro: $10 one-time in the US. Restore it on your phones.", width, 14, Weight::kRegular),
                     left, 398, 14, Weight::kRegular, th::kTextDim);
@@ -54,7 +54,7 @@ void App::ChooseLicense() {
         account_message_ = "Finish the current transfer before importing an account activation record.";
         return;
     }
-    static constexpr SDL_DialogFileFilter filters[] = {{"FileFlow account activation record", "fileflow-license"}};
+    static constexpr SDL_DialogFileFilter filters[] = {{"DataLux account activation record", "fileflow-license"}};
     SDL_ShowOpenFileDialog(OnChosen, new std::shared_ptr<ChosenFiles>(chosen_license_), window_, filters, 1, nullptr, false);
 }
 
@@ -155,7 +155,7 @@ void App::PumpAccount() {
             account_device_ = reply.device;
             account_device_until_ = now + std::chrono::seconds(reply.device.expires_in);
             account_poll_at_ = now + std::chrono::seconds(reply.device.interval);
-            if (!SDL_OpenURL(reply.device.verification_uri.c_str())) account_message_ = "Open the FileFlow sign-in page in your browser and enter this code.";
+            if (!SDL_OpenURL(reply.device.verification_uri.c_str())) account_message_ = "Open the DataLux sign-in page in your browser and enter this code.";
         } else if (kind == account::Reply::Kind::kPending) {
             account_poll_at_ = now + std::chrono::seconds(std::max(account_device_ ? account_device_->interval : 5, reply.retry_after));
         } else if (kind == account::Reply::Kind::kSession || kind == account::Reply::Kind::kAccess) {

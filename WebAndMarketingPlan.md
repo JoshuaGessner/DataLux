@@ -1,4 +1,4 @@
-# FileFlow — Cross-Platform Website, Web App & Marketing Master Plan
+# DataLux — Cross-Platform Website, Web App & Marketing Master Plan
 
 > **Status:** Proposed planning snapshot; current commercial policy in PRODUCT.md
 > **Owner:** Product / web
@@ -26,7 +26,7 @@ remain release gates.
 
 # 1. Critical Project Context
 
-FileFlow is no longer an Android-only application.
+DataLux is no longer an Android-only application.
 
 A native cross-platform desktop suite has already been implemented and is currently undergoing testing.
 
@@ -51,7 +51,7 @@ The existing desktop implementation uses C++20, SDL3, and shared native componen
 The primary new development objectives are:
 
 1. A professional public website.
-2. A functional browser-based version of FileFlow.
+2. A functional browser-based version of DataLux.
 3. Cross-platform download and release infrastructure.
 4. Product branding and marketing assets.
 5. Press and technical documentation.
@@ -66,13 +66,13 @@ The website and web app must complement the existing desktop and Android softwar
 
 ## Primary identity
 
-**FileFlow — Send files with light.**
+**DataLux — Send files with light.**
 
 Suggested positioning:
 
 "Transfer files directly between phones and computers using their screens and cameras. No Wi-Fi, Bluetooth, cables, or internet connection required."
 
-Emphasize that FileFlow is a cross-platform optical communication system.
+Emphasize that DataLux is a cross-platform optical communication system.
 
 Do not position the desktop software as an upcoming capability.
 
@@ -188,7 +188,7 @@ The final website's feature matrix must come from verified platform results.
 
 # 4. Website Architecture
 
-The website should become the central hub for the entire FileFlow ecosystem.
+The website should become the central hub for the entire DataLux ecosystem.
 
 It should introduce the technology, demonstrate the product, distribute native applications, launch the web app, and support marketing.
 
@@ -235,7 +235,7 @@ Subtitle:
 
 Primary CTA:
 
-**Download FileFlow**
+**Download DataLux**
 
 Secondary CTA:
 
@@ -243,7 +243,7 @@ Secondary CTA:
 
 The browser CTA should be labeled Preview or Beta until the browser app is ready for general release.
 
-Below the hero, include a real demonstration of FileFlow communicating between different device types.
+Below the hero, include a real demonstration of DataLux communicating between different device types.
 
 Suggested feature sections:
 
@@ -486,7 +486,7 @@ Use real measured performance and supported settings.
 
 ## Demonstration B — Computer to phone
 
-Drag a file into FileFlow on a computer.
+Drag a file into DataLux on a computer.
 
 Show the optical pattern filling the computer monitor.
 
@@ -502,7 +502,7 @@ Show multiple phones receiving the same file.
 
 Where feasible, demonstrate independent receiver progress and successful integrity verification.
 
-This may be the strongest marketing asset for FileFlow.
+This may be the strongest marketing asset for DataLux.
 
 Do not publish it as a reliable supported workflow until tested successfully.
 
@@ -522,13 +522,13 @@ Priority audiences:
 6. Offline-computing enthusiasts.
 7. Organizations evaluating specialized optical communication technology.
 
-The desktop suite makes FileFlow more interesting to audiences who primarily use Windows, macOS, or Linux.
+The desktop suite makes DataLux more interesting to audiences who primarily use Windows, macOS, or Linux.
 
 ## Messaging examples
 
 **Short:**
 
-"FileFlow transfers files through light instead of wireless networking."
+"DataLux transfers files through light instead of wireless networking."
 
 **Consumer:**
 
@@ -554,7 +554,7 @@ All public copy must match the actual release's verified capabilities.
 
 The expanded desktop suite strengthens the editorial story.
 
-Previously, FileFlow was primarily an unusual Android experiment.
+Previously, DataLux was primarily an unusual Android experiment.
 
 Now the story is a cross-platform optical transfer system with native applications, encrypted groups, and potential one-to-many distribution.
 
@@ -594,7 +594,7 @@ Supporting points:
 - Multi-receiver broadcast capability.
 - Open-source implementation.
 
-Avoid claims that FileFlow invented optical file transfer or is definitively faster than existing solutions.
+Avoid claims that DataLux invented optical file transfer or is definitively faster than existing solutions.
 
 Do not initiate unsolicited press campaigns without project-owner approval.
 
@@ -652,12 +652,12 @@ Publish original technical and product content.
 Suggested launch articles:
 
 1. **"I Built a Cross-Platform App That Sends Files Using Light"**
-2. **"How FileFlow Transfers Files Between Computers and Phones Without Wi-Fi"**
+2. **"How DataLux Transfers Files Between Computers and Phones Without Wi-Fi"**
 3. **"One Screen, Multiple Receivers: Optical File Broadcasting"**
-4. **"Why We Built FileFlow's Desktop Suite Natively"**
+4. **"Why We Built DataLux's Desktop Suite Natively"**
 5. **"Turning a Native C++ Optical Protocol Into a Browser Application"**
 6. **"Benchmarking Optical File Transfer on Real Hardware"**
-7. **"How FileFlow Handles Encryption, Pairing, and Team Transfers"**
+7. **"How DataLux Handles Encryption, Pairing, and Team Transfers"**
 
 Use genuine measurements, screenshots, diagrams, and test footage.
 
@@ -825,7 +825,7 @@ Work on the website, native packaging, and web feasibility in parallel where dep
 
 # 17. Final Strategic Direction
 
-FileFlow should launch as a cross-platform optical communication product, not as a mobile experiment.
+DataLux should launch as a cross-platform optical communication product, not as a mobile experiment.
 
 The native desktop suite is a major part of its current value and should be featured prominently.
 
@@ -850,4 +850,4 @@ The strongest marketing opportunities are:
 7. Pursue broader technology press coverage.
 8. Validate monetization and commercial licensing.
 
-**Success means making FileFlow easy to discover, download, understand, test, and trust—while preserving the native engineering work already completed.**
+**Success means making DataLux easy to discover, download, understand, test, and trust—while preserving the native engineering work already completed.**

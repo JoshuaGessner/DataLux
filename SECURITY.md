@@ -6,7 +6,7 @@ Please report security issues privately through GitHub's **Report a vulnerabilit
 repository's Security tab, rather than in a public issue. You'll get a reply as soon as possible,
 and credit in the fix if you'd like it.
 
-## What FileFlow protects, and how
+## What DataLux protects, and how
 
 **Integrity, always.** Every transfer ends with a SHA-256 check of the whole file against the
 sender's hash; a file that doesn't match is never saved. Damaged frames along the way are caught by

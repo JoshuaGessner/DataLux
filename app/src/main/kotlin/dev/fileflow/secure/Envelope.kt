@@ -132,15 +132,15 @@ object Envelope {
     }
 
     enum class Failure(val message: String) {
-        NotAnEnvelope("This isn't a FileFlow file."),
+        NotAnEnvelope("This isn't a DataLux file."),
         NeedsPairing("This file is encrypted. Pair the two phones, or join the sender's team, then send it again."),
         WrongPairing("This file is encrypted for a pairing or team this phone isn't in, or was altered. " +
             "Nothing was saved."),
         NotEncrypted("The sender isn't in encrypted mode, so the file was refused. Turn encrypted mode on " +
             "on both phones, or off on this one."),
-        UnknownCodec("This file was compressed in a way this version of FileFlow can't open. Update it."),
+        UnknownCodec("This file was compressed in a way this version of DataLux can't open. Update it."),
         Corrupt("The file is damaged. Nothing was saved."),
-        NeedsPro("This batch needs FileFlow Pro on the receiving phone. Nothing was saved. " +
+        NeedsPro("This batch needs DataLux Pro on the receiving phone. Nothing was saved. " +
             "Upgrade or restore Pro here, or ask the sender to send one file at a time for free."),
     }
 

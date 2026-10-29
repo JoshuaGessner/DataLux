@@ -88,9 +88,9 @@ class ProActivity : AppCompatActivity() {
         verificationButton = null
         body.removeAllViews()
         add(button("Back", style = Ui.Style.Text) { finish() })
-        add(title("FileFlow Pro", 30f))
+        add(title("DataLux Pro", 30f))
         add(space(8))
-        add(text("Pro is a one-time Android upgrade for your FileFlow account. US launch price: $10. " +
+        add(text("Pro is a one-time Android upgrade for your DataLux account. US launch price: $10. " +
             "Google Play shows the final checkout price. Restore on your other phones with the same account. " +
             "The desktop app includes every feature for free."))
         add(space(12))
@@ -155,7 +155,7 @@ class ProActivity : AppCompatActivity() {
             addVerification(session, status)
             add(space(12))
             add(card(title(if (pro) "Pro is active" else "Free", 20f), space(6), text(if (pro)
-                "Your verified Pro access is saved on this phone and works offline. Sign in to the same FileFlow account on your other phones."
+                "Your verified Pro access is saved on this phone and works offline. Sign in to the same DataLux account on your other phones."
             else "This phone has Free access. Restore a previous Android Pro purchase or upgrade below.")))
             add(space(12))
             val offer = permanentOffer(product)
@@ -173,7 +173,7 @@ class ProActivity : AppCompatActivity() {
             add(button("Sign out on this device", style = Ui.Style.Text) { work("Sign out failed") { ProAccount.logout() } }
                 .apply { isEnabled = !busy })
             add(space(16))
-            add(button("Delete FileFlow account", style = Ui.Style.Text) { confirmDeletion(session.userId) }
+            add(button("Delete DataLux account", style = Ui.Style.Text) { confirmDeletion(session.userId) }
                 .apply { isEnabled = !busy })
         }
         add(button("Privacy & data", style = Ui.Style.Text) { openAccountPage("/privacy.html") })
@@ -197,11 +197,11 @@ class ProActivity : AppCompatActivity() {
         verificationButton = resend
         val check = button("I’ve verified — check account", style = Ui.Style.Text) { refresh() }.apply { isEnabled = !busy }
         add(card(title(if (requested) "Check your inbox" else "Verify your email", 20f), space(8), text(instructions), space(8),
-            text("1. Open the FileFlow verification email.\n2. Follow its link and confirm your FileFlow password.\n3. Return here and check your account. Verification signs you out, so you may need to sign in again."),
+            text("1. Open the DataLux verification email.\n2. Follow its link and confirm your DataLux password.\n3. Return here and check your account. Verification signs you out, so you may need to sign in again."),
             space(8), resend, check))
         if (requested) add(button("Open email app", style = Ui.Style.Text) {
             runCatching { startActivity(Intent.makeMainSelectorActivity(Intent.ACTION_MAIN, Intent.CATEGORY_APP_EMAIL)) }
-                .onFailure { showNotice("Open your email app or webmail, then look for the FileFlow verification email.") }
+                .onFailure { showNotice("Open your email app or webmail, then look for the DataLux verification email.") }
         }.apply { isEnabled = !busy })
         if (status?.verificationAvailable == false)
             add(text("Verification email is unavailable right now. Your free transfers and existing offline access still work."))
@@ -231,7 +231,7 @@ class ProActivity : AppCompatActivity() {
     private fun confirmDeletion(expectedUserId: String) {
         if (busy || ProAccount.session?.userId != expectedUserId || ProAccount.requiresSignIn) return
         val password = EditText(this).apply {
-            hint = "FileFlow password"
+            hint = "DataLux password"
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
             setSingleLine()
             importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_NO
@@ -245,12 +245,12 @@ class ProActivity : AppCompatActivity() {
         val fields = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(24), 0, dp(24), 0)
-            addView(text("This permanently removes your FileFlow account and shared Pro access. It does not delete your local files or transfer keys, or cancel or refund a Google Play purchase. Previously activated offline copies may keep working until they reconnect."))
+            addView(text("This permanently removes your DataLux account and shared Pro access. It does not delete your local files or transfer keys, or cancel or refund a Google Play purchase. Previously activated offline copies may keep working until they reconnect."))
             addView(password)
             addView(confirmation)
         }
         val dialog = MaterialAlertDialogBuilder(this)
-            .setTitle("Delete your FileFlow account?")
+            .setTitle("Delete your DataLux account?")
             .setView(fields)
             .setNegativeButton("Cancel", null)
             .setPositiveButton("Delete account", null)
@@ -263,13 +263,13 @@ class ProActivity : AppCompatActivity() {
                 }
                 val secret = password.text.toString()
                 if (secret.isEmpty()) {
-                    password.error = "Enter your FileFlow password."
+                    password.error = "Enter your DataLux password."
                     return@setOnClickListener
                 }
                 password.text.clear()
                 confirmation.text.clear()
                 dialog.dismiss()
-                work("Account deletion could not be confirmed", "Your FileFlow account was deleted. Local files and transfer keys remain on this device.") {
+                work("Account deletion could not be confirmed", "Your DataLux account was deleted. Local files and transfer keys remain on this device.") {
                     ProAccount.deleteAccount(secret, "DELETE", expectedUserId)
                 }
             }
@@ -321,7 +321,7 @@ class ProActivity : AppCompatActivity() {
             .setListener { result, purchases ->
                 runOnUiThread {
                     if (ProAccount.session?.userId != accountId) {
-                        showNotice("Sign in to the FileFlow account used to buy Pro, then restore purchases.")
+                        showNotice("Sign in to the DataLux account used to buy Pro, then restore purchases.")
                     } else when (result.responseCode) {
                         BillingClient.BillingResponseCode.OK -> processPurchases(purchases.orEmpty(), accountId)
                         BillingClient.BillingResponseCode.USER_CANCELED -> showNotice("Purchase canceled. Nothing changed.")
@@ -401,7 +401,7 @@ class ProActivity : AppCompatActivity() {
     private fun processPurchases(purchases: List<Purchase>, expectedAccountId: String) {
         if (Looper.myLooper() != Looper.getMainLooper()) { runOnUiThread { processPurchases(purchases, expectedAccountId) }; return }
         if (ProAccount.session?.userId != expectedAccountId) {
-            showNotice("Sign in to the FileFlow account used to buy Pro, then restore purchases.")
+            showNotice("Sign in to the DataLux account used to buy Pro, then restore purchases.")
             return
         }
         if (busy) { deferredPurchases = expectedAccountId to purchases; return }

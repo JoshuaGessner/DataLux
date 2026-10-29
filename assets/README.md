@@ -1,4 +1,4 @@
-# FileFlow icon identity
+# DataLux icon identity
 
 The light-grid mark uses three rounded corner markers and a six-by-six field of
 cells. Cyan (#7DD3F0), soft green (#A8E6A1), and off-white (#E1E6E8) sit on deep teal.

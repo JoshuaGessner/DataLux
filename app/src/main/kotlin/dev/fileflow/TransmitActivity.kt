@@ -61,7 +61,7 @@ class TransmitActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // A share has no FileFlow settings of its own. In particular, a missing (or supplied)
+        // A share has no DataLux settings of its own. In particular, a missing (or supplied)
         // encryption extra must not override the person's saved Encrypted choice.
         if (intent.action == android.content.Intent.ACTION_SEND ||
             intent.action == android.content.Intent.ACTION_SEND_MULTIPLE) {
@@ -179,7 +179,7 @@ class TransmitActivity : AppCompatActivity() {
         if (uris.isEmpty() && (intent.action == android.content.Intent.ACTION_SEND ||
                 intent.action == android.content.Intent.ACTION_SEND_MULTIPLE)) {
             // Shared text, or a share with no file attached: never fall back to the test file.
-            fail("Nothing to send — FileFlow sends files, and this share did not include one.")
+            fail("Nothing to send — DataLux sends files, and this share did not include one.")
             return
         }
         if (uris.size > Envelope.MAX_BATCH_FILES) {
@@ -187,7 +187,7 @@ class TransmitActivity : AppCompatActivity() {
             return
         }
         if (uris.size > 1 && !Entitlements.has(Entitlements.Feature.Batch)) {
-            fail("Sending a batch needs FileFlow Pro on this phone. Send one file at a time for free.")
+            fail("Sending a batch needs DataLux Pro on this phone. Send one file at a time for free.")
             Entitlements.check(this, Entitlements.Feature.Batch)
             return
         }
@@ -305,7 +305,7 @@ class TransmitActivity : AppCompatActivity() {
         total: Boolean = false,
     ): Pair<String, ByteArray> {
         // This activity is exported. A file:// supplied by another app would otherwise be read
-        // with FileFlow's privileges, including files inside its private data directory.
+        // with DataLux's privileges, including files inside its private data directory.
         require(uri.scheme == "content") { "Choose a document or share it from a file app." }
         val (name, size) = describe(uri)
         val tooBig = if (total) "Together the files are more than ${formatBytes(MAX_FILE_BYTES)}. " +
@@ -515,7 +515,7 @@ class TransmitActivity : AppCompatActivity() {
     private fun report(error: String?, r: OpticalRenderer?) {
         if (r != null) reported = true
         val body = buildString {
-            appendLine("FileFlow transmit run (C03) — states SUBMITTED, not Fd")
+            appendLine("DataLux transmit run (C03) — states SUBMITTED, not Fd")
             appendLine("=".repeat(64))
             appendLine()
             appendLine("PROVENANCE")

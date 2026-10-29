@@ -7,10 +7,10 @@
 
 ## Intended experience
 
-FileFlow handles downloading, verifying, installing, and relaunching desktop updates. Users do not
+DataLux handles downloading, verifying, installing, and relaunching desktop updates. Users do not
 visit a download page or rerun an installer for routine updates. Automatic mode stages an update
-and installs it when FileFlow next closes safely. With automatic installation off, a quiet in-app
-notification offers **Update and restart**, **Install when I close FileFlow**, and **Remind me later**.
+and installs it when DataLux next closes safely. With automatic installation off, a quiet in-app
+notification offers **Update and restart**, **Install when I close DataLux**, and **Remind me later**.
 
 Android and future iOS distribution use their app stores for updates. Do not add this desktop updater
 to the mobile apps. The browser app's service worker and the website's Docker updater remain separate.
@@ -45,7 +45,7 @@ downloaded code: a checksum served alongside a replaced payload does not establi
 | macOS direct download | Sparkle 2, integrated through a small Objective-C++ bridge | Keep the branded DMG and drag to Applications | Signed update archive, downloaded by Sparkle; bundle replacement on safe quit/restart |
 | Windows direct download | Velopack native C/C++ integration, subject to the security and recovery proof below | One-click, signed, per-user setup | Managed update packages and helper; no installer wizard on routine updates |
 | Linux direct download | Velopack native integration with a self-updating AppImage, subject to the same proof | AppImage at a stable user-writable location, with optional launcher integration | Verified replacement through its updater; preserve the launcher path |
-| Linux package-manager installation | The owning package manager | Flatpak, deb/rpm, or another explicitly supported package route | Manager-owned updates; FileFlow does not overwrite managed files |
+| Linux package-manager installation | The owning package manager | Flatpak, deb/rpm, or another explicitly supported package route | Manager-owned updates; DataLux does not overwrite managed files |
 | Any future desktop store build | Its store | Store installation | Store-owned updates; no competing in-app binary updater |
 
 Sparkle documents signed update archives, automatic installation behavior, and non-Xcode embedding.
@@ -55,7 +55,7 @@ release for in-app delivery. It can differ from the website download. [Sparkle s
 
 Velopack has native C/C++ bindings with separate check, download, and apply operations. Its early
 startup integration must be isolated from normal app startup and shutdown. Its packaging CLI needs
-.NET in CI; FileFlow's C++ application does not become a .NET application.
+.NET in CI; DataLux's C++ application does not become a .NET application.
 [Native integration](https://docs.velopack.io/getting-started/cpp).
 
 On Windows, its per-user layout provides a stable launcher outside the replaceable application
@@ -68,7 +68,7 @@ packaging alone does not prove compatibility with older glibc, graphics stacks, 
 [Linux behavior](https://docs.velopack.io/packaging/operating-systems/linux).
 
 Velopack is a provisional selection, not an unconditional security approval. Its current C++ SDK
-must prove that FileFlow can validate the exact downloaded target before any apply path runs,
+must prove that DataLux can validate the exact downloaded target before any apply path runs,
 including pending-update startup paths. Disable default startup auto-apply until our policy has
 authorized a verified update. If this cannot be demonstrated, do not ship that integration; revisit
 the platform backend. [Startup contract](https://github.com/velopack/velopack.docs/blob/master/docs/integrating/overview.mdx).
@@ -104,7 +104,7 @@ Use one nonmodal banner per available version, with a persistent About/Settings 
 notification remains available if system notifications are denied. Do not put a modal over an optical
 pattern or steal focus from a presentation.
 
-The initial implementation checks while FileFlow runs and on the next launch. It does not install
+The initial implementation checks while DataLux runs and on the next launch. It does not install
 an always-running service merely to notify users while the app is closed. If closed-app checks are
 later required, evaluate an opt-in, OS-managed scheduled task as a separate feature.
 
@@ -209,7 +209,7 @@ Extend the current milestone workflow rather than publishing on every push:
 6. Begin with an internal/canary channel, then a small stable cohort, then wider rollout after review.
    Cohort selection can be local and random; do not transmit a persistent device identifier for it.
 
-Suggested public feed base: `https://fileflow.anomalousinteractive.com/updates/`, separated by
+Suggested public feed base: `https://datalux.anomalousinteractive.com/updates/`, separated by
 channel/platform/architecture. Actual feed names/formats depend on the pinned frameworks. Use short
 metadata cache lifetimes (about five minutes) with revalidation, long immutable payload caching, and
 bounded retry behavior. Show available/installed version and check time in the app.
@@ -254,7 +254,7 @@ explicit limit to the no-prompts goal.
 
 ## Licensing, privacy, and distribution ownership
 
-Updates remain available without signing into a FileFlow account. Metadata checks do not include
+Updates remain available without signing into a DataLux account. Metadata checks do not include
 filenames, camera images, team names, keys, transfer history, or account identifiers. Minimal hosting
 access logs still exist; document their retention without labeling update requests as telemetry-free
 network traffic. Routine update failures stay in bounded local diagnostic logs unless shared by the user.

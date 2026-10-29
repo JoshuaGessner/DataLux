@@ -1,5 +1,6 @@
 import json
 import pathlib
+import runpy
 import tempfile
 import unittest
 from argparse import Namespace
@@ -42,6 +43,19 @@ class PackageToolsTests(unittest.TestCase):
         path = pathlib.Path(self.temp.name) / "value"
         path.write_bytes(b"fileflow")
         self.assertEqual(sha256_file(path), "7b7b41c25ae77c3f4dae5675ffa50e7b1131c855ff3fa15738e6a5bb6d84ebcf")
+
+    def test_dmg_layout_preserves_both_historical_and_current_bundle_names(self):
+        settings = pathlib.Path(__file__).with_name("dmg_settings.py")
+        for name in ("FileFlow.app", "DataLux.app"):
+            with self.subTest(name=name):
+                app = pathlib.Path(self.temp.name) / name
+                config = runpy.run_path(str(settings), init_globals={"defines": {
+                    "app": str(app), "metadata": self.temp.name,
+                    "background": self.temp.name, "volume_icon": self.temp.name,
+                }})
+                self.assertIn((str(app), name), config["files"])
+                self.assertEqual(config["icon_locations"][name], (170, 220))
+                self.assertEqual(config["symlinks"]["Applications"], "/Applications")
 
     def test_report_binds_package_hash_architecture_and_source(self):
         dmg = pathlib.Path(self.temp.name) / "FileFlow-v1.2.3-macos-arm64.dmg"

@@ -5,13 +5,13 @@
 > **Last reviewed:** 2026-10-28
 > **Related:** PRODUCT.md, NATIVE_RELEASES.md
 
-All FileFlow desktop features are free, including batch sending, bulk received-file actions,
+All DataLux desktop features are free, including batch sending, bulk received-file actions,
 compression, pairing, encryption, and teams. No sign-in, license, purchase, or network connection is
 required to use them. Android Pro is a separate $10 one-time upgrade for phone batch sending and
 receiving and bulk received-file actions. A Free Android phone receiving a desktop batch must
 upgrade or ask the sender to send individual files; the desktop sender itself is never paywalled.
 
-The Account tab supports browser-assisted sign-in. The PC requests a ten-minute code, opens the configured FileFlow website, and polls for approval no more often than every five seconds. The website requires a signed-in, email-verified account and explicit approval. Passwords stay in the browser; the device secret and session bearer never appear in URLs or application logs.
+The Account tab supports browser-assisted sign-in. The PC requests a ten-minute code, opens the configured DataLux website, and polls for approval no more often than every five seconds. The website requires a signed-in, email-verified account and explicit approval. Passwords stay in the browser; the device secret and session bearer never appear in URLs or application logs.
 
 Account traffic is separate from optical transfer. No network request starts until the user signs in, or a previously signed-in account is refreshed. HTTPS uses the system trust store: Foundation/NSURLSession on macOS, WinHTTP on Windows, and libcurl 7.85+ on Linux. Redirects are disabled, responses are bounded to 32 KiB, and requests have bounded timeouts. A Linux runtime needs libcurl and the system CA certificates. Camera frames, transfer files, teams, and pairing keys are never sent to the account API.
 
@@ -33,7 +33,7 @@ and activation files retain their format and location.
 
 Build inputs:
 
-- `FILEFLOW_ACCOUNT_ORIGIN`: HTTPS origin, default `https://fileflow.anomalousinteractive.com`; no path, credentials, or query. Use a distinct staging hostname and signing key for internal tests.
+- `FILEFLOW_ACCOUNT_ORIGIN`: HTTPS origin, default `https://datalux.anomalousinteractive.com`; no path, credentials, or query. Use a distinct staging hostname and signing key for internal tests. Existing CMake caches retain their prior value; set it explicitly or configure a fresh build directory to adopt the new default.
 - `FILEFLOW_STORE_BUILD`: deprecated and ignored. Even a previously configured `ON` cache is reset to
   `OFF`; desktop features always remain free.
 - `FILEFLOW_LICENSE_PUBLIC_KEY_FILE`: optional PEM SPKI **public** key for verifying Android Pro

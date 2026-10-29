@@ -100,7 +100,7 @@ jobs:
           FILEFLOW_UPLOAD_KEY_ALIAS: ${{ secrets.PLAY_UPLOAD_KEY_ALIAS }}
           FILEFLOW_UPLOAD_KEY_PASSWORD: ${{ secrets.PLAY_UPLOAD_KEY_PASSWORD }}
           ORG_GRADLE_PROJECT_fileflowLicensePublicKey: ${{ vars.FILEFLOW_LICENSE_PUBLIC_KEY }}
-          ORG_GRADLE_PROJECT_fileflowAccountOrigin: ${{ vars.FILEFLOW_ACCOUNT_ORIGIN || 'https://fileflow.anomalousinteractive.com' }}
+          ORG_GRADLE_PROJECT_fileflowAccountOrigin: ${{ vars.FILEFLOW_ACCOUNT_ORIGIN || 'https://datalux.anomalousinteractive.com' }}
           ORG_GRADLE_PROJECT_fileflowVersionCode: ${{ inputs.version_code }}
           ORG_GRADLE_PROJECT_fileflowVersionName: ${{ inputs.version_name }}
           ORG_GRADLE_PROJECT_store: 'true'
@@ -113,7 +113,7 @@ jobs:
           VERSION_CODE: ${{ inputs.version_code }}
           VERSION_NAME: ${{ inputs.version_name }}
           REVISION: ${{ steps.source.outputs.revision }}
-          ACCOUNT_ORIGIN: ${{ vars.FILEFLOW_ACCOUNT_ORIGIN || 'https://fileflow.anomalousinteractive.com' }}
+          ACCOUNT_ORIGIN: ${{ vars.FILEFLOW_ACCOUNT_ORIGIN || 'https://datalux.anomalousinteractive.com' }}
         run: |
           set -euo pipefail
           python3 scripts/tests/test_play_bundle.py

@@ -20,7 +20,7 @@ The matching account and email-verification service is deployed. Native v0.3.0 i
 integration; v0.4.0 adds receiver-side batch enforcement and default Android Free/Pro policy. Older
 binaries do not gain features or paywalls automatically. Desktop automatic updates remain a proposal.
 
-FileFlow's native downloads are built only for milestones that the repository owner chooses. Every
+DataLux's native downloads are built only for milestones that the repository owner chooses. Every
 owner-dispatched run builds a reviewed source commit. Only a run with explicit publication approval
 creates the tag and GitHub Release after every platform build succeeds. Application binaries are
 Release assets only: they are never committed to Git or pushed to a package registry.
@@ -83,7 +83,7 @@ One successful publication run attaches these packages to the workflow-created G
 | --- | --- | --- | --- |
 | Linux | Portable `.tar.gz` | Detected from the build runner | Unsigned |
 | Windows | Portable `.zip` | Detected from the build runner | Unsigned |
-| macOS | Drag-and-drop `.dmg` with FileFlow.app and an Applications shortcut | Read from the built Mach-O file | Ad-hoc app signature only; not Developer ID signed or notarized |
+| macOS | Drag-and-drop `.dmg` with DataLux.app and an Applications shortcut | Read from the built Mach-O file | Ad-hoc app signature only; not Developer ID signed or notarized |
 | Android | Sideloadable debug `.apk` | Fixed project ABI, `arm64-v8a` | Ephemeral runner-generated debug certificate; not a persistent release identity |
 
 The workflow reuses the established Linux, Windows, and Android build/test gates. The macOS release
@@ -187,8 +187,17 @@ publication job can be rerun against its retained, identical build artifact. It 
 the reviewed old metadata or its own exact replacement bytes, refusing unrelated changes. The
 website's normal catalog refresh picks up the DMG without requiring another web image release.
 
-To install, open the DMG and drag FileFlow to Applications, then eject the disk image. This packaging
+To install this historical release, open the DMG and drag FileFlow.app to Applications, then eject the disk image. This packaging
 change does not add Developer ID signing or notarization and does not remove Gatekeeper checks.
+
+## Naming compatibility
+
+New milestone archives and release titles use DataLux; Windows builds produce `DataLux.exe`
+and macOS builds produce `DataLux.app`. The Linux executable remains `fileflow-send`, and
+existing desktop preferences, bundle ID, and `fileflow-release-manifest.json` remain unchanged.
+Historical FileFlow releases, asset URLs, checksums, and the v0.2.0 repair and DMG workflows
+retain their original identities; the DMG builder accepts both historical and new app bundles.
+Existing update clients should not be assumed to understand a new feed or installation path.
 
 ## Current limitations and signing gates
 

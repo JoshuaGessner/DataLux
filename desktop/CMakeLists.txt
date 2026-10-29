@@ -102,7 +102,7 @@ target_link_libraries(fileflow_license PUBLIC fileflow_secure PRIVATE fileflow_w
 set_target_properties(fileflow_license PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
 
 # Account sign-in is opt-in and separate from optical transfer. Platform TLS trusts remain intact.
-set(FILEFLOW_ACCOUNT_ORIGIN "https://fileflow.anomalousinteractive.com" CACHE STRING "HTTPS account origin (no path, query or credentials)")
+set(FILEFLOW_ACCOUNT_ORIGIN "https://datalux.anomalousinteractive.com" CACHE STRING "HTTPS account origin (no path, query or credentials)")
 if(NOT FILEFLOW_ACCOUNT_ORIGIN MATCHES "^https://[A-Za-z0-9.-]+(:[0-9]+)?$" OR FILEFLOW_ACCOUNT_ORIGIN MATCHES "[\"\\\\]")
     message(FATAL_ERROR "FILEFLOW_ACCOUNT_ORIGIN must be an HTTPS origin without a path")
 endif()
@@ -194,7 +194,7 @@ add_custom_command(
     VERBATIM)
 
 if(APPLE)
-    # FileFlow.app: double-clickable, its icon in the Dock, files dropped on that icon sent, and the
+    # DataLux.app: double-clickable, its icon in the Dock, files dropped on that icon sent, and the
     # camera permission text macOS shows before the camera is used.
     add_custom_command(
         OUTPUT ${ICON_DIR}/FileFlow.icns
@@ -208,7 +208,7 @@ if(APPLE)
     set_source_files_properties(third_party/nlohmann-json-LICENSE.txt PROPERTIES MACOSX_PACKAGE_LOCATION Resources)
     set_target_properties(fileflow-send PROPERTIES
         MACOSX_BUNDLE TRUE
-        OUTPUT_NAME FileFlow
+        OUTPUT_NAME DataLux
         MACOSX_BUNDLE_INFO_PLIST ${CMAKE_CURRENT_SOURCE_DIR}/macos/Info.plist.in
         MACOSX_BUNDLE_SHORT_VERSION_STRING ${PROJECT_VERSION}
         MACOSX_BUNDLE_BUNDLE_VERSION ${PROJECT_VERSION})
@@ -217,14 +217,14 @@ if(APPLE)
     # and without one it asks every launch or not at all.
     add_custom_command(TARGET fileflow-send POST_BUILD
         COMMAND codesign --force --sign - --identifier dev.fileflow.desktop $<TARGET_BUNDLE_DIR:fileflow-send>
-        COMMENT "Signing FileFlow.app (ad hoc)"
+        COMMENT "Signing DataLux.app (ad hoc)"
         VERBATIM)
 elseif(WIN32)
     # The icon in Explorer and the taskbar; a window app, not a console one.
     set(FILEFLOW_ICO ${ICON_DIR}/FileFlow.ico)
     configure_file(windows/fileflow.rc.in ${CMAKE_CURRENT_BINARY_DIR}/fileflow.rc @ONLY)
     target_sources(fileflow-send PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/fileflow.rc ${ICON_DIR}/FileFlow.ico)
-    set_target_properties(fileflow-send PROPERTIES WIN32_EXECUTABLE TRUE OUTPUT_NAME FileFlow)
+    set_target_properties(fileflow-send PROPERTIES WIN32_EXECUTABLE TRUE OUTPUT_NAME DataLux)
 else()
     # Linux: the program, its menu entry and its icon, for `cmake --install`.
     add_custom_target(fileflow-icon ALL DEPENDS ${ICON_DIR}/fileflow.png)

@@ -435,7 +435,7 @@ class PairActivity : AppCompatActivity() {
                 "the other's code with its front camera — nothing goes over a network.\n\n" +
                 "Both phones then show a six-digit code. If they match, the pairing is yours. If " +
                 "they don't, cancel and pair again.\n\n" +
-                "A pairing lasts until you close FileFlow, or 30 minutes."
+                "A pairing lasts until you close DataLux, or 30 minutes."
         private const val TEAM_HELP =
             "The leader taps Invite on the team; the new member taps Join a team. Hold the two " +
                 "phones face to face, as for pairing.\n\n" +

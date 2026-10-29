@@ -1,4 +1,4 @@
-// FileFlow for the desktop: a laptop, monitor, TV or projector as the sending screen.
+// DataLux for the desktop: a laptop, monitor, TV or projector as the sending screen.
 //
 //   fileflow-send [--speed steady|fast|fastest] [--compression off|auto|max] [--windowed]
 //                 [--window WxH] [--code-window] [--seconds N] [--snapshot OUT.bmp [--snapshot-after S]]
@@ -6,7 +6,7 @@
 //
 // Started with files, it sends them at once, full screen. Started without, it opens: drop files on
 // it, or choose them, and pick the speed and compression (remembered), and -- with a second display
-// attached -- which screen shows the code. Any phone running FileFlow receives from it exactly as
+// attached -- which screen shows the code. Any phone running DataLux receives from it exactly as
 // from another phone: the frames come from the same core TransmitSession, the file travels in the
 // same envelope (core/envelope.h), and each cell is drawn by the same rule as the app's shader -- a
 // whole number of screen pixels a side, its low three bits lighting red, green and blue. A bigger
@@ -103,11 +103,11 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "SDL: %s\n", SDL_GetError());
         return 1;
     }
-    SDL_SetAppMetadata("FileFlow", FILEFLOW_VERSION, "dev.fileflow.desktop");
+    SDL_SetAppMetadata("DataLux", FILEFLOW_VERSION, "dev.fileflow.desktop");
     // Straight to full screen when there are files to send; otherwise a window.
     SDL_WindowFlags flags = SDL_WINDOW_HIGH_PIXEL_DENSITY | SDL_WINDOW_RESIZABLE;
     if (!files.empty() && !options.windowed && !options.code_window) flags |= SDL_WINDOW_FULLSCREEN;
-    SDL_Window* window = SDL_CreateWindow("FileFlow", win_w, win_h, flags);
+    SDL_Window* window = SDL_CreateWindow("DataLux", win_w, win_h, flags);
     SDL_Renderer* renderer = window != nullptr ? SDL_CreateRenderer(window, nullptr) : nullptr;
     if (renderer == nullptr) {
         std::fprintf(stderr, "SDL: %s\n", SDL_GetError());
@@ -144,7 +144,7 @@ int main(int argc, char** argv) {
             }
         }
     } catch (const std::exception& error) {
-        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "FileFlow", error.what(), window);
+        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "DataLux", error.what(), window);
         SDL_DestroyRenderer(renderer);
         SDL_DestroyWindow(window);
         SDL_Quit();

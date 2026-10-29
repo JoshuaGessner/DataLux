@@ -1,6 +1,6 @@
 [Desktop Entry]
 Type=Application
-Name=FileFlow
+Name=DataLux
 Comment=Send files to a phone with light: no network, no pairing
 Exec=fileflow-send %F
 Icon=fileflow

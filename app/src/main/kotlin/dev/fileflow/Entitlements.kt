@@ -5,9 +5,9 @@ import android.content.Intent
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 
 /**
- * What this copy of FileFlow may do.
+ * What this copy of DataLux may do.
  *
- * FileFlow is open source: anyone who builds it from source gets every feature, and that is
+ * DataLux is open source: anyone who builds it from source gets every feature, and that is
  * deliberate (-Pstore=false). Normal Android builds ([BuildConfig.STORE]) ask what was bought; buying is how people
  * who don't build it themselves get the extras, and how they support the project.
  */
@@ -43,7 +43,7 @@ object Entitlements {
     fun check(context: Context, f: Feature): Boolean {
         if (has(f)) return true
         MaterialAlertDialogBuilder(context)
-            .setTitle("FileFlow Pro")
+            .setTitle("DataLux Pro")
             .setMessage("${f.label} needs Pro on this phone. The US launch price is $10, one time, " +
                 "with the final price shown by Google Play. Already bought it? Sign in and restore. " +
                 "You can keep sending and receiving one file at a time for free, at full speed, with encryption.")

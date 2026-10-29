@@ -1,4 +1,4 @@
-# FileFlow Free and Pro
+# DataLux Free and Pro
 
 > **Status:** Accepted product policy; Play production acceptance pending
 > **Owner:** Product / Android shell
@@ -17,7 +17,7 @@ desktop features. Google Play production approval and public sales are still pen
 - **Android Pro:** one non-consumable Google Play purchase, product `fileflow_pro`, with a **$10 USD
   US launch price**. It adds multi-file batch sending, multi-file batch receiving, and bulk actions
   on received files. Google Play's localized product price and checkout are authoritative.
-- **Ownership:** Pro belongs to a verified FileFlow account. Sign into that account on another phone
+- **Ownership:** Pro belongs to a verified DataLux account. Sign into that account on another phone
   and restore/refresh ownership; it is not a separate charge for each phone. Verified activation is
   cached for offline use. Accounts and network access are unnecessary for Free transfers.
 - **Launch territory:** United States only for the Play application and Pro buy option. Expand
@@ -81,8 +81,8 @@ license change. Website checkout is not implemented and is not required for this
 ## Google Play release gates
 
 1. The personal developer account is verified. The owner explicitly deferred app creation and
-   Play publication pending a new app name. FileFlow and `dev.fileflow` remain working identifiers;
-   confirm the final display name and package ID before registration or any Play upload. A draft
+   Play publication pending a new app name. The selected display name is DataLux; the existing
+   Android application ID remains `dev.fileflow`. Confirm the registration details before any Play upload. A draft
    form was inspected and closed without submission or acceptance of any declaration. At creation,
    the owner must review policy declarations, signing terms and the US export/encryption certification.
 2. Establish stable upload signing, Play App Signing and a backed-up production license-signing key.
@@ -103,7 +103,7 @@ See [NATIVE_RELEASES.md](NATIVE_RELEASES.md) and the separate website repository
 
 ## Research behind the choices
 
-Free network-sharing alternatives already cover general nearby transfer; FileFlow's differentiated
+Free network-sharing alternatives already cover general nearby transfer; DataLux's differentiated
 workflow is screen-to-camera transfer without Wi-Fi, Bluetooth or a network. Keeping individual
 transfers and security free lets people evaluate that difference, while the one-time convenience
 upgrade serves repeat users. This is product judgment, not a claim of validated conversion rates.

@@ -114,7 +114,7 @@ std::string Shortcut(const char* key) {
     return std::string(SDL_strcmp(SDL_GetPlatform(), "macOS") == 0 ? "⌘" : "Ctrl+") + key;
 }
 
-// The light grid: FileFlow's mark, as on the phone's Send screen -- a tile of cells each easing
+// The light grid: DataLux's mark, as on the phone's Send screen -- a tile of cells each easing
 // between the theme's colours on its own slow beat, with the real frame's three corner markers.
 void LightGrid(Painter& p, float cx, float cy, float side, float t, float lift) {
     namespace th = theme;
@@ -513,7 +513,7 @@ void App::OpenCodeView() {
     SDL_WindowFlags flags = SDL_WINDOW_HIGH_PIXEL_DENSITY;
     if (!options_.code_window) flags |= SDL_WINDOW_FULLSCREEN | SDL_WINDOW_BORDERLESS;
     SDL_PropertiesID props = SDL_CreateProperties();
-    SDL_SetStringProperty(props, SDL_PROP_WINDOW_CREATE_TITLE_STRING, "FileFlow — code");
+    SDL_SetStringProperty(props, SDL_PROP_WINDOW_CREATE_TITLE_STRING, "DataLux — code");
     SDL_SetNumberProperty(props, SDL_PROP_WINDOW_CREATE_X_NUMBER, SDL_WINDOWPOS_CENTERED_DISPLAY(there));
     SDL_SetNumberProperty(props, SDL_PROP_WINDOW_CREATE_Y_NUMBER, SDL_WINDOWPOS_CENTERED_DISPLAY(there));
     SDL_SetNumberProperty(props, SDL_PROP_WINDOW_CREATE_WIDTH_NUMBER, 960);

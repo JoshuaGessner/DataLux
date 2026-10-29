@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<!-- FileFlow.app's description of itself to macOS. Filled in by CMake (desktop/CMakeLists.txt). -->
+<!-- DataLux.app's description of itself to macOS. Filled in by CMake (desktop/CMakeLists.txt). -->
 <plist version="1.0">
 <dict>
     <key>CFBundleDevelopmentRegion</key>
@@ -14,9 +14,9 @@
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>
     <key>CFBundleName</key>
-    <string>FileFlow</string>
+    <string>DataLux</string>
     <key>CFBundleDisplayName</key>
-    <string>FileFlow</string>
+    <string>DataLux</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
@@ -31,7 +31,7 @@
     <true/>
     <!-- Receiving and pairing read a phone's screen with the camera. -->
     <key>NSCameraUsageDescription</key>
-    <string>FileFlow reads files and pairing codes from a phone's screen with the camera. Nothing it sees leaves this computer.</string>
+    <string>DataLux reads files and pairing codes from a phone's screen with the camera. Nothing it sees leaves this computer.</string>
     <!-- Any file can be dropped on the Dock icon, to send it. -->
     <key>CFBundleDocumentTypes</key>
     <array>

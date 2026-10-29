@@ -30,18 +30,18 @@ jobs:
         run: build/desktop-app/desktop/fileflow-send --windowed --no-camera --seconds 2
       - name: Package
         run: |
-          mkdir -p dist/FileFlow-linux-x86_64
-          cp build/desktop-app/desktop/fileflow-send LICENSE README.md dist/FileFlow-linux-x86_64/
-          cp desktop/third_party/nlohmann-json-LICENSE.txt desktop/ACCOUNTS.md dist/FileFlow-linux-x86_64/
-          mkdir -p dist/FileFlow-linux-x86_64/share/icons/hicolor/512x512/apps dist/FileFlow-linux-x86_64/share/applications
-          cp build/desktop-app/desktop/icon/fileflow.png dist/FileFlow-linux-x86_64/share/icons/hicolor/512x512/apps/
-          cp desktop/linux/fileflow.desktop dist/FileFlow-linux-x86_64/share/applications/
-          git rev-parse HEAD > dist/FileFlow-linux-x86_64/SOURCE_REVISION.txt
-          tar -C dist -czf dist/FileFlow-linux-x86_64.tar.gz FileFlow-linux-x86_64
+          mkdir -p dist/DataLux-linux-x86_64
+          cp build/desktop-app/desktop/fileflow-send LICENSE README.md dist/DataLux-linux-x86_64/
+          cp desktop/third_party/nlohmann-json-LICENSE.txt desktop/ACCOUNTS.md dist/DataLux-linux-x86_64/
+          mkdir -p dist/DataLux-linux-x86_64/share/icons/hicolor/512x512/apps dist/DataLux-linux-x86_64/share/applications
+          cp build/desktop-app/desktop/icon/fileflow.png dist/DataLux-linux-x86_64/share/icons/hicolor/512x512/apps/
+          cp desktop/linux/fileflow.desktop dist/DataLux-linux-x86_64/share/applications/
+          git rev-parse HEAD > dist/DataLux-linux-x86_64/SOURCE_REVISION.txt
+          tar -C dist -czf dist/DataLux-linux-x86_64.tar.gz DataLux-linux-x86_64
       - uses: actions/upload-artifact@v7
         with:
-          name: FileFlow-linux-x86_64
-          path: dist/FileFlow-linux-x86_64.tar.gz
+          name: DataLux-linux-x86_64
+          path: dist/DataLux-linux-x86_64.tar.gz
           if-no-files-found: error
 
   windows:
@@ -65,15 +65,15 @@ jobs:
           cmake --preset desktop-app -G Ninja -DCMAKE_EXE_LINKER_FLAGS="-static -static-libgcc -static-libstdc++"
           cmake --build build/desktop-app -j 4
       - name: Launch smoke test
-        run: build/desktop-app/desktop/FileFlow.exe --windowed --no-camera --seconds 2
+        run: build/desktop-app/desktop/DataLux.exe --windowed --no-camera --seconds 2
       - name: Package
         run: |
-          mkdir -p dist/FileFlow-windows-x86_64
-          cp build/desktop-app/desktop/FileFlow.exe LICENSE README.md dist/FileFlow-windows-x86_64/
-          cp desktop/third_party/nlohmann-json-LICENSE.txt desktop/ACCOUNTS.md dist/FileFlow-windows-x86_64/
-          git rev-parse HEAD > dist/FileFlow-windows-x86_64/SOURCE_REVISION.txt
+          mkdir -p dist/DataLux-windows-x86_64
+          cp build/desktop-app/desktop/DataLux.exe LICENSE README.md dist/DataLux-windows-x86_64/
+          cp desktop/third_party/nlohmann-json-LICENSE.txt desktop/ACCOUNTS.md dist/DataLux-windows-x86_64/
+          git rev-parse HEAD > dist/DataLux-windows-x86_64/SOURCE_REVISION.txt
       - uses: actions/upload-artifact@v7
         with:
-          name: FileFlow-windows-x86_64
-          path: dist/FileFlow-windows-x86_64/
+          name: DataLux-windows-x86_64
+          path: dist/DataLux-windows-x86_64/
           if-no-files-found: error
