@@ -36,7 +36,9 @@ Keep the existing volume/controller paths and preserve mail/admin credentials.
 2. Deploy the package-aligned backend: Publisher requests/acknowledgements and notification
    filtering must use `dev.datalux`; the Pro product remains `fileflow_pro`. Main source contains
    this change, but it has not been deployed or verified on the NUC during the off-network session.
-3. After merchant setup and product creation, configure least-privilege Publisher credentials
+3. The owner completed the payments profile October 29. Console requires the first billing-enabled
+   artifact before product creation; the release manifest already declares BILLING. Once the verified
+   signer enables the real candidate upload and `fileflow_pro` creation, configure least-privilege Publisher credentials
    read-only in the backend. Keep billing disabled until all required secrets exist.
 4. Set up authenticated one-time/voided purchase notifications, exact public OIDC audience and
    expected service-account identity. Review quotas/cost controls before enabling any Cloud service.

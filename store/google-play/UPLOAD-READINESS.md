@@ -25,12 +25,31 @@ installation and does not inherit private state from historical `dev.fileflow` b
 | License trust | Production signer's public key and backup not yet verified; never substitute an ephemeral test key |
 | Server access | Owner is off the NUC network and explicitly deferred server work; [NUC handoff](NUC-HANDOFF.md) records all pending checks |
 | Play-managed signing | Console shows the app-signing key in use. It is separate from the locally created upload key |
-| Payments and testers | Merchant setup still required; no Play bundle uploaded; closed-test dashboard shows 0 testers |
+| Payments and testers | Owner completed the payments profile October 29; the merchant-creation gate has cleared. App pricing independently verified Free. One-time products now requires the first uploaded artifact with BILLING permission; the merged release manifest already includes it. No product or Play bundle uploaded; closed-test dashboard shows 0 testers |
 | Content rating | IARC completed October 29; North America ESRB Teen, Users Interact and In-App Purchases. [Answer record](CONTENT-RATING.md) explains the actual file-sharing behavior; Google app review/release remain pending |
 | Remaining Console declarations | Sign-in/reviewer access, target audience and Data Safety remain incomplete. Dashboard shows 8 of 11 setup tasks complete. Audience is blocked until legitimate reviewer access exists; do not submit placeholder credentials. Nothing sent for Google app review |
 | Artwork and listing | US text, icon, feature graphic and four genuine 1080 × 1920 phone screenshots saved; Console says Ready to send for review. AI labels applied to prepared icon/feature artwork, not direct screenshots. No Google app-review submission or publication |
 | Connected phone | Debug `dev.datalux` 0.4.1/code 5 launches; Send/Receive home, Settings, Pro, Received and Teams visually checked on SM-S948U1 / Android 17. Display restored after captures; no camera permission, account, purchase or file changes. Runtime page size 4096: 16 KB runtime still untested |
 | Test preparation | [Tester guide and acceptance matrix](TESTING.md) prepared; planned transfer/billing cases remain NOT RUN. [Screenshot provenance](en-US/screenshots/README.md) records the actual debug build and device checks |
+
+## Product setup after the first upload
+
+The payments-profile step is complete, but Console still requires an uploaded billing-enabled
+artifact before allowing one-time product creation. The existing merged release manifest declares
+`com.android.vending.BILLING`; no permission fix or temporary debug upload is needed. After the
+NUC signer is verified, prepare/review the real signed candidate, upload it to the internal track,
+then create the product:
+
+- Product ID: `fileflow_pro` (retained permanent identifier; do not rename it).
+- Default title: **DataLux Pro**.
+- Description: **Unlock multi-file batch transfers and bulk actions on received files.**
+- Exactly one permanent buy option, non-consumable, quantity one; no rental or subscription.
+- US availability only, **$10.00 USD** base price. Verify the actual Google checkout sheet later.
+
+The Console also displayed a **15% service-fee enrollment** notice. Enrollment/eligibility is not
+verified. Before sales, the owner should review associated-account declarations and the program
+terms; do not accept declarations about other accounts without the owner's facts and approval.
+See [Google's enrollment guidance](https://support.google.com/googleplay/android-developer/answer/10632485).
 
 ## Build and review sequence
 
