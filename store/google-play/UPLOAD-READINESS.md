@@ -16,7 +16,7 @@ installation and does not inherit private state from historical `dev.fileflow` b
 | Item | Recorded state |
 | --- | --- |
 | Developer account | Verified Personal account; owner reports the DataLux app entry is created |
-| Console app | Independently checked: DataLux / `dev.datalux`, draft; dashboard app ID `4975860505031813621`. Privacy URL, no-ads and non-government answers saved as pending review changes; Tools category selected |
+| Console app | Independently checked: DataLux / `dev.datalux`, draft; dashboard app ID `4975860505031813621`. Privacy URL, no-ads, non-government, no-financial-features, no-health-features and no-Advertising-ID answers saved as pending review changes; Tools category selected |
 | Current CI | Native main `edccb3c` passed all CI, including sanitizers; desktop CI and all four review packages passed. Web main `3e8374b` CI passed |
 | Candidate version | 0.4.1 / Android version code 5; recheck unused Play version code before upload |
 | Local candidate checks | Android debug APK, unit tests, debug/release lint, release manifest with `dev.datalux` and existing JNI classes, 16 release-helper tests and relative documentation links passed. Backend tests cover DataLux Publisher URLs and rejection of old-package notifications |
@@ -26,6 +26,7 @@ installation and does not inherit private state from historical `dev.fileflow` b
 | Server access | Owner is off the NUC network and explicitly deferred server work; [NUC handoff](NUC-HANDOFF.md) records all pending checks |
 | Play-managed signing | Console shows the app-signing key in use. It is separate from the locally created upload key |
 | Payments and testers | Merchant setup still required; no Play bundle uploaded; closed-test dashboard shows 0 testers |
+| Remaining Console declarations | Sign-in/reviewer access, content rating, target audience and Data Safety remain incomplete. Console shows 6 actioned declarations and 4 requiring attention; nothing sent for review |
 | Artwork and listing | US text, 512 × 512 icon and 1024 × 500 feature graphic uploaded/attached and saved as a listing draft; genuine Android screenshots and reviewer rehearsal remain required |
 | Connected phone | `dev.datalux` 0.4.1/code 5 installed successfully on SM-S948U1 / Android 17. No old app or user data removed; screenshot/UI check paused while phone was in use |
 
