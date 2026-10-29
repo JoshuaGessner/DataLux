@@ -10,6 +10,11 @@ Play app entry, enable checkout or attest that production approval has been gran
 release policy is a free Android download and a planned $10 USD one-time US Pro upgrade. Keep
 the price qualified until Console configuration and real purchase acceptance are complete.
 
+On October 29 the text, icon and feature graphic were attached to the English (United States)
+listing and saved as a Console draft. Nothing was sent for review or published. Genuine Android
+screenshots remain pending; installing the debug candidate on a phone is not a completed visual
+or optical acceptance test. The phone capture paused while the device was in use.
+
 ## Text fields
 
 | File | Destination | Review condition |

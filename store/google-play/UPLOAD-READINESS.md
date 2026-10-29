@@ -16,25 +16,29 @@ installation and does not inherit private state from historical `dev.fileflow` b
 | Item | Recorded state |
 | --- | --- |
 | Developer account | Verified Personal account; owner reports the DataLux app entry is created |
-| Console app | Owner-confirmed `dev.datalux`; dashboard app ID `4975860505031813621`. Browser access is disabled, so remaining Console settings have not been independently rechecked |
-| Previous CI | Native main `9a5e16f` and web main `9943cf2` passed; earlier paywall CI also completed successfully |
+| Console app | Independently checked: DataLux / `dev.datalux`, draft; dashboard app ID `4975860505031813621`. Privacy URL, no-ads and non-government answers saved as pending review changes; Tools category selected |
+| Current CI | Native main `edccb3c` passed all CI, including sanitizers; desktop CI and all four review packages passed. Web main `3e8374b` CI passed |
 | Candidate version | 0.4.1 / Android version code 5; recheck unused Play version code before upload |
 | Local candidate checks | Android debug APK, unit tests, debug/release lint, release manifest with `dev.datalux` and existing JNI classes, 16 release-helper tests and relative documentation links passed. Backend tests cover DataLux Publisher URLs and rejection of old-package notifications |
-| Signed Play bundle | Not built: the production license public key and permanent upload identity are required; release guard correctly refuses missing trust |
-| Play upload identity | No `play-internal` environment/secrets configured when inspected; permanent upload keystore not yet verified |
+| Signed Play bundle | Not built: the production license public key is still required; release guard correctly refuses missing trust. Upload signing is now configured |
+| Play upload identity | Permanent RSA-3072 encrypted upload keystore created in private local storage; re-open/sign/verify challenge passed. Four upload secrets configured in owner-reviewed, main-only `play-internal` environment. Off-device recovery backup not yet verified |
 | License trust | Production signer's public key and backup not yet verified; never substitute an ephemeral test key |
-| Server access | Existing NUC SSH endpoint timed out; production/staging billing configuration remains unverified |
-| Artwork and listing | US text, 512 × 512 icon and 1024 × 500 feature graphic prepared; genuine Android screenshots and reviewer rehearsal remain required |
+| Server access | Owner is off the NUC network and explicitly deferred server work; [NUC handoff](NUC-HANDOFF.md) records all pending checks |
+| Play-managed signing | Console shows the app-signing key in use. It is separate from the locally created upload key |
+| Payments and testers | Merchant setup still required; no Play bundle uploaded; closed-test dashboard shows 0 testers |
+| Artwork and listing | US text, 512 × 512 icon and 1024 × 500 feature graphic uploaded/attached and saved as a listing draft; genuine Android screenshots and reviewer rehearsal remain required |
+| Connected phone | `dev.datalux` 0.4.1/code 5 installed successfully on SM-S948U1 / Android 17. No old app or user data removed; screenshot/UI check paused while phone was in use |
 
 ## Build and review sequence
 
 1. App creation is reported complete by the owner. Confirm the Console package matches
    `dev.datalux` before upload and inspect any remaining registration/signing tasks. Creating
    the app is separate from distributing a release. Keep production closed.
-2. Reuse or securely establish a permanent, backed-up upload keystore outside the checkout.
-   Keep it separate from Google's distribution signing key and the backend's license signer.
-   Configure the protected GitHub `play-internal` environment using the settings in
-   [the web checklist](https://github.com/JoshuaGessner/DataLux-Web/blob/main/PLAY_LAUNCH.md).
+2. The upload keystore and protected CI upload secrets are established. The private local identity
+   is under `~/.config/datalux/signing/play-upload-20261029/`; never put its keystore/password file
+   in Git or a public artifact. Verify a secure off-device recovery backup before release.
+   Public certificate SHA-256: `68ece5cdea2e1698cee6073ff913663c9ddfcc6c9d2d5ad50a47468910724909`.
+   Google-managed distribution signing and the backend license signer remain separate identities.
 3. Verify the production license public key against the real signer and configure the final
    account origin. No private license key belongs in CI, Git, an AAB or an image.
 4. Commit/push the reviewed source to main. Dispatch **prepare Play internal-test bundle**
