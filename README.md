@@ -124,7 +124,7 @@ validation records before promising a particular device pairing.
 
 ## Website and browser preview
 
-The separate [FileFlow-Web repository](https://github.com/JoshuaGessner/FileFlow-Web)
+The separate [DataLux-Web repository](https://github.com/JoshuaGessner/DataLux-Web)
 contains the marketing website, responsive browser app, optional account service, and Docker setup.
 Files are buffered locally in IndexedDB; the interface and WASM optical core can be cached
 for offline use after an initial online visit. The browser shares native optical profiles, with

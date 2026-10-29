@@ -99,7 +99,7 @@ license change. Website checkout is not implemented and is not required for this
    percentage staged rollout is for updates. Keep payments closed until the real acceptance gates pass.
 
 See [NATIVE_RELEASES.md](NATIVE_RELEASES.md) and the separate website repository's
-[Play checklist](https://github.com/JoshuaGessner/FileFlow-Web/blob/main/PLAY_LAUNCH.md).
+[Play checklist](https://github.com/JoshuaGessner/DataLux-Web/blob/main/PLAY_LAUNCH.md).
 
 ## Research behind the choices
 

@@ -5,7 +5,7 @@
 > **Last reviewed:** 2026-10-28
 > **Related:** PRODUCT.md, NATIVE_RELEASES.md
 
-**Repository:** https://github.com/JoshuaGessner/FileFlow  
+**Repository:** https://github.com/JoshuaGessner/DataLux
 **Date:** October 25, 2026  
 **Status:** Active development and platform testing  
 **Purpose:** Complete the public website, browser application, cross-platform distribution, branding, documentation, and marketing launch infrastructure.
@@ -13,7 +13,7 @@
 **Planning snapshot:** This document preserves the original October 25 direction, including future
 work. It is not a release status report. For current distribution and account behavior, use
 [NATIVE_RELEASES.md](NATIVE_RELEASES.md), [desktop/ACCOUNTS.md](desktop/ACCOUNTS.md), and the separate
-[website repository](https://github.com/JoshuaGessner/FileFlow-Web). Desktop automatic updates are
+[website repository](https://github.com/JoshuaGessner/DataLux-Web). Desktop automatic updates are
 still proposed in [DESKTOP_UPDATES_PLAN.md](DESKTOP_UPDATES_PLAN.md); paid sales remain disabled.
 
 **October 28 decision:** [PRODUCT.md](PRODUCT.md) is the current commercial policy: every desktop
