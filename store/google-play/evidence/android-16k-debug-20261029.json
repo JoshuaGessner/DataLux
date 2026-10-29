@@ -1,0 +1,18 @@
+{
+  "status": "PASS",
+  "startedUtc": "2026-10-29T18:28:00.250615+00:00",
+  "build": "debug; not signed Play acceptance",
+  "avd": "DataLux_16K_API37",
+  "pageSize": 16384,
+  "compatibilityFallback": "disabled; linker=fatal, packageManager=true",
+  "android": "17",
+  "abi": "arm64-v8a",
+  "apkSha256": "26e585f6adc4fc2817508339d69b599f28352a72a6c9dee9701e6dd4d99ed6e5",
+  "nativeSha256": "ae6e1d36311784af0b0e5ce855f842b9826d4f574a6969e2acbdaf93ade31e0d",
+  "nativeChecks": "DATALUX_NATIVE_SMOKE_PASS compression_roundtrips=37 generated_frames=96",
+  "launch": "Starting: Intent { cmp=dev.datalux/dev.fileflow.MainActivity }\nStatus: ok\nLaunchState: COLD\nActivity: dev.datalux/dev.fileflow.MainActivity\nTotalTime: 903\nWaitTime: 921\nComplete",
+  "limits": "Synthetic JNI processing and activity launch only; no optical recovery, physical camera, Play billing or production trust tested",
+  "functionalSource": "edccb3c44c72d81cf67a1d9cee019c26801db1ba",
+  "emulatorVersion": "37.2.12",
+  "systemImage": "system-images;android-37.0;google_apis_ps16k;arm64-v8a"
+}

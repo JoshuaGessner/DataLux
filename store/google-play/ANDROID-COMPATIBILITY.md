@@ -1,6 +1,6 @@
 # Android native compatibility evidence
 
-> **Status:** Static checks passed; 16 KB runtime test awaiting emulator launch
+> **Status:** Debug static and 16 KB native runtime checks passed; signed Play/physical optical acceptance pending
 > **Owner:** Release engineering
 > **Last reviewed:** 2026-10-29
 
@@ -18,7 +18,10 @@ and store materials. This is not the signed production candidate or proof of Pla
 | Native APK packaging | One uncompressed ARM64 library; ZIP data offset 15,958,016 is divisible by 16,384 |
 | Source review | No actionable kernel-page-size assumption found in core/JNI or the bundled Zstd allocation paths; ordinary protocol limits and image dimensions are distinct |
 | Physical phone | SM-S948U1 / Android 17: page size 4096; debug launch/navigation checked, not 16 KB runtime evidence |
-| Test harness preparation | Java compilation, D8 conversion and Python syntax/CLI checks passed |
+| Test harness preparation | Java compilation, D8 conversion, Python syntax/CLI, physical-device rejection and stale-PASS protection checks passed |
+| Actual 16 KB runtime | PASS on Android 17 ARM64, emulator 37.2.12, kernel page size 16384, compatibility fallback disabled with fatal linker mode |
+| Synthetic native processing | PASS: 37 compression round trips, 96 frames across M0/M3/M5, payload hash/size, buffer rejection and blank receiver handling |
+| Actual app launch | PASS: debug APK installed and MainActivity cold-launched successfully |
 
 NDK r29 and the existing release checker already cover static 16 KB packaging. The source review
 does not replace runtime tests. Follow [Google's 16 KB guidance](https://developer.android.com/guide/practices/page-sizes).
@@ -31,11 +34,15 @@ user/configuration files are under the same ignored test directory. Emulator 37.
 installed there; the launcher supplies the API 37 minimum of 4 GB RAM and software graphics. Existing SDK images, user
 AVDs, phone, watch and production services were not changed.
 
-The initial agent-hosted emulator could not boot: hardware acceleration was unavailable and
-QEMU reported denied memory-protection operations. The old global emulator was also older than
-API 37 support. That attempt was stopped; the owner was asked to restart the updated isolated
-emulator from a normal Terminal. Runtime results remain pending. Launch the prepared
-device from a normal Mac Terminal, leaving that Terminal open:
+The older AVD creation tool wrote `target=android-0` into this API 37 device's root INI. That
+disabled Apple hypervisor acceleration, and software emulation failed with `mprotect` permission
+errors. Correcting only the isolated AVD to `target=android-37` enabled boot; the kernel then
+reported 16384-byte pages. The launcher now rejects incorrect target metadata. This was emulator
+configuration, not an app defect. See Google's [AVD target parsing](https://android.googlesource.com/platform/external/qemu/+/refs/heads/emu-master-dev/android/emu/avd/src/android/avd/info.c).
+
+The native runtime smoke run passed on October 29; [sanitized result JSON](evidence/android-16k-debug-20261029.json)
+records the exact artifact hashes, environment and scope. The test emulator was shut down afterward
+to release resources. To repeat, launch the prepared device and leave its Terminal open:
 
 ```sh
 cd /Users/josh/dev/fileflow

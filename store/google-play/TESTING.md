@@ -83,7 +83,8 @@ For PAGE-01, record the runtime's actual page size (for example `adb shell getco
 on the specifically selected test device). Android version alone does not prove 16 KB pages.
 The [compatibility record and dedicated runtime runner](ANDROID-COMPATIBILITY.md) cover
 synthetic native launch/processing with compatibility fallback disabled on the isolated 16 KB
-emulator. This is partial evidence, not completion of PAGE-01. A supported 16 KB emulator can test native launch/processing; physical camera transfer remains
+emulator. The October 29 debug run passed (37 compression round trips, 96 generated frames,
+buffer/hash/blank-receiver checks and cold launch). This is partial evidence, not completion of PAGE-01. A supported 16 KB emulator can test native launch/processing; physical camera transfer remains
 separate evidence. See [Android's 16 KB test guidance](https://developer.android.com/guide/practices/page-sizes).
 
 ## Record results without secrets

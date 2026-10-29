@@ -10,6 +10,10 @@ if [ ! -f "$test_root/avd/DataLux_16K_API37.ini" ] || [ ! -f "$image/system.img"
     echo 'The isolated DataLux_16K_API37 AVD/image has not been prepared on this computer.' >&2
     exit 1
 fi
+case "$(sed -n 's/^target=//p' "$test_root/avd/DataLux_16K_API37.ini")" in
+    android-37|android-37.0) ;;
+    *) echo 'The isolated AVD must identify API 37 correctly; recreate it with current SDK tools.' >&2; exit 1 ;;
+esac
 export ANDROID_AVD_HOME="$test_root/avd"
 export ANDROID_USER_HOME="$test_root/user"
 export ANDROID_SDK_ROOT="$sdk_root"
