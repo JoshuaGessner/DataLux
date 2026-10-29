@@ -1,0 +1,8 @@
+DataLux internal testing preview:
+• Transfer files using a screen and camera.
+• Single-file transfers, compression, encryption and teams remain free.
+• Pro adds batch send/receive and bulk file actions.
+• Free receivers offer upgrade, restore or individual-file alternatives.
+• All desktop features remain free.
+
+Report issues to the test coordinator. Purchase tests must use the designated license-test account and Google's test payment sheet.

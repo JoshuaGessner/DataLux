@@ -7,7 +7,7 @@
 #
 # The Android build consumes core/CMakeLists.txt via Gradle externalNativeBuild.
 cmake_minimum_required(VERSION 3.22)
-project(fileflow LANGUAGES CXX VERSION 0.4.0)
+project(fileflow LANGUAGES CXX VERSION 0.4.1)
 if(APPLE AND FILEFLOW_BUILD_DESKTOP)
     # Native account HTTPS uses Foundation; enable before SDL's mixed-language targets.
     enable_language(OBJCXX)

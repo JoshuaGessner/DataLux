@@ -2,7 +2,7 @@
 
 > **Status:** Accepted product direction; experimental builds; Play launch pending
 > **Owner:** Product / native apps
-> **Last reviewed:** 2026-10-28
+> **Last reviewed:** 2026-10-29
 > **Related:** PRODUCT.md, NATIVE_RELEASES.md
 
 **Transfer files with a screen and a camera across Android, macOS, Windows and Linux.** The sender
@@ -31,6 +31,11 @@ Normal Android builds enforce Free/Pro. An explicit `-Pstore=false` makes an unl
 build; existing historical community releases remain unchanged. The account-bound activation can
 be restored on another phone. Desktop does not need a license. See [PRODUCT.md](PRODUCT.md) for the
 complete feature matrix, receiver behavior, offline/refund limits and release gates.
+
+The next Play review candidate is 0.4.1 (version code 5). Its app-managed settings and diagnostics
+are excluded from Android cloud backup and device migration; sign in and re-pair on a new phone.
+See [upload readiness](store/google-play/UPLOAD-READINESS.md) for verified setup status and
+[store materials](store/google-play/en-US/README.md) for the listing and artwork drafts.
 
 ## How fast
 

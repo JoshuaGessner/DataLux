@@ -1,0 +1,27 @@
+Move files from a screen to another device's camera. DataLux transfers files as changing patterns of light, without sending file contents through a network or cloud service.
+
+Use it for nearby document handoffs, project files and photo sets when a network or cable is unavailable. The receiving device needs a clear view of the sender's display and suitable lighting.
+
+FREE ON ANDROID
+• Send and receive one file at a time.
+• Use the available optical speed modes and compression, without a paid speed tier or daily transfer counter.
+• Verify each received file's integrity before it is saved.
+• Use encrypted pairing and teams.
+• Open, share, resend or delete individual received files.
+
+Basic transfers need no account or internet connection. Device, memory and file-size limits still apply.
+
+DATALUX PRO
+Pro adds multi-file batch sending and receiving, plus selecting, sharing, resending and deleting several received files together.
+
+The planned US launch upgrade is $10 USD once per verified DataLux account, through Google Play. Google's checkout shows the actual price. Sign into the same DataLux account and restore Pro on your other Android phones.
+
+Each Android receiver needs its own account's Pro access to save a multi-file batch, including a batch sent by a free desktop app. A Free receiving phone offers an upgrade or restore prompt. Sending files one at a time remains free.
+
+FREE DESKTOP COMPANION
+DataLux for macOS, Windows and Linux includes all desktop features free, including batch sending and presenter controls. Desktop does not require an account or purchase. Desktop being free does not license a receiving Android phone for Pro batches.
+
+BEFORE YOU START
+DataLux requires Android 13 or newer and supported 64-bit ARM hardware. Optical transfer depends on the camera, display, lighting and keeping the pattern in view; compatibility and speed vary by device. It is intended for nearby screen-to-camera transfer.
+
+Account verification, purchasing and restoring Pro require internet access. Previously verified Pro access is saved for offline use. Files and camera frames stay on your devices.

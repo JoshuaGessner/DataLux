@@ -68,6 +68,27 @@ def run(command, message, allowed=(0,)):
     return result.stdout
 
 
+def check_manifest(manifest, expected_code=None, expected_name=None):
+    require(manifest.get("package") == "dev.fileflow", "Unexpected Play application ID")
+    application = manifest.find("application")
+    require(application is not None, "Missing application")
+    require(application.get(ANDROID + "label") == "DataLux", "Unexpected Play app label")
+    require(application.get(ANDROID + "debuggable", "false") == "false", "Play AAB must not be debuggable")
+    require(application.get(ANDROID + "allowBackup") == "false" and
+            application.get(ANDROID + "fullBackupContent") == "false" and
+            application.get(ANDROID + "dataExtractionRules"), "Play AAB must exclude app data from backup and migration")
+    require(application.get(ANDROID + "usesCleartextTraffic") == "false", "Play AAB must refuse cleartext traffic")
+    sdk = manifest.find("uses-sdk")
+    require(sdk is not None and int(sdk.get(ANDROID + "targetSdkVersion", "0")) >= 36, "Play AAB target SDK must be at least 36")
+    code = int(manifest.get(ANDROID + "versionCode", "0"))
+    name = manifest.get(ANDROID + "versionName")
+    require(code > 0 and (expected_code is None or code == expected_code), "Unexpected AAB version code")
+    require(name and (expected_name is None or name == expected_name), "Unexpected AAB version name")
+    return {"package": "dev.fileflow", "appLabel": "DataLux", "versionCode": code, "versionName": name,
+            "targetSdk": int(sdk.get(ANDROID + "targetSdkVersion")), "appDataBackup": False,
+            "cleartextTraffic": False}
+
+
 def check_bundle(bundle, bundletool, certificate, expected_code=None, expected_name=None, jdk_bin=None):
     check_native(bundle, "base/")
     java_tool = lambda name: str(jdk_bin / name) if jdk_bin else name
@@ -84,17 +105,7 @@ def check_bundle(bundle, bundletool, certificate, expected_code=None, expected_n
     config = run(command + ["config", f"--bundle={bundle}"], "Bundle configuration could not be read")
     require("PAGE_ALIGNMENT_16K" in config and "PAGE_ALIGNMENT_4K" not in config, "The AAB must request 16 KB ZIP alignment")
     manifest = ET.fromstring(run(command + ["manifest", f"--bundle={bundle}"], "Bundle manifest could not be read"))
-    require(manifest.get("package") == "dev.fileflow", "Unexpected Play application ID")
-    application = manifest.find("application")
-    require(application is not None and application.get(ANDROID + "debuggable", "false") == "false", "Play AAB must not be debuggable")
-    sdk = manifest.find("uses-sdk")
-    require(sdk is not None and int(sdk.get(ANDROID + "targetSdkVersion", "0")) >= 36, "Play AAB target SDK must be at least 36")
-    code = int(manifest.get(ANDROID + "versionCode", "0"))
-    name = manifest.get(ANDROID + "versionName")
-    require(code > 0 and (expected_code is None or code == expected_code), "Unexpected AAB version code")
-    require(name and (expected_name is None or name == expected_name), "Unexpected AAB version name")
-    return {"package": "dev.fileflow", "versionCode": code, "versionName": name,
-            "targetSdk": int(sdk.get(ANDROID + "targetSdkVersion")),
+    return {**check_manifest(manifest, expected_code, expected_name),
             "uploadCertificateSha256": hashlib.sha256(certificate.read_bytes()).hexdigest(),
             "bundleSha256": hashlib.sha256(bundle.read_bytes()).hexdigest()}
 

@@ -2,7 +2,7 @@
 
 > **Status:** Accepted product policy; Play production acceptance pending
 > **Owner:** Product / Android shell
-> **Last reviewed:** 2026-10-28
+> **Last reviewed:** 2026-10-29
 > **Related:** ADR-0016, APP-01, APP-02, NATIVE_RELEASES.md
 
 Owner-approved launch policy, October 28, 2026. This policy supersedes older proposals for paid
@@ -80,11 +80,11 @@ license change. Website checkout is not implemented and is not required for this
 
 ## Google Play release gates
 
-1. The personal developer account is verified. The owner explicitly deferred app creation and
-   Play publication pending a new app name. The selected display name is DataLux; the existing
-   Android application ID remains `dev.fileflow`. Confirm the registration details before any Play upload. A draft
-   form was inspected and closed without submission or acceptance of any declaration. At creation,
-   the owner must review policy declarations, signing terms and the US export/encryption certification.
+1. The personal developer account is verified. On October 29 the owner confirmed **DataLux** and
+   resumed Play preparation. The Android application ID remains `dev.fileflow` for compatibility.
+   The new DataLux draft is prepared; app creation still awaits the owner's policy declarations,
+   signing terms and US export/encryption certification. No Play upload or public release is
+   recorded. Track verified outcomes in [upload readiness](store/google-play/UPLOAD-READINESS.md).
 2. Establish stable upload signing, Play App Signing and a backed-up production license-signing key.
    Configure the protected `play-internal` environment; never put private keys into Git or bundles.
 3. Create `fileflow_pro` with exactly one permanent buy option, US availability and $10 USD pricing.

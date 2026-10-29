@@ -2,6 +2,7 @@ import importlib.util
 from pathlib import Path
 import struct
 import unittest
+import xml.etree.ElementTree as ET
 
 SPEC = importlib.util.spec_from_file_location("play_bundle", Path(__file__).parents[1] / "check_play_bundle.py")
 MODULE = importlib.util.module_from_spec(SPEC)
@@ -53,6 +54,62 @@ class NativeAlignmentTests(unittest.TestCase):
         struct.pack_into("<H", data, 18, 62)
         with self.assertRaisesRegex(ValueError, "arm64"):
             MODULE.check_elf(bytes(data))
+
+
+class ReleaseManifestTests(unittest.TestCase):
+    def manifest(self):
+        return ET.fromstring('''<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+            package="dev.fileflow" android:versionCode="5" android:versionName="0.4.1">
+            <uses-sdk android:minSdkVersion="33" android:targetSdkVersion="37"/>
+            <application android:label="DataLux" android:allowBackup="false"
+                android:fullBackupContent="false" android:dataExtractionRules="@xml/data_extraction_rules"
+                android:usesCleartextTraffic="false"/>
+        </manifest>''')
+
+    def test_accepts_reviewed_release_identity(self):
+        result = MODULE.check_manifest(self.manifest(), 5, "0.4.1")
+        self.assertEqual(result["appLabel"], "DataLux")
+        self.assertFalse(result["appDataBackup"])
+
+    def test_refuses_stale_or_unsafe_release_configuration(self):
+        for attribute, value in (("label", "FileFlow"), ("debuggable", "true"),
+                                 ("allowBackup", "true"), ("fullBackupContent", "true"),
+                                 ("dataExtractionRules", None), ("usesCleartextTraffic", "true")):
+            with self.subTest(attribute=attribute):
+                manifest = self.manifest()
+                app = manifest.find("application")
+                if value is None:
+                    app.attrib.pop(MODULE.ANDROID + attribute)
+                else:
+                    app.set(MODULE.ANDROID + attribute, value)
+                with self.assertRaises(ValueError):
+                    MODULE.check_manifest(manifest, 5, "0.4.1")
+
+    def test_rejects_wrong_package_and_version(self):
+        manifest = self.manifest()
+        manifest.set("package", "another.app")
+        with self.assertRaisesRegex(ValueError, "application ID"):
+            MODULE.check_manifest(manifest)
+        with self.assertRaisesRegex(ValueError, "version code"):
+            MODULE.check_manifest(self.manifest(), 6, "0.4.1")
+
+    def test_source_policy_excludes_all_app_storage_from_both_transports(self):
+        project = Path(__file__).parents[2]
+        source = ET.parse(project / "app/src/main/AndroidManifest.xml").getroot().find("application")
+        self.assertEqual(source.get(MODULE.ANDROID + "allowBackup"), "false")
+        self.assertEqual(source.get(MODULE.ANDROID + "fullBackupContent"), "false")
+        resource = source.get(MODULE.ANDROID + "dataExtractionRules")
+        self.assertTrue(resource.startswith("@xml/"))
+        rules = ET.parse(project / f"app/src/main/res/xml/{resource[5:]}.xml").getroot()
+        domains = {"root", "file", "database", "sharedpref", "external", "device_root",
+                   "device_file", "device_database", "device_sharedpref"}
+        for transport in ("cloud-backup", "device-transfer"):
+            with self.subTest(transport=transport):
+                section = rules.find(transport)
+                self.assertIsNotNone(section)
+                self.assertFalse(section.findall("include"))
+                self.assertEqual({rule.get("domain") for rule in section.findall("exclude")
+                                  if rule.get("path") == "."}, domains)
 
 
 if __name__ == "__main__":

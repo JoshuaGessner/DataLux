@@ -30,9 +30,9 @@ require(accountUri.scheme == "https" && accountUri.host != null && accountUri.us
 val storeSetting = providers.gradleProperty("store").orElse("true").get()
 require(storeSetting in listOf("true", "false")) { "store must be true or false; use false only for an explicit community build" }
 val storeBuild = storeSetting == "true"
-val releaseVersionCode = providers.gradleProperty("fileflowVersionCode").orElse("4").get().toIntOrNull()
+val releaseVersionCode = providers.gradleProperty("fileflowVersionCode").orElse("5").get().toIntOrNull()
 require(releaseVersionCode != null && releaseVersionCode in 1..2_100_000_000) { "fileflowVersionCode must be a positive Play-compatible integer" }
-val releaseVersionName = providers.gradleProperty("fileflowVersionName").orElse("0.4.0").get()
+val releaseVersionName = providers.gradleProperty("fileflowVersionName").orElse("0.4.1").get()
 require(releaseVersionName.matches(Regex("[0-9]+\\.[0-9]+\\.[0-9]+(?:-[0-9A-Za-z.-]+)?"))) { "fileflowVersionName must be a release version" }
 
 // Upload signing and offline-Pro signing are separate identities. Only the public Pro key
@@ -48,7 +48,7 @@ val validatePlayRelease = tasks.register("validatePlayRelease") {
     description = "Require the store profile, offline-Pro trust, and a private stable upload identity. Does not publish."
     doLast {
         require(storeBuild) { "Play bundles require -Pstore=true; community/source builds remain available as APKs." }
-        require(licensePublicKey.isNotEmpty()) { "Play releases require a configured FileFlow license public key." }
+        require(licensePublicKey.isNotEmpty()) { "Play releases require a configured DataLux license public key." }
         require(uploadConfigured) { "Play releases require all four FILEFLOW_UPLOAD_* environment settings. Keep the keystore outside the checkout." }
         val keyFile = file(uploadStorePath!!).canonicalFile
         require(keyFile.isFile && !keyFile.toPath().startsWith(rootDir.canonicalFile.toPath())) { "The upload keystore must be an existing private file outside the checkout." }
