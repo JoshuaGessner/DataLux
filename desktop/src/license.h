@@ -20,6 +20,7 @@ struct Grant {
 std::optional<Grant> Verify(std::string_view text, std::string_view public_key_pem);
 std::optional<Grant> VerifyTrusted(std::string_view text);
 std::string ReadFile(const std::string& path);
+// Retained for build/API compatibility; desktop features are always free.
 bool StoreBuild();
 bool TrustConfigured();
 

@@ -45,7 +45,7 @@ Result<TransmitSession> TransmitSession::Create(const FrameLayout& layout,
     FF_ASSIGN_OR_RETURN(auto tx, FileTransmitter::Create(file, std::move(file_name), session_id,
                                                          symbol_size, cfg.block_symbols,
                                                          cfg.manifest_interval));
-    if (cfg.content.original_size > 0) {
+    if (cfg.content.original_size > 0 || cfg.content.batch) {
         FF_TRY(tx.SetContentHint(cfg.content));
     }
     return TransmitSession(layout, std::move(fec), std::move(tx), cfg.fec_nsym, cfg.profile);

@@ -2,6 +2,8 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
+
 #include <vector>
 
 using namespace fileflow;
@@ -121,6 +123,57 @@ TEST(FileManifest, AnUnknownExtensionIsSkippedNotRejected) {
     ASSERT_TRUE(d.ok()) << ErrorName(d.error());
     EXPECT_EQ(d.value().content.original_size, 4096U);
     EXPECT_EQ(d.value().content.compress_ms, 5U);
+}
+
+TEST(FileManifest, BatchAdvisoryCanTravelWithoutEncryptedContentDetails) {
+    FileManifest m;
+    m.file_size = 1000;
+    m.file_name = "Encrypted file";
+    m.block_count = 1;
+    m.block_symbols = 2;
+    m.symbol_size = 512;
+    m.content.batch = true;
+    auto decoded = FileManifest::Decode(m.Encode());
+    ASSERT_TRUE(decoded.ok());
+    EXPECT_TRUE(decoded.value().content.batch);
+    EXPECT_EQ(decoded.value().content.original_size, 0U);
+    EXPECT_EQ(decoded.value().content.codec, 0U);
+
+    // Treating the advisory as an unknown extension, as an older receiver does, still reads
+    // the complete manifest. The hint never changes the payload or its hash.
+    auto bytes = m.Encode();
+    bytes[bytes.size() - 7] = 99;
+    bytes.resize(bytes.size() - 4);
+    const auto crc = Crc32(bytes);
+    for (int i = 3; i >= 0; --i) bytes.push_back(static_cast<std::uint8_t>(crc >> (8 * i)));
+    decoded = FileManifest::Decode(bytes);
+    ASSERT_TRUE(decoded.ok());
+    EXPECT_FALSE(decoded.value().content.batch);
+    EXPECT_EQ(decoded.value().file_size, m.file_size);
+    EXPECT_EQ(decoded.value().sha256, m.sha256);
+}
+
+TEST(FileManifest, BatchAndCompressionHintsDoNotOverwriteEachOther) {
+    FileManifest m;
+    m.file_size = 1000;
+    m.file_name = "2 files";
+    m.block_count = 1;
+    m.block_symbols = 2;
+    m.symbol_size = 512;
+    m.content = {.original_size = 2000, .codec = 2, .compress_ms = 10, .batch = true};
+    auto bytes = m.Encode();
+    // Move the three-byte batch TLV ahead of the compression TLV to cover either ordering.
+    const auto first = bytes.end() - 4 - 3 - 2 - ContentHint::kEncodedSize;
+    std::rotate(first, bytes.end() - 4 - 3, bytes.end() - 4);
+    bytes.resize(bytes.size() - 4);
+    const auto crc = Crc32(bytes);
+    for (int i = 3; i >= 0; --i) bytes.push_back(static_cast<std::uint8_t>(crc >> (8 * i)));
+    auto decoded = FileManifest::Decode(bytes);
+    ASSERT_TRUE(decoded.ok());
+    EXPECT_TRUE(decoded.value().content.batch);
+    EXPECT_EQ(decoded.value().content.original_size, 2000U);
+    EXPECT_EQ(decoded.value().content.codec, 2U);
+    EXPECT_EQ(decoded.value().content.compress_ms, 10U);
 }
 
 TEST(FileManifest, RejectsHostileValues) {

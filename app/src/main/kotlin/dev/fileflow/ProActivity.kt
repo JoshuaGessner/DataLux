@@ -90,7 +90,20 @@ class ProActivity : AppCompatActivity() {
         add(button("Back", style = Ui.Style.Text) { finish() })
         add(title("FileFlow Pro", 30f))
         add(space(8))
-        add(text("One purchase for your FileFlow account, on phone and PC. Pro adds batch sending and bulk file management. Basic transfers and encryption stay free."))
+        add(text("Pro is a one-time Android upgrade for your FileFlow account. US launch price: $10. " +
+            "Google Play shows the final checkout price. Restore on your other phones with the same account. " +
+            "The desktop app includes every feature for free."))
+        add(space(12))
+        add(card(title("Free", 20f), text("Send and receive one file at a time, without daily caps or speed throttling. " +
+            "Compression, encryption, pairing, teams, and individual file actions stay free.")))
+        add(space(12))
+        add(card(title("Pro", 20f), text("Send and receive multi-file batches. Select, share, resend, or delete " +
+            "several received files together. Each receiving phone needs Pro for a batch, including one sent by a free desktop.")))
+        intent.getStringExtra("feature")?.let { requested ->
+            Entitlements.Feature.entries.firstOrNull { it.name == requested }?.let {
+                add(space(8)); add(text("${it.label} needs Pro on this phone. You can also transfer files one at a time for free."))
+            }
+        }
         add(space(16))
         val session = ProAccount.session
         if (!BuildConfig.STORE) {
@@ -142,8 +155,8 @@ class ProActivity : AppCompatActivity() {
             addVerification(session, status)
             add(space(12))
             add(card(title(if (pro) "Pro is active" else "Free", 20f), space(6), text(if (pro)
-                "Your verified Pro access is saved on this device and works offline. Sign in to the same FileFlow account on your other devices."
-            else "Sign in on each device to share your FileFlow Pro purchase.")))
+                "Your verified Pro access is saved on this phone and works offline. Sign in to the same FileFlow account on your other phones."
+            else "This phone has Free access. Restore a previous Android Pro purchase or upgrade below.")))
             add(space(12))
             val offer = permanentOffer(product)
             if (BuildConfig.STORE && !pro) {

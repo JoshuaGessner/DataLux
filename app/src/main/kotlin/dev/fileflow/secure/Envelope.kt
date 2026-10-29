@@ -140,6 +140,8 @@ object Envelope {
             "on both phones, or off on this one."),
         UnknownCodec("This file was compressed in a way this version of FileFlow can't open. Update it."),
         Corrupt("The file is damaged. Nothing was saved."),
+        NeedsPro("This batch needs FileFlow Pro on the receiving phone. Nothing was saved. " +
+            "Upgrade or restore Pro here, or ask the sender to send one file at a time for free."),
     }
 
     class UnpackException(val failure: Failure) : Exception(failure.message)
@@ -233,7 +235,7 @@ object Envelope {
      * teams -- and the envelope's key id picks one. With [requireEncrypted] an envelope that is not
      * encrypted is refused, so encrypted mode cannot be talked down to plain.
      */
-    fun unpack(bytes: ByteArray, keys: List<SealKey>, requireEncrypted: Boolean): Unpacked {
+    fun unpack(bytes: ByteArray, keys: List<SealKey>, requireEncrypted: Boolean, allowBatch: Boolean = true): Unpacked {
         val v1 = hasMagic(bytes, MAGIC_V1)
         if (!v1 && !hasMagic(bytes, MAGIC) || bytes.size < MAGIC.size + 1) {
             throw UnpackException(Failure.NotAnEnvelope)
@@ -294,7 +296,7 @@ object Envelope {
         }
         if (data.size.toLong() != original) throw UnpackException(Failure.Corrupt)
         val decompressMs = (System.nanoTime() - started) / 1_000_000
-        val files = if (flags and FLAG_BATCH != 0 && !v1) parseBatch(data) else null
+        val files = if (flags and FLAG_BATCH != 0 && !v1) parseBatch(data, allowBatch) else null
         return Unpacked(name, data, codecId, encrypted, bytes.size, compressMs, decompressMs, files, sealedTo)
     }
 
@@ -302,24 +304,36 @@ object Envelope {
      * A batch's files. Every count, length and size is checked against what is actually there:
      * the bytes came off a screen anyone could have been showing (THREAT-MODEL T3).
      */
-    private fun parseBatch(data: ByteArray): List<Pair<String, ByteArray>> {
+    private fun parseBatch(data: ByteArray, allowBatch: Boolean): List<Pair<String, ByteArray>> {
         fun corrupt(): Nothing = throw UnpackException(Failure.Corrupt)
         if (data.size < MAGIC_BATCH.size + 2 || !hasMagic(data, MAGIC_BATCH)) corrupt()
         val buf = ByteBuffer.wrap(data)
         buf.position(MAGIC_BATCH.size)
         val count = buf.short.toInt() and 0xFFFF
         if (count == 0 || count > MAX_BATCH_FILES) corrupt()
-        val out = ArrayList<Pair<String, ByteArray>>(count)
+        // Validate the complete structure without allocating members before offering an upgrade.
+        // Corrupt input must not become a purchase prompt that fails after checkout.
+        val membersAt = buf.position()
         repeat(count) {
             if (buf.remaining() < 2) corrupt()
             val nameLen = buf.short.toInt() and 0xFFFF
             if (nameLen > MAX_NAME_BYTES || buf.remaining() < nameLen + 8) corrupt()
-            val name = ByteArray(nameLen).also { buf.get(it) }.toString(Charsets.UTF_8)
+            buf.position(buf.position() + nameLen)
             val size = buf.long
             if (size < 0 || size > buf.remaining()) corrupt()
-            out += name to ByteArray(size.toInt()).also { buf.get(it) }
+            buf.position(buf.position() + size.toInt())
         }
         if (buf.remaining() != 0) corrupt()
+        // The actual envelope is the authority. A legacy one-member batch is still Free.
+        if (count > 1 && !allowBatch) throw UnpackException(Failure.NeedsPro)
+        buf.position(membersAt)
+        val out = ArrayList<Pair<String, ByteArray>>(count)
+        repeat(count) {
+            val nameLen = buf.short.toInt() and 0xFFFF
+            val name = ByteArray(nameLen).also { buf.get(it) }.toString(Charsets.UTF_8)
+            val size = buf.long.toInt()
+            out += name to ByteArray(size).also { buf.get(it) }
+        }
         return out
     }
 

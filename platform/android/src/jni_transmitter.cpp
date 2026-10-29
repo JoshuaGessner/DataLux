@@ -210,6 +210,10 @@ Java_dev_fileflow_tx_NativeTransmitter_openFile(JNIEnv* env, jclass /*unused*/, 
     // What the payload is before compression, for the receiver's display (ContentHint). Bounded
     // here as everywhere: a hint is never trusted for anything but showing a number.
     fileflow::ContentHint hint;
+    // FFE2's batch bit is public and authenticated as AAD in encrypted mode. This hint is
+    // advisory only; a receiving app must enforce its policy against the verified envelope.
+    hint.batch = payload.size() >= 5 && payload[0] == 'F' && payload[1] == 'F' &&
+                 payload[2] == 'E' && payload[3] == '2' && (payload[4] & 4U) != 0;
     if (original_size > 0 && static_cast<std::uint64_t>(original_size) <= fileflow::FileManifest::kMaxFileSize) {
         hint.original_size = static_cast<std::uint64_t>(original_size);
         hint.codec = static_cast<std::uint8_t>(codec & 0xFF);

@@ -1,17 +1,24 @@
 # Native milestone releases
 
+> **Status:** Accepted milestone workflow; Play production acceptance pending
+> **Owner:** Release engineering
+> **Last reviewed:** 2026-10-28
+> **Related:** PRODUCT.md, DESKTOP_UPDATES_PLAN.md
+
 The proposed in-app desktop update experience and rollout gates are documented in
 [DESKTOP_UPDATES_PLAN.md](DESKTOP_UPDATES_PLAN.md). That feature is planned; current v0.2.0 binaries
 do not auto-update. Mobile updates will be managed through their app stores.
 
-The first Free/Pro integration is documented in `web/LICENSING.md` in the separate web repository.
-Current milestone builds remain fully enabled community builds. Store paywalls require explicit
-Android/desktop build settings, a pinned public signing key, verified backend purchase configuration,
-and real Google Play internal testing before a paid release. No public sales have been enabled.
+The current policy is [PRODUCT.md](PRODUCT.md): all desktop features are free; Android Free has
+single-file workflows and security, and the $10 USD one-time US Pro plan adds batch send/receive
+and bulk actions. Normal Android builds enforce Free/Pro. Only an explicit `-Pstore=false` produces
+an unlocked Android community build. Historical community APKs remain unchanged. Production Play
+purchases still require pinned public trust, stable signing, real Google setup/tests and approval;
+no public sales have been enabled. See `web/PLAY_LAUNCH.md` in the separate website repository.
 Browser-assisted PC account sign-in is implemented; see [desktop/ACCOUNTS.md](desktop/ACCOUNTS.md).
-The matching account and email-verification service is live on web v0.3.1-preview. Native v0.3.0
-includes the account integration and clearer Android verification flow; older binaries do not
-gain these features automatically. Desktop automatic updates remain a proposal.
+The matching account and email-verification service is deployed. Native v0.3.0 introduced account
+integration; v0.4.0 adds receiver-side batch enforcement and default Android Free/Pro policy. Older
+binaries do not gain features or paywalls automatically. Desktop automatic updates remain a proposal.
 
 FileFlow's native downloads are built only for milestones that the repository owner chooses. Every
 owner-dispatched run builds a reviewed source commit. Only a run with explicit publication approval
@@ -194,6 +201,9 @@ change does not add Developer ID signing or notarization and does not remove Gat
   state. Stable Android signing is not configured. Public Android releases require an
   owner-controlled persistent release identity or Play App Signing; no keystore should be placed in
   the repository.
+  Normal experimental APKs enforce Free/Pro, but cannot buy/restore Pro without a configured
+  license public key and production billing. They must not be marketed as the purchasable Play app.
+  The guarded Play bundle workflow is the path for the stable store identity and trust.
 - Linux is an unsigned portable archive, not a distro-native package. Distribution coverage and a
   signing mechanism remain owner approval gates.
 - Camera, display, cross-device, and upgrade behavior still require the platform validation matrix

@@ -43,15 +43,19 @@ std::vector<std::uint8_t> FileManifest::Encode() const {
     w.Bytes({reinterpret_cast<const std::uint8_t*>(file_name.data()),
              std::min(file_name.size(), kMaxNameLength)});
     // Extensions: type, length, value, each skipped by length by a reader that does not know it.
+    w.U16(static_cast<std::uint16_t>((content.original_size > 0 ? 2 + ContentHint::kEncodedSize : 0) +
+                                   (content.batch ? 3 : 0)));
     if (content.original_size > 0) {
-        w.U16(2 + ContentHint::kEncodedSize);
         w.U8(ContentHint::kExtensionType);
         w.U8(ContentHint::kEncodedSize);
         w.U64(content.original_size);
         w.U8(content.codec);
         w.U32(content.compress_ms);
-    } else {
-        w.U16(0);
+    }
+    if (content.batch) {
+        w.U8(ContentHint::kBatchExtensionType);
+        w.U8(1);
+        w.U8(1);
     }
     const std::uint32_t crc = Crc32(w.data());
     w.U32(crc);
@@ -139,8 +143,15 @@ Result<FileManifest> FileManifest::Decode(std::span<const std::uint8_t> in) {
             if (!orig.ok() || !codec.ok() || !ms.ok()) return Error::kTruncated;
             // A hint, never trusted for anything but display; bounded all the same.
             if (orig.value() <= kMaxFileSize) {
-                m.content = ContentHint{orig.value(), codec.value(), ms.value()};
+                m.content.original_size = orig.value();
+                m.content.codec = codec.value();
+                m.content.compress_ms = ms.value();
             }
+        } else if (type.value() == ContentHint::kBatchExtensionType && len.value() == 1) {
+            auto flags = r.U8();
+            if (!flags.ok()) return flags.error();
+            // Unknown future values cannot assert a batch or grant any application privilege.
+            m.content.batch = m.content.batch || flags.value() == 1;
         } else {
             FF_TRY(r.Skip(len.value()));
         }

@@ -59,6 +59,28 @@ TEST(Session, ReceiverNeedsOnlyTheGrid) {
     EXPECT_EQ(rx.value().stats().fec_fail, 0u);
 }
 
+TEST(Session, BatchAdvisorySurvivesWithoutLeakingEncryptedContentDetails) {
+    const auto payload = Payload(1000);
+    TransmitConfig cfg;
+    cfg.content.batch = true;
+    auto tx = TransmitSession::Create(Layout(), payload, "Encrypted file", 0xB47C, cfg);
+    ASSERT_TRUE(tx.ok());
+    auto rx = ReceiveSession::Create(Layout());
+    ASSERT_TRUE(rx.ok());
+    CellMatrix frame(120, 200);
+    for (int i = 0; i < 1000 && !rx.value().complete(); ++i) {
+        ASSERT_TRUE(tx.value().Next(&frame).ok());
+        rx.value().Ingest(Clean(frame), i);
+    }
+    ASSERT_TRUE(rx.value().complete());
+    ASSERT_NE(rx.value().manifest(), nullptr);
+    EXPECT_TRUE(rx.value().manifest()->content.batch);
+    EXPECT_EQ(rx.value().manifest()->content.original_size, 0U);
+    auto out = rx.value().Finish();
+    ASSERT_TRUE(out.ok());
+    EXPECT_EQ(out.value(), payload);
+}
+
 // Cross-build golden: web/tests/transport-wasm.test.js constructs the identical uncompressed FFE2
 // envelope, then asks the Emscripten build of this same protocol path for these two matrices. Fixed
 // hashes catch ABI/packing/default drift between the native and checked-in browser artifacts.

@@ -603,6 +603,7 @@ class CaptureActivity : AppCompatActivity() {
                     statusCard?.setDetail(detailLine(s, now - started))
                 }
                 if (s.phase.terminal) finishLive(s, SystemClock.elapsedRealtime() - started)
+                else if (s.batchSuggested) suggestBatchPro()
             }
         }
 
@@ -930,6 +931,29 @@ class CaptureActivity : AppCompatActivity() {
     private var liveRecorder: CameraRecorder? = null
     private var liveDecoder: LiveDecoder? = null
     private var liveFinished = false
+    private var batchPromptShown = false
+    private var batchPrompt: androidx.appcompat.app.AlertDialog? = null
+    private var retryBatchReceive: (() -> Unit)? = null
+
+    /** An untrusted hint may explain an upgrade once; it must never prevent a single-file receive. */
+    private fun suggestBatchPro() {
+        if (batchPromptShown || liveFinished || isFinishing || isDestroyed ||
+            Entitlements.has(Entitlements.Feature.BatchReceive)) return
+        batchPromptShown = true
+        batchPrompt = com.google.android.material.dialog.MaterialAlertDialogBuilder(this)
+            .setTitle("Receiving a batch needs Pro")
+            .setMessage("The sender indicates several files. Pro is needed on this receiving phone, " +
+                "even when the sending computer is free. The US launch price is $10 one time; Google Play " +
+                "shows the final price. You can restore an existing purchase, or ask the sender to send " +
+                "one file at a time for free.")
+            .setPositiveButton("View Pro / restore") { _, _ ->
+                liveRecorder?.cancel()
+                Entitlements.openPro(this, Entitlements.Feature.BatchReceive)
+                finish() // No camera or optical work continues behind checkout. Receive again afterward.
+            }
+            .setNegativeButton("Keep scanning", null)
+            .show()
+    }
     /** Encrypted mode: only a file sealed to the current pairing is accepted. */
     private val encrypted by lazy { intent.getBooleanExtra("encrypted", false) }
 
@@ -942,6 +966,8 @@ class CaptureActivity : AppCompatActivity() {
     private fun finishLive(s: LiveStatus, elapsedMs: Long) {
         if (liveFinished) return
         liveFinished = true
+        batchPrompt?.dismiss()
+        batchPrompt = null
         liveRecorder?.cancel()
         val decoder = liveDecoder ?: return
         // Off the UI thread: the file can be megabytes. The decoder holds the verified bytes, so it
@@ -953,6 +979,7 @@ class CaptureActivity : AppCompatActivity() {
                 // Opened with the pairing and the teams, if any; in encrypted mode a plain or foreign
                 // file is refused, and the refusal says why instead of passing for a storage failure.
                 var refused: String? = null
+                var needsPro = false
                 if (s.phase == LivePhase.Verified && s.lensStrength != 0.0) {
                     getSharedPreferences(LENS_PREFS, MODE_PRIVATE).edit {
                         putFloat(PREF_LENS_K1, s.lensStrength.toFloat())
@@ -963,7 +990,10 @@ class CaptureActivity : AppCompatActivity() {
                         decoder.saveVerified(this, listOfNotNull(PairingStore.current()) + Teams.store(this).all(),
                                              requireEncrypted = encrypted)
                     }.onFailure { e ->
-                        if (e is Envelope.UnpackException) refused = e.failure.message
+                        if (e is Envelope.UnpackException) {
+                            refused = e.failure.message
+                            needsPro = e.failure == Envelope.Failure.NeedsPro
+                        }
                     }.getOrNull()
                 } else null
                 val seconds = elapsedMs / 1000.0
@@ -1020,7 +1050,20 @@ class CaptureActivity : AppCompatActivity() {
                 }
                 report.lineSequence().forEach { SessionLog.i(LOG_TAG, it) }
                 runOnUiThread {
-                    if (!isFinishing && !isDestroyed) showResult(report, saved, s, link, seconds, refused)
+                    if (!isFinishing && !isDestroyed) {
+                        retryBatchReceive = if (needsPro) ({
+                            if (Entitlements.check(this, Entitlements.Feature.BatchReceive) && !saving.get()) {
+                                retryBatchReceive = null
+                                liveFinished = false
+                                finishLive(s, elapsedMs)
+                            }
+                        }) else null
+                        showResult(report, saved, s, link, seconds, refused, needsPro)
+                        if (needsPro && !batchPromptShown) {
+                            batchPromptShown = true
+                            Entitlements.check(this, Entitlements.Feature.BatchReceive)
+                        }
+                    }
                 }
             } finally {
                 saving.set(false)
@@ -1047,6 +1090,7 @@ class CaptureActivity : AppCompatActivity() {
     private fun showResult(
         report: String, saved: LiveDecoder.SavedFile?, s: LiveStatus, link: Double, seconds: Double,
         refused: String? = null,
+        needsPro: Boolean = false,
     ) {
         text.text = report
         statusCard = null
@@ -1065,9 +1109,10 @@ class CaptureActivity : AppCompatActivity() {
         }
         // Received: a ring draws itself round and the tick in, on a soft disc of the same colour.
         // Not received: the sign shakes its head.
-        val mark = getColor(if (ok) R.color.ff_ok else R.color.ff_bad)
+        val mark = if (needsPro) ContextCompat.getColor(this, R.color.ff_primary)
+                   else getColor(if (ok) R.color.ff_ok else R.color.ff_bad)
         val badge = android.widget.ImageView(this).apply {
-            setImageResource(if (ok) R.drawable.avd_check else R.drawable.ic_error)
+            setImageResource(if (needsPro) R.drawable.ic_lock else if (ok) R.drawable.avd_check else R.drawable.ic_error)
             imageTintList = android.content.res.ColorStateList.valueOf(mark)
             background = android.graphics.drawable.GradientDrawable().apply {
                 shape = android.graphics.drawable.GradientDrawable.OVAL
@@ -1081,6 +1126,7 @@ class CaptureActivity : AppCompatActivity() {
         col.addView(title(
             when {
                 ok -> "Received"
+                needsPro -> "Batch needs Pro"
                 refused != null -> "Not accepted"
                 s.phase == LivePhase.Verified -> "Couldn't save the file"
                 else -> "Transfer failed"
@@ -1141,6 +1187,18 @@ class CaptureActivity : AppCompatActivity() {
             col.addView(text(refused ?: s.message).apply { gravity = Gravity.CENTER })
         }
         col.addView(space(32))
+
+        if (needsPro) {
+            col.addView(text("Nothing has been saved. Upgrade or restore on this phone, then return here " +
+                "and save the batch. Keep this screen open; if you close it, receive the batch again.")
+                .apply { gravity = Gravity.CENTER })
+            col.addView(button("View Pro / restore", R.drawable.ic_lock) {
+                Entitlements.openPro(this, Entitlements.Feature.BatchReceive)
+            }, matchWidth(dp(8)))
+            col.addView(button("Save batch after upgrade", R.drawable.ic_file, Style.Tonal) {
+                retryBatchReceive?.invoke()
+            }, matchWidth(dp(8)))
+        }
 
         if (saved != null && saved.isBatch) {
             // A batch: its files are in the Received tab, where they can be opened, shared or
@@ -1203,7 +1261,7 @@ class CaptureActivity : AppCompatActivity() {
                 badge.animate().scaleX(1f).scaleY(1f).setDuration(dev.fileflow.ui.Motion.LONG)
                     .setInterpolator(android.view.animation.OvershootInterpolator(2f)).start()
             }
-        } else if (dev.fileflow.ui.Motion.enabled) {
+        } else if (!needsPro && dev.fileflow.ui.Motion.enabled) {
             android.animation.ObjectAnimator.ofFloat(badge, View.TRANSLATION_X, 0f, -18f, 16f, -12f, 8f, -4f, 0f)
                 .setDuration(520L).start()
         }
@@ -1319,6 +1377,8 @@ class CaptureActivity : AppCompatActivity() {
     override fun onDestroy() {
         super.onDestroy()
         destroyed = true
+        batchPrompt?.dismiss()
+        retryBatchReceive = null
         aimRecorder?.cancel()
         aimThread?.join(2000)
         liveRecorder?.cancel()

@@ -210,13 +210,7 @@ void App::Send(std::vector<std::string> paths) {
         ImportLicense(paths.front());
         return;
     }
-    // Enforce at the operation boundary: dialog, drop, CLI and Recent all pass here.
-    // A denied new send must never stop an existing transfer or receiving session.
-    if (paths.size() > 1 && license::StoreBuild() && !pro_grant_) {
-        account_message_ = "Sending several files together is part of FileFlow Pro.";
-        if (phase_ == Phase::kIdle && !receiver_ && !pair_) tab_ = Tab::kAccount;
-        return;
-    }
+    // Desktop batch sending is free through every entry point: dialog, drop, CLI and Recent.
     preparing_name_ = paths.size() == 1 ? NameOf(PathOf(paths[0])) : std::to_string(paths.size()) + " files";
     transfer_.reset();
     phase_ = Phase::kPreparing;

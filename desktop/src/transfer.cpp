@@ -127,6 +127,9 @@ std::unique_ptr<Transfer> Open(const Prepared& p, const Speed& speed, std::strin
         tc.content = {.original_size = p.envelope.original_size, .codec = p.envelope.codec,
                       .compress_ms = p.envelope.compress_ms};
     }
+    // Batch status is already in the envelope's public flags, including sealed envelopes.
+    // It carries no names or file counts; receivers must still inspect verified bytes.
+    tc.content.batch = p.files > 1;
     const std::string link_name = p.sealed ? "Encrypted file" : p.name;
     auto s = TransmitSession::Create(*t->layout, p.envelope.bytes, link_name,
                                      SessionIdFor(p.envelope.bytes, link_name), tc);

@@ -78,8 +78,12 @@ if(WIN32)
 endif()
 set_target_properties(fileflow_secure PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
 
-# Only explicitly configured official builds gate Pro features. Community/source builds stay open.
-option(FILEFLOW_STORE_BUILD "Gate Pro features in an official distribution build" OFF)
+# Desktop includes every feature for free. Keep the old option harmless for existing build caches.
+option(FILEFLOW_STORE_BUILD "Deprecated: desktop features are always free" OFF)
+if(FILEFLOW_STORE_BUILD)
+    message(WARNING "FILEFLOW_STORE_BUILD is deprecated and ignored: desktop features are always free")
+endif()
+set(FILEFLOW_STORE_BUILD OFF CACHE BOOL "Deprecated: desktop features are always free" FORCE)
 set(FILEFLOW_LICENSE_PUBLIC_KEY_FILE "" CACHE FILEPATH "Trusted Pro signing public key (PEM SPKI; never a private key)")
 set(FILEFLOW_LICENSE_PUBLIC_KEY_PEM "")
 if(FILEFLOW_LICENSE_PUBLIC_KEY_FILE)

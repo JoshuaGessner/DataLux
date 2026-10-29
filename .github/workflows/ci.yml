@@ -248,6 +248,11 @@ jobs:
             exit 1
           fi
           echo "one .so, arm64-v8a, as ADR-0013 requires"
+      - name: Android Free/Pro default and explicit community profile
+        run: |
+          grep -q 'boolean STORE = true;' app/build/generated/source/buildConfig/debug/dev/fileflow/BuildConfig.java
+          gradle :app:testDebugUnitTest -Pstore=false --no-daemon
+          grep -q 'boolean STORE = false;' app/build/generated/source/buildConfig/debug/dev/fileflow/BuildConfig.java
       - name: platform/android must not leak into core/
         run: |
           # ADR-0010 in the other direction: core/ may not depend on Android, and the Android

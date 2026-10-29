@@ -291,7 +291,9 @@ jobs:
         with:
           gradle-version: '9.8.1'
       - name: Assemble, unit tests, and lint
-        run: gradle :app:assembleDebug :app:testDebugUnitTest :app:lintDebug --no-daemon
+        run: |
+          gradle :app:assembleDebug :app:testDebugUnitTest :app:lintDebug -Pstore=true --no-daemon
+          grep -q 'boolean STORE = true;' app/build/generated/source/buildConfig/debug/dev/fileflow/BuildConfig.java
       - name: Verify target ABI and debug signature
         run: |
           set -euo pipefail
@@ -510,7 +512,7 @@ jobs:
               "linux": ({"status": "unsigned", "details": "No Linux package signature."}, "Experimental portable tarball; no installer or distribution package.", ["Compatibility is not validated across Linux distributions."]),
               "windows": ({"status": "unsigned", "details": "No Authenticode signature."}, "Experimental portable ZIP; no installer.", ["Windows SmartScreen may warn because the executable is unsigned."]),
               "macos": ({"status": "ad-hoc", "details": "Ad-hoc app-bundle signature only; not Developer ID signed or notarized."}, "Experimental drag-and-drop DMG. Open the disk image, then drag FileFlow to Applications.", ["Gatekeeper may block the app because it is not notarized."]),
-              "android": ({"status": "ad-hoc", "details": "Ephemeral debug certificate generated for this GitHub-hosted runner build; not a persistent release identity."}, "Experimental sideloadable debug APK; not a Play Store build.", ["The per-run debug key is not a supported in-place upgrade path; another build may require uninstalling the existing app, which removes app-local state.", "Stable Android release signing is not configured."]),
+              "android": ({"status": "ad-hoc", "details": "Ephemeral debug certificate generated for this GitHub-hosted runner build; not a persistent release identity."}, "Experimental Android Free/Pro debug APK; not a Play Store build.", ["The per-run debug key is not a supported in-place upgrade path; another build may require uninstalling the existing app, which removes app-local state.", "Stable Android release signing is not configured.", "Pro purchase/restore requires the production license public key and billing configuration; this review APK must not be sold as the Play release."]),
           }
           manifest_artifacts = []
           for record in records:

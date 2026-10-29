@@ -54,7 +54,7 @@ struct Prepared {
     std::size_t files = 0;
     std::string problem;  // non-empty: nothing to send
     // Sealed to a pairing or team: the link then shows only "Encrypted file" and says nothing of
-    // what it is -- the real name and size are inside the envelope, as on the phone.
+    // the real name and size -- inside the envelope, as on the phone. A batch advisory may remain.
     bool sealed = false;
 };
 

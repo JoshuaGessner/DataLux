@@ -92,7 +92,7 @@ std::optional<Grant> Verify(std::string_view text, std::string_view public_key_p
 }
 
 std::optional<Grant> VerifyTrusted(std::string_view text) { return Verify(text, config::kPublicKey); }
-bool StoreBuild() { return FILEFLOW_STORE_BUILD != 0; }
+bool StoreBuild() { return false; }  // Desktop features never depend on an account or purchase.
 bool TrustConfigured() { return config::kPublicKey[0] != '\0'; }
 
 std::string ReadFile(const std::string& path) {

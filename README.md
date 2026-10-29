@@ -1,12 +1,36 @@
 # FileFlow
 
-**Send files between two phones using nothing but light.** One phone shows the file on its screen
-as a fast-changing colour pattern; the other reads it with its camera. No Wi-Fi, no Bluetooth, no
-cables, no accounts, no internet — FileFlow doesn't even ask for network access.
+> **Status:** Accepted product direction; experimental builds; Play launch pending
+> **Owner:** Product / native apps
+> **Last reviewed:** 2026-10-28
+> **Related:** PRODUCT.md, NATIVE_RELEASES.md
+
+**Transfer files with a screen and a camera across Android, macOS, Windows and Linux.** The sender
+shows the file as a fast-changing colour pattern; the receiver reads it with its camera. Transfers
+need no Wi-Fi, Bluetooth, cables, account or internet. Optional account and Google Play purchase
+actions use HTTPS; file contents and camera frames stay on your devices.
 
 Every file is checked end to end (SHA-256) before it is saved, so what arrives is exactly what was
 sent. With **encrypted mode** on, files are sealed so that only the phone you paired with can open
 them.
+
+## Free desktop, Android Free and Pro
+
+The desktop app includes **every feature for free**, including batch sending, teams and presenter
+controls. Android Free sends and receives one file at a time at full available speed, with
+compression, encryption, pairing and teams. Individual file actions remain free.
+
+**Android Pro is a planned $10 USD one-time US launch upgrade** for batch sending **and receiving**
+and bulk share/resend/delete actions. A receiving phone needs its own restored account entitlement
+for a batch, including one sent by the free desktop. It offers upgrade/restore on that phone; the
+sender can always send one file at a time for free. Google Play supplies the final checkout price.
+Public Play sales await signing, real purchase/device tests, the personal-account closed test and
+Google approval; GitHub experimental APKs are not a store release.
+
+Normal Android builds enforce Free/Pro. An explicit `-Pstore=false` makes an unlocked AGPL community
+build; existing historical community releases remain unchanged. The account-bound activation can
+be restored on another phone. Desktop does not need a license. See [PRODUCT.md](PRODUCT.md) for the
+complete feature matrix, receiver behavior, offline/refund limits and release gates.
 
 ## How fast
 
@@ -68,8 +92,9 @@ With a second display attached — a projector, a TV — **Show the code on** pu
 there, while this screen becomes the presenter's view: a live copy of the code, what's going, the
 speed and **Stop**.
 
-On the home screen, drop files on the window or **Choose files…**; several go as one batch, as on
-the phone. **⌘V / Ctrl+V** sends the text on the clipboard — a link, an address, a note — as
+On the home screen, drop files on the window or **Choose files…**; several go as one batch for free
+on desktop. A receiving Android phone needs Pro for a multi-file batch. **⌘V / Ctrl+V** sends the
+text on the clipboard — a link, an address, a note — as
 `Clipboard.txt`. Speed and compression are chosen there too and remembered, and your last few sends
 are listed to **Send again**.
 
@@ -91,17 +116,19 @@ to the same test vectors.
 
 It needs CMake 3.25 and a C++20 compiler; SDL3, Mbed TLS, the Inter typeface, stb_truetype and the
 QR libraries are fetched, pinned, and built in, so the result is a single program with nothing to
-install. Tested on macOS, and it builds and passes its tests on Linux (GCC 15); Windows is next to
-be checked. Not yet tried end to end with a phone held to a webcam.
+install. macOS builds and launch checks, and Windows/Linux CI builds and smoke checks have passed.
+Those checks do not establish broad camera or operating-system compatibility; see the platform
+validation records before promising a particular device pairing.
 
 ## Website and browser preview
 
 The separate [FileFlow-Web repository](https://github.com/JoshuaGessner/FileFlow-Web)
 contains the marketing website, responsive browser app, optional account service, and Docker setup.
 Files are buffered locally in IndexedDB; the interface and WASM optical core can be cached
-for offline use after an initial online visit. The browser uses a conservative black-and-white
-profile and shares the native protocol. Physical camera compatibility is still being validated;
-encrypted pairing and teams remain native-app features.
+for offline use after an initial online visit. The browser shares native optical profiles, with
+Steady/Fast/Fastest availability and physical test results documented in that repository. Compatibility
+depends on the browser, display and camera; do not generalize a measured pairing to all devices.
+Encrypted pairing and teams remain native-app features.
 
 Accounts are separate from file contents and are not required for transfers. See the web
 repository's README for setup, tests, offline limits, and the licensing roadmap.
@@ -152,9 +179,14 @@ Platform packages are built and attached to GitHub Releases by the owner-run mil
 workflow; installers are never committed to source history. See
 [NATIVE_RELEASES.md](NATIVE_RELEASES.md) for the build-only and explicit publication flows.
 
-FileFlow is built from source for now. Open the project in a recent Android Studio, let it sync,
-and run the **app** configuration on your phone. (Command line: with Gradle 9.8 and the Android
-SDK installed, `gradle :app:assembleRelease`.)
+The Play release is being prepared. Existing GitHub packages are experimental and may not be
+compatible with an installed app's signing key; preserve local data before replacing an install.
+For a normal Android Free/Pro debug build, use Android Studio or `gradle :app:assembleDebug` with
+Gradle 9.8 and the Android SDK. An explicitly unlocked AGPL community build uses
+`gradle :app:assembleDebug -Pstore=false` (or `assembleRelease -Pstore=false` for an unsigned
+community release). A production Play bundle requires permanent upload signing, pinned Pro public
+trust and the guarded [Play workflow](.github/workflows/play-bundle.yml); it never uploads or enables
+sales automatically. See [PRODUCT.md](PRODUCT.md) for the remaining owner and testing gates.
 
 ## License
 

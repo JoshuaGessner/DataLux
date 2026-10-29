@@ -8,7 +8,7 @@ import com.google.android.material.dialog.MaterialAlertDialogBuilder
  * What this copy of FileFlow may do.
  *
  * FileFlow is open source: anyone who builds it from source gets every feature, and that is
- * deliberate. Only a store build ([BuildConfig.STORE]) asks what was bought; buying is how people
+ * deliberate (-Pstore=false). Normal Android builds ([BuildConfig.STORE]) ask what was bought; buying is how people
  * who don't build it themselves get the extras, and how they support the project.
  */
 object Entitlements {
@@ -18,6 +18,8 @@ object Entitlements {
     enum class Feature(val tier: Tier, val label: String) {
         /** Several files as one transfer. */
         Batch(Tier.Pro, "Sending several files at once"),
+        /** A batch sent by desktop or another phone is unlocked on this receiving phone. */
+        BatchReceive(Tier.Pro, "Receiving several files at once"),
         /** Selecting received files to share, send or delete together. */
         BulkManage(Tier.Pro, "Managing several received files at once"),
         /** Encrypted sending to a group that holds one key. */
@@ -42,10 +44,18 @@ object Entitlements {
         if (has(f)) return true
         MaterialAlertDialogBuilder(context)
             .setTitle("FileFlow Pro")
-            .setMessage("${f.label} is part of FileFlow Pro. Basic transfers, encryption, and your received files remain free.")
-            .setPositiveButton("View Pro") { _, _ -> context.startActivity(Intent(context, ProActivity::class.java)) }
+            .setMessage("${f.label} needs Pro on this phone. The US launch price is $10, one time, " +
+                "with the final price shown by Google Play. Already bought it? Sign in and restore. " +
+                "You can keep sending and receiving one file at a time for free, at full speed, with encryption.")
+            .setPositiveButton("View Pro / restore") { _, _ -> openPro(context, f) }
             .setNegativeButton("Not now", null)
             .show()
         return false
+    }
+
+    fun openPro(context: Context, feature: Feature? = null) {
+        context.startActivity(Intent(context, ProActivity::class.java).apply {
+            feature?.let { putExtra("feature", it.name) }
+        })
     }
 }

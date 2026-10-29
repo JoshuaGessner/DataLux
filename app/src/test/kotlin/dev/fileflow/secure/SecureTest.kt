@@ -180,6 +180,64 @@ class EnvelopeTest {
         assertNull(u.files)
     }
 
+    @Test fun freeReceiverAcceptsSingleFilesWithAndWithoutEncryption() {
+        for (key in listOf<PairingKey?>(null, paired().first)) {
+            for (mode in Envelope.Mode.entries) {
+                val data = text(20_000)
+                val packed = Envelope.pack(data, "single.txt", key, mode, DeflateCodec)
+                val opened = Envelope.unpack(packed.bytes, listOfNotNull(key), key != null, allowBatch = false)
+                assertNull(opened.files)
+                assertArrayEquals(data, opened.data)
+            }
+        }
+    }
+
+    @Test fun batchRequiresReceivingEntitlementRegardlessOfCompressionOrPairing() {
+        val files = listOf("a.txt" to text(20_000), "b.txt" to text(10_000))
+        for (key in listOf<PairingKey?>(null, paired().first)) {
+            for (mode in Envelope.Mode.entries) {
+                val packed = Envelope.packBatch(files, "2 files", key, mode, DeflateCodec)
+                expectFailure(Envelope.Failure.NeedsPro) {
+                    Envelope.unpack(packed.bytes, listOfNotNull(key), key != null, allowBatch = false)
+                }
+                val restored = Envelope.unpack(packed.bytes, listOfNotNull(key), key != null, allowBatch = true)
+                val openedFiles = restored.files!!
+                assertEquals(files.map { it.first }, openedFiles.map { it.first })
+                files.zip(openedFiles).forEach { (want, got) -> assertArrayEquals(want.second, got.second) }
+            }
+        }
+    }
+
+    @Test fun anUnauthenticatedEncryptedBatchDoesNotBecomeAnUpgradePrompt() {
+        val (sender, _) = paired()
+        val (foreign, _) = paired()
+        val packed = Envelope.packBatch(listOf("a" to text(100), "b" to text(100)), "2 files", sender)
+        expectFailure(Envelope.Failure.WrongPairing) {
+            Envelope.unpack(packed.bytes, listOf(foreign), true, allowBatch = false)
+        }
+        val altered = packed.bytes.copyOf().also { it[it.lastIndex] = (it.last().toInt() xor 1).toByte() }
+        expectFailure(Envelope.Failure.WrongPairing) {
+            Envelope.unpack(altered, listOf(sender), true, allowBatch = false)
+        }
+    }
+
+    @Test fun aLegacySingleFileBatchContainerRemainsFree() {
+        val bytes = text(1000)
+        val packed = Envelope.packBatch(listOf("one.txt" to bytes), "1 file", null)
+        val opened = Envelope.unpack(packed.bytes, emptyList(), false, allowBatch = false)
+        assertEquals(1, opened.files!!.size)
+        assertArrayEquals(bytes, opened.files.single().second)
+    }
+
+    @Test fun aMalformedBatchDoesNotSellAnUpgradeBeforeReportingCorruption() {
+        val truncated = "FFB1".toByteArray() + byteArrayOf(0, 2)
+        val packed = Envelope.pack(truncated, "2 files", null, Envelope.Mode.Off).bytes
+        packed[4] = 4 // A valid envelope claiming a batch, but no member records exist.
+        expectFailure(Envelope.Failure.Corrupt) {
+            Envelope.unpack(packed, emptyList(), false, allowBatch = false)
+        }
+    }
+
     @Test fun aBatchThatLiesAboutItsSizesIsRefused() {
         val p = Envelope.packBatch(listOf("a" to text(100), "b" to text(100)), "2 files", null, Envelope.Mode.Off)
         // Plain, uncompressed: the batch starts right after the inner header. Claim the first file

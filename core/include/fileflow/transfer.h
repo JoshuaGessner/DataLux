@@ -25,9 +25,13 @@ struct ContentHint {
     std::uint64_t original_size = 0;  // the file before compression; 0 = not said
     std::uint8_t codec = 0;           // 0 none, 1 deflate, 2 zstd
     std::uint32_t compress_ms = 0;    // what compressing it cost the sender
+    // Advisory only: lets an app explain batch requirements before the file arrives.
+    // The verified envelope, never this hint, decides whether a received file is a batch.
+    bool batch = false;
 
     static constexpr std::uint8_t kExtensionType = 1;
     static constexpr std::uint8_t kEncodedSize = 8 + 1 + 4;
+    static constexpr std::uint8_t kBatchExtensionType = 2;
 };
 
 struct FileManifest {

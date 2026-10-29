@@ -116,6 +116,7 @@ class MainActivity : AppCompatActivity() {
 
     /** Opens the transmitter on [uris] -- several are sent as one batch -- or the test file if none. */
     private fun send(uris: List<android.net.Uri>) = withPairing {
+        if (uris.size > 1 && !Entitlements.check(this, Entitlements.Feature.Batch)) return@withPairing
         val i = Intent(this, TransmitActivity::class.java)
             .putExtra("cols", speed.cols)
             .putExtra("rows", speed.rows)
@@ -255,6 +256,7 @@ class MainActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         ProAccount.refreshInBackground()
+        if (!Entitlements.has(Entitlements.Feature.BulkManage)) clearSelection()
         refreshReceived()
         refreshSecurity()  // a pairing expires on its own
     }
@@ -493,7 +495,7 @@ class MainActivity : AppCompatActivity() {
                 centred(title("Send files", 26f)),
                 space(8),
                 centred(text("They appear on this screen as light for the other phone to scan. " +
-                    "Choose several to send them together.")),
+                    "One file at a time is free. Pro sends several together; a receiving phone needs Pro for batches too.")),
             ),
             listOf(
                 securityRow(),
@@ -550,11 +552,13 @@ class MainActivity : AppCompatActivity() {
             addView(label, LinearLayout.LayoutParams(0, WRAP, 1f))
             addView(iconButton(R.drawable.ic_select_all, "Select all") { selectAll() })
             addView(iconButton(R.drawable.ic_share, "Share") {
-                shareAll(this@MainActivity, selected.toList(), "${selected.size} files")
+                if (Entitlements.check(this@MainActivity, Entitlements.Feature.BulkManage))
+                    shareAll(this@MainActivity, selected.toList(), "${selected.size} files")
             })
             // Passed on to another phone, as one batch: a file that reached one person in the
             // field often needs to reach the next.
             addView(iconButton(R.drawable.ic_upload, "Send with FileFlow") {
+                if (!Entitlements.check(this@MainActivity, Entitlements.Feature.BulkManage)) return@iconButton
                 val uris = selected.toList()
                 clearSelection()
                 send(uris)
@@ -638,9 +642,8 @@ class MainActivity : AppCompatActivity() {
             val card = row(
                 R.drawable.ic_file, item.name, "${TransmitActivity.formatBytes(item.bytes)} · $whenText",
                 onLongClick = {
-                    if (selected.isNotEmpty() || Entitlements.check(this, Entitlements.Feature.BulkManage)) {
-                        toggle(item.uri)
-                    }
+                    if (Entitlements.has(Entitlements.Feature.BulkManage)) toggle(item.uri)
+                    else singleFileActions(item.uri, item.name, item.mime)
                 },
                 thumbnailOf = if (mime.startsWith("image/") || mime.startsWith("video/")) item.uri else null,
             ) {
@@ -663,18 +666,20 @@ class MainActivity : AppCompatActivity() {
                 "in Downloads › ${LiveDecoder.DOWNLOADS_SUBDIR}.", 13f)).apply { setPadding(0, dp(12), 0, 0) },
                 matchWidth())
         }
-        list.addView(centred(text("Press and hold a file to select it, then share, send or delete several at once.", 13f))
+        list.addView(centred(text("Press and hold for file actions. Pro adds selecting, sharing, resending and deleting several at once.", 13f))
             .apply { setPadding(0, dp(12), 0, 0) }, matchWidth())
         updateSelection()
     }
 
     private fun toggle(uri: android.net.Uri) {
+        if (!Entitlements.check(this, Entitlements.Feature.BulkManage)) return
         if (!selected.remove(uri)) selected += uri
         rows[uri]?.isChecked = uri in selected
         updateSelection()
     }
 
     private fun selectAll() {
+        if (!Entitlements.check(this, Entitlements.Feature.BulkManage)) return
         receivedItems.forEach { selected += it.uri }
         rows.values.forEach { it.isChecked = true }
         updateSelection()
@@ -703,6 +708,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun confirmDeleteSelected() {
+        if (!Entitlements.check(this, Entitlements.Feature.BulkManage)) return
         val uris = selected.toList()
         if (uris.isEmpty()) return
         com.google.android.material.dialog.MaterialAlertDialogBuilder(this)
@@ -710,10 +716,29 @@ class MainActivity : AppCompatActivity() {
             .setMessage("They will be removed from Downloads › ${LiveDecoder.DOWNLOADS_SUBDIR}.")
             .setNegativeButton("Cancel", null)
             .setPositiveButton("Delete") { _, _ ->
+                if (!Entitlements.check(this, Entitlements.Feature.BulkManage)) return@setPositiveButton
                 selected.clear()
                 deleteFiles(uris)
             }
             .show()
+    }
+
+    /** Individual file actions stay available in Free; only the multi-file workflow is paid. */
+    private fun singleFileActions(uri: android.net.Uri, name: String, mime: String) {
+        com.google.android.material.dialog.MaterialAlertDialogBuilder(this)
+            .setTitle(name)
+            .setItems(arrayOf("Open", "Share", "Send with FileFlow", "Delete", "Select multiple · Pro")) { _, action ->
+                when (action) {
+                    0 -> runCatching { startActivity(Intent.createChooser(Intent(Intent.ACTION_VIEW)
+                        .setDataAndType(uri, mime).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION), name)) }
+                    1 -> shareAll(this, listOf(uri), name)
+                    2 -> send(listOf(uri))
+                    3 -> com.google.android.material.dialog.MaterialAlertDialogBuilder(this)
+                        .setTitle("Delete this file?").setMessage(name).setNegativeButton("Cancel", null)
+                        .setPositiveButton("Delete") { _, _ -> deleteFiles(listOf(uri)) }.show()
+                    4 -> if (Entitlements.check(this, Entitlements.Feature.BulkManage)) toggle(uri)
+                }
+            }.show()
     }
 
     /** A round, tinted icon button, for the selection bar. */
@@ -959,6 +984,7 @@ class MainActivity : AppCompatActivity() {
         /** Shares several received files at once, through the system share sheet. */
         fun shareAll(context: android.content.Context, uris: List<android.net.Uri>, title: String) {
             if (uris.isEmpty()) return
+            if (uris.size > 1 && !Entitlements.check(context, Entitlements.Feature.BulkManage)) return
             val send = if (uris.size == 1) {
                 Intent(Intent.ACTION_SEND).putExtra(Intent.EXTRA_STREAM, uris[0])
             } else {

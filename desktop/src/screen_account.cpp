@@ -12,13 +12,11 @@ void App::AccountScreen(float x, float W, float /*H*/) {
     paint_.Text("Account", left, 28, 28, Weight::kSemiBold, th::kText);
     const SDL_FRect card{left, 96, width, 142};
     paint_.RoundRect(card, 24, th::kSurface);
-    const bool community = !license::StoreBuild();
-    const std::string title = community ? "FileFlow community build" : pro_grant_ ? "FileFlow Pro" : "FileFlow Free";
-    paint_.Text(title, left + 24, 118, 23, Weight::kSemiBold, th::kText);
-    const std::string status = account_session_ ? account_session_->email : community ? "All features are available in this build." :
-        pro_grant_ ? "Activated on this computer. Works offline." : "Send and receive single files for free.";
+    paint_.Text(paint_.Fit("FileFlow Desktop — all features free", width - 48, 23, Weight::kSemiBold),
+                left + 24, 118, 23, Weight::kSemiBold, th::kText);
+    const std::string status = account_session_ ? account_session_->email : "No account or purchase is needed on this computer.";
     paint_.Text(paint_.Fit(status, width - 48, 15, Weight::kRegular), left + 24, 158, 15, Weight::kRegular, th::kTextDim);
-    paint_.Text(paint_.Fit("Your files and encryption stay available with every plan.", width - 48, 13, Weight::kRegular),
+    paint_.Text(paint_.Fit("Android Pro adds phone batch workflows; desktop stays free.", width - 48, 13, Weight::kRegular),
                 left + 24, 194, 13, Weight::kRegular, th::kTextDim);
 
     const bool busy = account_request_.valid() || account_reply_.has_value();
@@ -32,7 +30,7 @@ void App::AccountScreen(float x, float W, float /*H*/) {
     } else {
         if (account_session_) {
             const float half = (width - 12) / 2;
-            if (ui_.Button("account/refresh", {left, 266, half, 46}, busy ? "Connecting…" : account_needs_sign_in_ ? "Sign in again" : "Refresh Pro", true) && !busy) {
+            if (ui_.Button("account/refresh", {left, 266, half, 46}, busy ? "Connecting…" : account_needs_sign_in_ ? "Sign in again" : "Refresh account", true) && !busy) {
                 if (account_needs_sign_in_) BeginAccountSignIn(); else RefreshAccount();
             }
             if (ui_.Button("account/logout", {left + half + 12, 266, half, 46}, "Sign out", false) && !busy) SignOutAccount();
@@ -40,14 +38,11 @@ void App::AccountScreen(float x, float W, float /*H*/) {
             BeginAccountSignIn();
         }
         if (ui_.Button("account/open", {left, 330, width, 42}, "Manage FileFlow account", false)) {
-            const auto url = account::Origin() + "/app.html#account";
+            const auto url = account::Origin() + "/account.html";
             if (!SDL_OpenURL(url.c_str())) account_message_ = "Could not open your browser. Visit the FileFlow website.";
         }
-        if (license::TrustConfigured()) {
-            if (ui_.Button("account/import", {left, 388, width, 42}, "Import offline activation…", false) && !busy) ChooseLicense();
-        } else if (!community) {
-            paint_.Text("Pro activation is not available in this build yet.", left, 398, 14, Weight::kRegular, th::kTextDim);
-        }
+        paint_.Text(paint_.Fit("Android Pro: $10 one-time in the US. Restore it on your phones.", width, 14, Weight::kRegular),
+                    left, 398, 14, Weight::kRegular, th::kTextDim);
     }
     if (!account_message_.empty()) {
         paint_.Text(paint_.Fit(account_message_, width, 14, Weight::kRegular), left, 452, 14, Weight::kRegular, th::kText);
@@ -56,10 +51,10 @@ void App::AccountScreen(float x, float W, float /*H*/) {
 
 void App::ChooseLicense() {
     if (phase_ != Phase::kIdle || receiver_ || pair_) {
-        account_message_ = "Finish the current transfer before activating Pro.";
+        account_message_ = "Finish the current transfer before importing an account activation record.";
         return;
     }
-    static constexpr SDL_DialogFileFilter filters[] = {{"FileFlow Pro activation", "fileflow-license"}};
+    static constexpr SDL_DialogFileFilter filters[] = {{"FileFlow account activation record", "fileflow-license"}};
     SDL_ShowOpenFileDialog(OnChosen, new std::shared_ptr<ChosenFiles>(chosen_license_), window_, filters, 1, nullptr, false);
 }
 
@@ -76,7 +71,7 @@ void App::TakeChosenLicense() {
 
 void App::ImportLicense(const std::string& path) {
     if (phase_ != Phase::kIdle || receiver_ || pair_) {
-        account_message_ = "Finish the current transfer before activating Pro.";
+        account_message_ = "Finish the current transfer before importing an account activation record.";
         return;
     }
     tab_ = Tab::kAccount;
@@ -84,7 +79,7 @@ void App::ImportLicense(const std::string& path) {
     const auto grant = license::VerifyTrusted(text);
     if (!grant) {
         account_message_ = license::TrustConfigured() ? "This activation file could not be verified. Download it again from your account." :
-            "Pro activation is not available in this build yet.";
+            "This build cannot verify Android Pro records. Desktop features are free.";
         return;
     }
     if (account_session_ && grant->account_id != account_session_->user_id) {
@@ -102,7 +97,7 @@ void App::ImportLicense(const std::string& path) {
             account::SaveSession(PrefPath("account-session.json"), next); account_session_ = std::move(next);
         } else secure::WritePrivateFile(target, text);
         pro_grant_ = grant;
-        account_message_ = "Pro is activated on this computer.";
+        account_message_ = "Account activation record verified. All desktop features remain free.";
     } catch (...) {
         account_message_ = "Could not save your activation. Check disk space and folder permissions.";
     }
@@ -119,7 +114,7 @@ void App::RefreshAccount() {
     const auto milliseconds = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
     if (account_needs_sign_in_ || account_session_->expires_at <= milliseconds) {
         account_needs_sign_in_ = true; account_refresh_at_ = Clock::now() + std::chrono::hours(24);
-        account_message_ = "Sign in again to refresh your account. Offline Pro access is unchanged."; return;
+        account_message_ = "Sign in again to refresh your account. All desktop features remain available."; return;
     }
     account_refresh_at_ = Clock::now() + std::chrono::minutes(5);
     account_request_ = std::async(std::launch::async, account::Refresh, *account_session_);
@@ -171,9 +166,14 @@ void App::PumpAccount() {
                 account_session_ = std::move(next); pro_grant_ = license::VerifyTrusted(reply.license);
                 account_needs_sign_in_ = false;
                 account_device_.reset(); account_refresh_at_ = now + std::chrono::hours(6);
+                account_message_ = reply.pro ? "Android Pro is verified for this account. Desktop features are always free." :
+                    "This account uses Android Free. All desktop features are available.";
             } catch (...) { account_message_ = "Could not save the account update. Existing offline access is unchanged."; }
         } else if (kind == account::Reply::Kind::kError) {
-            if (reply.authentication_required) account_needs_sign_in_ = true;
+            if (reply.authentication_required) {
+                account_needs_sign_in_ = true;
+                account_message_ = "Sign in again to refresh your account. All desktop features remain available.";
+            }
             account_device_.reset(); account_refresh_at_ = now + std::chrono::minutes(5);
         }
     }

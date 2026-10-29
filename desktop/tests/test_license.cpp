@@ -11,6 +11,10 @@
 namespace license = fileflow::desktop::license;
 namespace secure = fileflow::desktop::secure;
 
+TEST(License, DesktopNeverRequiresPurchase) {
+    EXPECT_FALSE(license::StoreBuild());
+}
+
 TEST(License, VerifiesServerCompatiblePermanentGrant) {
     const auto grant = license::Verify(license_fixture::kValid, license_fixture::kPublicKey);
     ASSERT_TRUE(grant);

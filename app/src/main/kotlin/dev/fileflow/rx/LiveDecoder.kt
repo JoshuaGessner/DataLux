@@ -2,6 +2,7 @@ package dev.fileflow.rx
 
 import android.content.Context
 import dev.fileflow.SessionLog
+import dev.fileflow.Entitlements
 import dev.fileflow.secure.Envelope
 import dev.fileflow.secure.SealKey
 import java.io.File
@@ -81,6 +82,8 @@ data class LiveStatus(
     val rows: Int,
     /** True once a frame header has decoded, which proves the grid. Before that it is a guess. */
     val gridKnown: Boolean,
+    /** Advisory manifest flag only; the verified envelope is the final authority. */
+    val batchSuggested: Boolean = false,
 )
 
 /**
@@ -397,6 +400,7 @@ class LiveDecoder(
             cols = c.cols,
             rows = c.rows,
             gridKnown = committed === c,
+            batchSuggested = slots[Slot.BatchHint.ordinal] == 1.0,
         )
     }
 
@@ -425,12 +429,17 @@ class LiveDecoder(
         }
         // A sender from before envelopes sent the bare file; accepted only outside encrypted mode.
         val opened = if (Envelope.isEnvelope(received) || requireEncrypted) {
-            Envelope.unpack(received, keys, requireEncrypted)
+            Envelope.unpack(received, keys, requireEncrypted,
+                allowBatch = Entitlements.has(Entitlements.Feature.BatchReceive))
         } else {
             Envelope.Unpacked(linkName, received, Envelope.CODEC_NONE, encrypted = false, received.size,
                               compressMs = 0, decompressMs = 0)
         }
         val batch = opened.files
+        // Recheck at the operation boundary, before publishing any batch member to storage.
+        if (batch != null && batch.size > 1 && !Entitlements.has(Entitlements.Feature.BatchReceive)) {
+            throw Envelope.UnpackException(Envelope.Failure.NeedsPro)
+        }
         val saved = if (batch == null) {
             saveOne(context, opened.name, opened.data)
         } else {
@@ -563,7 +572,7 @@ class LiveDecoder(
         Phase, Hint, Progress, SecondsRemaining, MotionBlurCells, RecentReadFraction,
         ScreenInView, Frames, FileSize, PayloadFrames, BytesPerSecond, DistinctStates,
         ColorSpread, ColorNoise, TransferSeconds, BitsPerCell, OriginalSize, Codec, CompressMs,
-        CombinedFrames, LensStrength,
+        CombinedFrames, LensStrength, BatchHint,
     }
 
     companion object {

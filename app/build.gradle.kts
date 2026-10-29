@@ -26,10 +26,13 @@ require(accountUri.scheme == "https" && accountUri.host != null && accountUri.us
     accountUri.rawQuery == null && accountUri.rawFragment == null && accountUri.path.isNullOrEmpty()) {
     "fileflowAccountOrigin must be an HTTPS origin without a path"
 }
-val storeBuild = providers.gradleProperty("store").orElse("false").get() == "true"
-val releaseVersionCode = providers.gradleProperty("fileflowVersionCode").orElse("3").get().toIntOrNull()
+// Normal Android builds enforce Free/Pro. AGPL community builders can explicitly use -Pstore=false.
+val storeSetting = providers.gradleProperty("store").orElse("true").get()
+require(storeSetting in listOf("true", "false")) { "store must be true or false; use false only for an explicit community build" }
+val storeBuild = storeSetting == "true"
+val releaseVersionCode = providers.gradleProperty("fileflowVersionCode").orElse("4").get().toIntOrNull()
 require(releaseVersionCode != null && releaseVersionCode in 1..2_100_000_000) { "fileflowVersionCode must be a positive Play-compatible integer" }
-val releaseVersionName = providers.gradleProperty("fileflowVersionName").orElse("0.3.0").get()
+val releaseVersionName = providers.gradleProperty("fileflowVersionName").orElse("0.4.0").get()
 require(releaseVersionName.matches(Regex("[0-9]+\\.[0-9]+\\.[0-9]+(?:-[0-9A-Za-z.-]+)?"))) { "fileflowVersionName must be a release version" }
 
 // Upload signing and offline-Pro signing are separate identities. Only the public Pro key
@@ -88,8 +91,8 @@ android {
         versionCode = releaseVersionCode
         versionName = releaseVersionName
 
-        // A store build (`-Pstore=true`) locks paid features behind what was bought
-        // (Entitlements.kt). Every other build -- yours, from this source -- has them all.
+        // Normal builds enforce Free/Pro through Entitlements.kt. Explicit community
+        // builds (`-Pstore=false`) have every feature unlocked.
         buildConfigField("boolean", "STORE", storeBuild.toString())
         buildConfigField("String", "LICENSE_PUBLIC_KEY", "\"$licensePublicKey\"")
         buildConfigField("String", "ACCOUNT_ORIGIN", "\"$accountOrigin\"")

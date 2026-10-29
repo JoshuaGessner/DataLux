@@ -187,8 +187,8 @@ class TransmitActivity : AppCompatActivity() {
             return
         }
         if (uris.size > 1 && !Entitlements.has(Entitlements.Feature.Batch)) {
-            fail("Sending several files at once is part of FileFlow ${Entitlements.Feature.Batch.tier}. " +
-                "Send them one at a time.")
+            fail("Sending a batch needs FileFlow Pro on this phone. Send one file at a time for free.")
+            Entitlements.check(this, Entitlements.Feature.Batch)
             return
         }
         encrypted = intent.getBooleanExtra("encrypted", false)
@@ -234,6 +234,7 @@ class TransmitActivity : AppCompatActivity() {
                 displayName = name
                 // Under encryption the link itself carries no name -- it is inside the envelope --
                 // and no original size or codec either: the receiver learns those on opening it.
+                // A batch advisory carries only the existing public batch flag, never names/counts.
                 if (key != null) {
                     Transmitter.openFile(cols, rows, nsym, p.bytes, SEALED_NAME, colours)
                 } else {
@@ -248,7 +249,15 @@ class TransmitActivity : AppCompatActivity() {
                     return@runOnUiThread
                 }
                 opened.fold(
-                    onSuccess = { t -> begin(t, divisor, marginPx, seconds) },
+                    onSuccess = { t ->
+                        // Preparing a large document is asynchronous. An authoritative account
+                        // refresh may remove Pro meanwhile; recheck before the first optical frame.
+                        if (uris.size > 1 && !Entitlements.has(Entitlements.Feature.Batch)) {
+                            t.close()
+                            fail("Sending this batch needs Pro on this phone. Your files have not been changed.")
+                            Entitlements.check(this, Entitlements.Feature.Batch)
+                        } else begin(t, divisor, marginPx, seconds)
+                    },
                     onFailure = { e -> fail(e.message ?: "The file could not be read.") },
                 )
             }

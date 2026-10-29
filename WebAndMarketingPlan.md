@@ -1,5 +1,10 @@
 # FileFlow — Cross-Platform Website, Web App & Marketing Master Plan
 
+> **Status:** Proposed planning snapshot; current commercial policy in PRODUCT.md
+> **Owner:** Product / web
+> **Last reviewed:** 2026-10-28
+> **Related:** PRODUCT.md, NATIVE_RELEASES.md
+
 **Repository:** https://github.com/JoshuaGessner/FileFlow  
 **Date:** October 25, 2026  
 **Status:** Active development and platform testing  
@@ -10,6 +15,12 @@ work. It is not a release status report. For current distribution and account be
 [NATIVE_RELEASES.md](NATIVE_RELEASES.md), [desktop/ACCOUNTS.md](desktop/ACCOUNTS.md), and the separate
 [website repository](https://github.com/JoshuaGessner/FileFlow-Web). Desktop automatic updates are
 still proposed in [DESKTOP_UPDATES_PLAN.md](DESKTOP_UPDATES_PLAN.md); paid sales remain disabled.
+
+**October 28 decision:** [PRODUCT.md](PRODUCT.md) is the current commercial policy: every desktop
+feature is free; Android Free retains single-file transfers and security; $10 USD one-time Android
+Pro adds batch sending/receiving and bulk file actions, with an initial US Play launch. Older paid
+desktop proposals below are superseded. Google Play production approval and real purchase tests
+remain release gates.
 
 ---
 
@@ -603,21 +614,22 @@ Offer standard optical transfer functionality without payment.
 
 Use free distribution to build adoption and demonstrate the technology.
 
-## Optional paid desktop productivity features
+## Android Pro convenience workflows (updated October 28)
 
-Investigate advanced paid capabilities that provide real convenience rather than withholding essential security or basic transfer functionality.
+Desktop productivity remains free. Android's one-time Pro upgrade sells repeat-work convenience
+while preserving full-speed single-file transfers, encryption, pairing and teams in Free.
 
-Potential candidates include:
+The launch feature list is:
 
-- Advanced batch workflow automation.
-- Scriptable professional integrations.
-- Transfer scheduling and queue management.
-- Advanced presenter and broadcast management.
-- Specialized power-user tooling.
+- Multi-file batch sending on Android.
+- Multi-file batch receiving on Android, including batches sent by the free desktop.
+- Selecting, sharing, resending and deleting several received files together.
 
-These are ideas to validate, not existing capabilities or committed premium features.
+Folder recursion, scheduling and automation are future ideas, not included launch promises.
 
-Consider a one-time Pro purchase rather than an early subscription model.
+The approved US launch price is $10 USD one time through Google Play product `fileflow_pro`.
+The final checkout price comes from Google Play. See [PRODUCT.md](PRODUCT.md) for account restoration,
+receiving-device enforcement, offline limits and the US-first rollout.
 
 ## Commercial SDK licensing
 

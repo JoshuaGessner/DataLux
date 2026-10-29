@@ -1,6 +1,9 @@
 # Desktop update plan
 
-Status: proposed architecture and delivery plan, 2026-10-25. Implementation has not started.
+> **Status:** Proposed; implementation has not started
+> **Owner:** Desktop / release engineering
+> **Last reviewed:** 2026-10-28
+> **Related:** PRODUCT.md, NATIVE_RELEASES.md
 
 ## Intended experience
 
@@ -256,10 +259,10 @@ filenames, camera images, team names, keys, transfer history, or account identif
 access logs still exist; document their retention without labeling update requests as telemetry-free
 network traffic. Routine update failures stay in bounded local diagnostic logs unless shared by the user.
 
-For future commercial plans, separate update availability from a signed license's upgrade eligibility.
-Never silently install a paid major version that removes currently licensed use. Clearly offer an
-optional major upgrade while continuing the compatible supported branch/security policy. Define that
-policy before shipping paid plans; this plan does not set pricing or license terms.
+The October 28 product decision makes every desktop feature free. Desktop updates must not add an
+account, Pro purchase, paid-major-version check or activation gate. Android's one-time Pro offering
+does not restrict desktop use. Preserve legacy account/activation files for compatibility without
+requiring them. See [PRODUCT.md](PRODUCT.md) for the current policy.
 
 Detect installation ownership. For Flatpak/package-manager/store builds, show **Updates managed by
 your software store** and use that manager's supported update path. OS policy may control its timing
