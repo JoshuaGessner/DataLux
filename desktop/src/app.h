@@ -73,6 +73,9 @@ class App {
         bool no_camera = false;    // never open the camera (unattended runs: no permission prompt)
         std::string snapshot;
         double snapshot_after = 0;
+        // Diagnostic only: hold one exact optical state to separate color/geometry from mixing.
+        std::optional<std::uint32_t> diagnostic_frame;
+        std::size_t diagnostic_fec_nsym = kFecNsym;
     };
 
     App(SDL_Window* w, SDL_Renderer* r, Settings settings, Options options);
@@ -236,6 +239,7 @@ class App {
     std::unique_ptr<Receiver> receiver_;
     Camera rx_camera_;
     std::optional<ReceiveResult> rx_result_;
+    bool rx_diagnostics_open_ = false;
     std::vector<SavedFile> received_;
     std::map<std::string, std::int64_t> received_times_;
     bool received_dirty_ = true;

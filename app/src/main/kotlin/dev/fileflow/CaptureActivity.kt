@@ -18,7 +18,6 @@ import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.core.content.edit
-import androidx.core.content.edit
 import androidx.core.graphics.toColorInt
 import dev.fileflow.aim.AimAnalyser
 import dev.fileflow.aim.AimVerdict
@@ -375,10 +374,19 @@ class CaptureActivity : AppCompatActivity() {
         grantResults: IntArray,
     ) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        if (requestCode == REQ_CAMERA &&
-            grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED
-        ) {
+        if (requestCode != REQ_CAMERA) return
+        if (grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) {
             begin()
+        } else if (live) {
+            showReport("Camera permission is needed to receive a file.")
+            cameraFailurePrompt = com.google.android.material.dialog.MaterialAlertDialogBuilder(this)
+                .setTitle("Camera permission needed")
+                .setMessage("Allow camera access to receive from the sender's screen.")
+                .setPositiveButton("Retry") { _, _ ->
+                    requestPermissions(arrayOf(Manifest.permission.CAMERA), REQ_CAMERA)
+                }
+                .setNegativeButton("Close") { _, _ -> finish() }
+                .show()
         } else {
             showReport("Camera permission denied — nothing can be measured without it.")
         }
@@ -521,6 +529,18 @@ class CaptureActivity : AppCompatActivity() {
      * which no amount of waiting fixes.
      */
     private fun startLive() {
+        liveBackgrounded = false
+        stopLiveCapture()
+        closeLiveDecoder()
+        val generation = liveSession.start()
+        liveGeneration = generation
+        liveFinished = false
+        retryBatchReceive = null
+        cameraFailurePrompt?.dismiss()
+        cameraFailurePrompt = null
+        detailShownMs = 0L
+        dumpedStall = false
+        dumpedGood = false
         val maxWidth = intent.getIntExtra("maxWidth", 4096)
         // 0 = choose: 60 fps where this camera offers it at near-full resolution, else 30 (F60).
         val fps = intent.getIntExtra("fps", 0).takeIf { it > 0 }
@@ -530,7 +550,7 @@ class CaptureActivity : AppCompatActivity() {
         // 8 ms the exposure servo still sat at the sensor's floor, ISO 30, on the 2.2 MB transfer:
         // the light was never the limit. Never longer than a frame period.
         val exposureNs = minOf(intent.getLongExtra("exposureNs", 4_000_000L), 1_000_000_000L / fps)
-        SessionLog.start(this, "receive")
+        sessionLogOwner = SessionLog.start(this, "receive")
         SessionLog.i(LIVE_TAG, "live receive: $fps fps, exposure ${exposureNs / 1e6} ms, " +
             "${LiveDecoder.DEFAULT_LANES} decode lanes")
         val iso = intent.getIntExtra("iso", CameraRecorder.DEFAULT_ISO)
@@ -550,8 +570,8 @@ class CaptureActivity : AppCompatActivity() {
         val decoder = LiveDecoder(grids, exposureNs, lensPrior = lensPrior)
         liveDecoder = decoder
         statusCard?.set(
-            (if (encrypted) "Encrypted · " else "") + "Fill the picture with the sending screen.",
-            0f, LIVE_OK,
+            (if (encrypted) "Encrypted · " else "") + "Fill the picture with the sender's screen.",
+            0f, LIVE_WARN,
         )
         val started = SystemClock.elapsedRealtime()
         val rec = CameraRecorder(this)
@@ -576,6 +596,7 @@ class CaptureActivity : AppCompatActivity() {
         val power = getSystemService(android.os.PowerManager::class.java)
         val full = LiveDecoder.DEFAULT_LANES
         val thermal = android.os.PowerManager.OnThermalStatusChangedListener { status ->
+            if (!liveSession.accepts(generation)) return@OnThermalStatusChangedListener
             val lanes = when {
                 status >= android.os.PowerManager.THERMAL_STATUS_SEVERE -> 1
                 status >= android.os.PowerManager.THERMAL_STATUS_MODERATE -> (full / 2).coerceAtLeast(1)
@@ -590,13 +611,19 @@ class CaptureActivity : AppCompatActivity() {
         thermalListener = thermal
 
         decoder.onStatus = { s ->
-            val shown = coach.message(s)
             runOnUiThread {
+                // A frame already decoding when the activity backgrounds may finish verification.
+                // Let that terminal result save; ordinary late updates from a stopped camera stay quiet.
+                if (generation != liveGeneration || liveFinished || isFinishing || isDestroyed ||
+                    (!liveSession.accepts(generation) && !s.phase.terminal)) return@runOnUiThread
+                val shown = coach.message(s) ?: return@runOnUiThread
                 aimView?.let { av ->
                     if (s.gridKnown) av.setGrid(s.cols, s.rows)
-                    av.locked = s.screenInView
+                    av.patternFound = shown.patternFound
+                    av.receivingData = shown.productive
+                    av.invalidate()
                 }
-                statusCard?.set(shown.text, s.progress.toFloat(), shown.colour)
+                statusCard?.set(shown.text, shown.progress, shown.colour)
                 val now = SystemClock.elapsedRealtime()
                 if (now - detailShownMs >= DETAIL_EVERY_MS || s.phase.terminal) {
                     detailShownMs = now
@@ -609,24 +636,33 @@ class CaptureActivity : AppCompatActivity() {
 
         val liveAnalyser = AimAnalyser()
         var lastAimMs = 0L
-        Thread {
-            rec.record(
+        var lastCaptureLogMs = 0L
+        val receivedFrame = java.util.concurrent.atomic.AtomicBoolean(false)
+        liveThread = Thread {
+            val outcome = runCatching { rec.record(
                 bundleDir = "${filesDir.absolutePath}/live-discard",
                 frameCount = 0,  // until the file verifies or the person leaves
                 targetFps = fps,
                 maxWidth = maxWidth,
                 notes = "live receive — not a dataset",
                 writeFrames = false,
+                latestFrameOnly = true,
                 focusDiopters = focusDiopters,
                 exposureNs = exposureNs,
                 iso = iso,
                 rig = CameraRecorder.RigMetadata(gridCols = preferred.first, gridRows = preferred.second),
                 onFrame = { buf, w, h, stride ->
+                    if (!liveSession.accepts(generation)) return@record
+                    receivedFrame.set(true)
                     if (aimView?.sensorRotation != rec.sensorOrientation) {
                         aimView?.sensorRotation = rec.sensorOrientation
                     }
                     previewView?.submit(buf, w, h, stride, rec.sensorOrientation, rec.frameChroma)
-                    decoder.offer(buf, w, h, stride, SystemClock.elapsedRealtimeNanos(), rec.frameChroma)
+                    // Sensor time orders optical captures, even on a non-REALTIME camera. Only
+                    // absent timestamps use arrival time; UI timers never subtract these clocks.
+                    val timestampNs = rec.frameTimestampNs.takeIf { it > 0 }
+                        ?: SystemClock.elapsedRealtimeNanos()
+                    decoder.offer(buf, w, h, stride, timestampNs, rec.frameChroma)
                     // Raw frames for offline diagnosis (FrameDump), when something asked for them.
                     val dumpNow = SystemClock.elapsedRealtime()
                     if (dumpRequest > 0 && dumpNow - lastDumpMs >= DUMP_SPACING_MS &&
@@ -639,14 +675,19 @@ class CaptureActivity : AppCompatActivity() {
                     // Aim analysis drives the coaching, exposure and refocus decisions, and the
                     // coverage map. It runs on this thread and costs a pass over the frame, so a
                     // couple of times a second rather than per frame.
-                    val now = System.currentTimeMillis()
+                    val now = SystemClock.elapsedRealtime()
                     if (now - lastAimMs >= LIVE_AIM_INTERVAL_MS) {
                         lastAimMs = now
                         val grid = coach.grid
                         val aim = liveAnalyser.analyse(buf, w, h, stride, grid.first, grid.second)
                         coach.onAim(aim)
                         val fact = coach.cameraFact()
+                        if (now - lastCaptureLogMs >= 5000L) {
+                            lastCaptureLogMs = now
+                            SessionLog.i(LIVE_TAG, captureTiming(rec))
+                        }
                         runOnUiThread {
+                            if (!liveSession.accepts(generation) || isFinishing || isDestroyed) return@runOnUiThread
                             aimView?.let { av ->
                                 av.extraFact = fact
                                 if (aim != null) av.update(aim, w, h)
@@ -655,8 +696,19 @@ class CaptureActivity : AppCompatActivity() {
                         }
                     }
                 },
-            )
-        }.start()
+            ) }
+            if (generation == liveGeneration) SessionLog.i(LIVE_TAG, "capture stopped: ${captureTiming(rec)}")
+            runOnUiThread {
+                // Normal completion after stop/verification/exit is expected cancellation. A
+                // replaced session must never surface a late failure over the new preview.
+                if (!liveSession.accepts(generation) || isFinishing || isDestroyed) return@runOnUiThread
+                if (decoder.finished) return@runOnUiThread // its queued terminal status owns saving/reporting
+                liveThread = null
+                val error = outcome.exceptionOrNull()?.message ?: outcome.getOrNull()?.error
+                    ?: "The camera stopped before the transfer completed."
+                cameraFailed(generation, receivedFrame.get(), error)
+            }
+        }.also { it.start() }
     }
 
     /**
@@ -679,7 +731,10 @@ class CaptureActivity : AppCompatActivity() {
     }
 
     /** One sentence and its colour, for the top card. */
-    private data class Shown(val text: String, val colour: Int)
+    private data class Shown(
+        val text: String, val colour: Int, val productive: Boolean = false,
+        val patternFound: Boolean = false, val progress: Float = 0f,
+    )
 
     /**
      * Decides what to TELL the person, and does the camera housekeeping a person cannot.
@@ -810,35 +865,41 @@ class CaptureActivity : AppCompatActivity() {
         }
 
         /**
-         * Decode-lane threads, per decoded frame -- several at once, and not necessarily in order,
-         * so serialised here, and a status older than one already shown is answered with what is
-         * already showing rather than allowed to move the card backwards (F60).
+         * UI thread, per decoded status. Lane callbacks can arrive out of order: discard older
+         * statuses so neither progress nor a previous transfer can replace the current feedback.
          */
         @Synchronized
-        fun message(s: LiveStatus): Shown {
+        fun message(s: LiveStatus): Shown? {
             val now = SystemClock.elapsedRealtime()
-            val held0 = shown
-            if (held0 != null && !s.phase.terminal && s.gridKnown == lastGridKnown &&
-                s.frames < lastFrames
-            ) {
-                return held0
+            val feedback = feedbackState.update(ReceiveFeedbackState.Sample(
+                s.sessionId, s.senderSwitches, s.frames, s.usefulSymbols, s.progress,
+                s.screenInView || s.gridKnown, s.cols, s.rows,
+            ), now)
+            if (!feedback.accepted) return null
+            if (feedback.epochChanged) {
+                shown = null
+                shownKind = ""
             }
-            lastFrames = s.frames
-            lastGridKnown = s.gridKnown
             if (s.gridKnown) grid = s.cols to s.rows
             if (s.recentReadFraction > 0.0) lastReadMs = now
             if (s.screenInView) screenSeenMs = now
-            if (s.payloadFrames > lastPayloadFrames) {
-                lastPayloadFrames = s.payloadFrames
-                lastPayloadMs = now
+            // Manifests, repeated payloads and a full combining buffer can all pass CRC without
+            // adding file data. Only useful rank or byte-progress growth earns green feedback.
+            val productive = feedback.productive
+            val decoderSays = "decoder:${s.phase}/${s.hint}" to Shown(
+                if (s.phase == LivePhase.Verified) "Verified — saving file…" else s.message,
+                colourFor(s, productive),
+            )
+            val waiting = when {
+                feedback.progress > 0.0 -> "paused" to Shown(
+                    "Transfer paused — aim at the sender's screen. Progress is saved.", LIVE_WARN)
+                feedback.patternFound -> "pattern" to Shown(
+                    "Pattern found — adjusting to read file data. Hold steady, or tap to focus.", LIVE_WARN)
+                else -> "finding" to Shown("Fill the picture with the sender's screen.", LIVE_WARN)
             }
-            // PRODUCTIVE means data arriving, not merely headers being read. On the first
-            // hand-held transfer the headers read on every frame at 12 cm while almost no payload
-            // did, and the decoder's own "reading" message hid that for 2.5 minutes (F59).
-            val productive = now - lastPayloadMs < PRODUCTIVE_WINDOW_MS
-            val decoderSays = "decoder:${s.phase}/${s.hint}" to Shown(s.message, colourFor(s))
-            val (kind, wanted) = if (productive || s.phase.terminal) decoderSays
-                                 else diagnose(s) ?: decoderSays
+            val (kind, wanted) = if (productive || s.phase.terminal ||
+                (s.senderSwitches > 0 && s.sessionId == 0L)) decoderSays
+                                 else diagnose(s, feedback.stalledForMs) ?: waiting
 
             // Hold a message for a moment before replacing it with a different KIND of message.
             // Without this the card changed several times a second -- "reading", "not readable",
@@ -846,7 +907,7 @@ class CaptureActivity : AppCompatActivity() {
             // the person holding it (F59). The same kind of message (progress ticking up) updates
             // freely, and the end of the transfer is never held back.
             val held = shown
-            val out = if (held == null || kind == shownKind || s.phase.terminal ||
+            val chosen = if (held == null || kind == shownKind || s.phase.terminal ||
                 now - shownSinceMs >= MIN_MESSAGE_MS
             ) {
                 if (kind != shownKind) {
@@ -856,12 +917,18 @@ class CaptureActivity : AppCompatActivity() {
                 shown = wanted
                 wanted
             } else held
+            val out = chosen.copy(
+                colour = if (!s.phase.terminal && !productive) LIVE_WARN else chosen.colour,
+                productive = productive && !s.phase.terminal,
+                patternFound = feedback.patternFound, progress = feedback.progress.toFloat(),
+            )
+            shown = out
             // Frames for diagnosis, automatically: three when colour stalls, once per session, and
             // one at the first good data, for comparison.
             if (kind == "colour-stall" && !dumpedStall) {
                 dumpedStall = true
                 requestDump(3, "stall")
-            } else if (s.payloadFrames > 0 && !dumpedGood) {
+            } else if (productive && !dumpedGood) {
                 dumpedGood = true
                 requestDump(1, "good")
             }
@@ -875,33 +942,25 @@ class CaptureActivity : AppCompatActivity() {
             return out
         }
 
-        private var lastFrames = 0L
-        private var lastGridKnown = false
-        @Volatile private var lastPayloadMs = 0L
-        private val coachStartMs = SystemClock.elapsedRealtime()
-        private var lastPayloadFrames = 0L
+        private val feedbackState = ReceiveFeedbackState(PRODUCTIVE_WINDOW_MS)
         private var shown: Shown? = null
         private var shownKind = ""
         private var shownSinceMs = 0L
 
         /** Why nothing is arriving, when the camera and the aim analysis can tell. */
-        private fun diagnose(s: LiveStatus): Pair<String, Shown>? {
+        private fun diagnose(s: LiveStatus, stalledForMs: Long): Pair<String, Shown>? {
             val a = aim ?: return null
             val progress = if (s.progress > 0.0) " Nothing received so far is lost." else ""
-            val now = SystemClock.elapsedRealtime()
             return when {
                 a.verdict == AimVerdict.NoScreenFound -> null  // the decoder's "point at" is right
-                // The screen is in view and its headers read -- framing, focus and exposure are all
-                // good enough -- yet no colour frame has decoded for a while. That is this camera
-                // and that screen not separating the colours (F65, F66), and nothing the person can
-                // do with THIS phone fixes it; the sending phone's setting can: from eight colours
-                // to four, and from four to black and white.
-                s.colorSpread > 0.0 && s.recentReadFraction >= 0.5 &&
-                    now - maxOf(lastPayloadMs, coachStartMs) > COLOUR_STALL_MS ->
+                // Headers reading without useful data is evidence for a mode recommendation,
+                // not proof of one cause: blur, color loss, FEC and duplicate states can contribute.
+                s.bitsPerCell > 1 && s.colorSpread > 0.0 && s.recentReadFraction >= 0.5 &&
+                    stalledForMs > COLOUR_STALL_MS ->
                     "colour-stall" to Shown(
-                        "Reading the screen, but not its colours. On the sending phone, set " +
-                            (if (s.bitsPerCell >= 3) "Speed to Fast (four colours)."
-                             else "Speed to Steady (black and white).") + progress,
+                        "Pattern reads, but file data is stalled. Try " +
+                            (if (s.bitsPerCell >= 3) "Fast (four colours) on the sender."
+                             else "Steady (black and white) on the sender.") + progress,
                         LIVE_WARN,
                     )
                 // "Too close" is now only the lens's own limit. It also used to fire under 15 cm
@@ -929,11 +988,69 @@ class CaptureActivity : AppCompatActivity() {
     }
 
     private var liveRecorder: CameraRecorder? = null
+    private var sessionLogOwner: Long? = null
     private var liveDecoder: LiveDecoder? = null
+    private var liveThread: Thread? = null
+    private val liveSession = LiveCaptureSession()
+    @Volatile private var liveGeneration = 0L
+    private var liveBackgrounded = false
+    private var cameraFailurePrompt: androidx.appcompat.app.AlertDialog? = null
     private var liveFinished = false
     private var batchPromptShown = false
     private var batchPrompt: androidx.appcompat.app.AlertDialog? = null
     private var retryBatchReceive: (() -> Unit)? = null
+
+    private fun captureTiming(rec: CameraRecorder): String {
+        val t = rec.telemetry
+        fun ms(v: dev.fileflow.capture.CaptureTelemetry.Timing) =
+            if (v.samples > 0) "%.1f/%.1f ms".format(v.meanNs / 1e6, v.maxNs / 1e6) else "unavailable"
+        return "camera latest=${t.latestFrameOnly} acquired=${t.acquiredImages} empty=${t.emptyNotifications}; " +
+            "arrival avg/max=${ms(t.callbackInterval)} callback=${ms(t.callbackDuration)}; " +
+            "delivery age=${if (t.timestampsAreRealtime) ms(t.deliveryAge) else "unknown clock"}; " +
+            "invalid timestamps=${t.invalidDeliveryTimestamps}; internally superseded count unavailable"
+    }
+
+    /** UI thread: each session's camera/thermal resources are stopped exactly once. */
+    private fun stopLiveCapture() {
+        if (!liveSession.stop(liveGeneration)) return
+        liveRecorder?.cancel()
+        liveRecorder = null
+        thermalListener?.let {
+            getSystemService(android.os.PowerManager::class.java)?.removeThermalStatusListener(it)
+        }
+        thermalListener = null
+    }
+
+    /** A saving thread may release the decoder after the activity has gone away. */
+    @Synchronized private fun closeLiveDecoder(expected: LiveDecoder? = liveDecoder) {
+        if (expected == null || liveDecoder !== expected) return
+        liveDecoder = null
+        expected.close()
+    }
+
+    private fun cameraFailed(generation: Long, hadFrames: Boolean, error: String) {
+        if (!liveSession.accepts(generation)) return
+        liveFinished = true
+        retryBatchReceive = null
+        batchPrompt?.dismiss()
+        batchPrompt = null
+        stopLiveCapture()
+        closeLiveDecoder()
+        val title = if (hadFrames) "Camera stopped" else "Camera couldn't start"
+        SessionLog.i(LIVE_TAG, "$title: $error")
+        statusCard?.set("$title. Retry to receive again.", -1f, LIVE_BAD)
+        statusCard?.setDetail(null)
+        aimView?.let { it.receivingData = false; it.invalidate() }
+        cameraFailurePrompt = com.google.android.material.dialog.MaterialAlertDialogBuilder(this)
+            .setTitle(title)
+            .setMessage(error)
+            .setPositiveButton("Retry") { _, _ ->
+                if (!isFinishing && !isDestroyed) startLive()
+            }
+            .setNegativeButton("Close") { _, _ -> finish() }
+            .setCancelable(false)
+            .show()
+    }
 
     /** An untrusted hint may explain an upgrade once; it must never prevent a single-file receive. */
     private fun suggestBatchPro() {
@@ -947,7 +1064,7 @@ class CaptureActivity : AppCompatActivity() {
                 "shows the final price. You can restore an existing purchase, or ask the sender to send " +
                 "one file at a time for free.")
             .setPositiveButton("View Pro / restore") { _, _ ->
-                liveRecorder?.cancel()
+                stopLiveCapture()
                 Entitlements.openPro(this, Entitlements.Feature.BatchReceive)
                 finish() // No camera or optical work continues behind checkout. Receive again afterward.
             }
@@ -957,18 +1074,24 @@ class CaptureActivity : AppCompatActivity() {
     /** Encrypted mode: only a file sealed to the current pairing is accepted. */
     private val encrypted by lazy { intent.getBooleanExtra("encrypted", false) }
 
-    private fun colourFor(s: LiveStatus): Int = when {
+    private fun colourFor(s: LiveStatus, productive: Boolean): Int = when {
         s.phase == LivePhase.Failed -> LIVE_BAD
+        s.phase == LivePhase.Verified -> LIVE_WARN
         s.hint != LiveHint.None -> LIVE_WARN
+        !productive -> LIVE_WARN
         else -> LIVE_OK
     }
 
     private fun finishLive(s: LiveStatus, elapsedMs: Long) {
         if (liveFinished) return
         liveFinished = true
+        liveBackgrounded = false
+        cameraFailurePrompt?.dismiss()
+        cameraFailurePrompt = null
+        retryBatchReceive = null
         batchPrompt?.dismiss()
         batchPrompt = null
-        liveRecorder?.cancel()
+        stopLiveCapture()
         val decoder = liveDecoder ?: return
         // Off the UI thread: the file can be megabytes. The decoder holds the verified bytes, so it
         // is freed only once they are saved -- leaving the screen at the moment of completion used
@@ -1067,7 +1190,7 @@ class CaptureActivity : AppCompatActivity() {
                 }
             } finally {
                 saving.set(false)
-                if (destroyed) decoder.close()  // the screen went away while this was saving
+                if (destroyed) closeLiveDecoder(decoder)  // the screen went away while this was saving
             }
         }.start()
     }
@@ -1374,20 +1497,43 @@ class CaptureActivity : AppCompatActivity() {
         aimView = null
     }
 
+    override fun onStart() {
+        super.onStart()
+        if (liveBackgrounded && !liveFinished && !isFinishing) {
+            liveBackgrounded = false
+            cameraFailurePrompt = com.google.android.material.dialog.MaterialAlertDialogBuilder(this)
+                .setTitle("Receiving paused")
+                .setMessage("The camera stopped when you left this screen. Restart to receive the file from the beginning.")
+                .setPositiveButton("Restart receiving") { _, _ -> startLive() }
+                .setNegativeButton("Close") { _, _ -> finish() }
+                .setCancelable(false)
+                .show()
+        }
+    }
+
+    override fun onStop() {
+        if (live && !liveFinished && liveSession.accepts(liveGeneration)) {
+            liveBackgrounded = true
+            stopLiveCapture()
+            aimView?.let { it.receivingData = false; it.invalidate() }
+            statusCard?.set("Receiving paused", -1f, LIVE_WARN)
+            statusCard?.setDetail(null)
+        }
+        super.onStop()
+    }
+
     override fun onDestroy() {
         super.onDestroy()
         destroyed = true
+        cameraFailurePrompt?.dismiss()
         batchPrompt?.dismiss()
         retryBatchReceive = null
         aimRecorder?.cancel()
         aimThread?.join(2000)
-        liveRecorder?.cancel()
+        stopLiveCapture()
         // Unless a verified file is still being saved from it: the saving thread frees it then.
-        if (!saving.get()) liveDecoder?.close()
-        thermalListener?.let {
-            getSystemService(android.os.PowerManager::class.java)?.removeThermalStatusListener(it)
-        }
-        if (liveRecorder != null) SessionLog.close()
+        if (!saving.get()) closeLiveDecoder()
+        sessionLogOwner?.let(SessionLog::close)
     }
 
     companion object {
@@ -1407,9 +1553,9 @@ class CaptureActivity : AppCompatActivity() {
         private const val LIVE_AIM_INTERVAL_MS = 400L
         const val LIVE_TAG = "FileFlow.Live"
         private const val RECEIVE_TIPS =
-"• Fill the picture with the sending screen: its pattern just inside the corner marks. " +
+"• Fill the picture with the sender's screen: its pattern just inside the corner marks. " +
                 "That is where it reads fastest.\n\n" +
-                "• Keep the two phones parallel.\n\n" +
+                "• Keep the camera facing the sender's screen squarely.\n\n" +
                 "• Tap the picture to refocus.\n\n" +
                 "• If it pauses, just aim back: nothing received so far is lost.\n\n" +
                 "• The ⓘ button shows what the camera sees, for troubleshooting."
@@ -1432,7 +1578,7 @@ class CaptureActivity : AppCompatActivity() {
         private const val DUMP_SPACING_MS = 300L
         private const val WHITE_CEILING = 245.0
         private const val WHITE_FLOOR = 170.0
-        /** A payload decoded this recently counts as data arriving. */
+        /** Useful rank or byte progress increased this recently: data is arriving. */
         private const val PRODUCTIVE_WINDOW_MS = 2500L
         /** Shortest time a message of one kind stays up before a different kind replaces it. */
         private const val MIN_MESSAGE_MS = 1500L

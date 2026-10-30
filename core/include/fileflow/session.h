@@ -60,6 +60,13 @@ struct TransmitConfig {
 // other file, a different session. Never 0.
 [[nodiscard]] std::uint32_t SessionIdFor(std::span<const std::uint8_t> payload, std::string_view name);
 
+// Native senders also bind the wire configuration: changing modulation/FEC/symbol layout must
+// start a new transfer, while resending identical bytes with identical settings can resume it.
+// The two-argument identity remains unchanged for historical senders and golden vectors.
+[[nodiscard]] std::uint32_t SessionIdForConfiguration(std::span<const std::uint8_t> payload,
+                                                      std::string_view name, GridGeometry grid,
+                                                      const TransmitConfig& cfg);
+
 class TransmitSession {
   public:
     // `layout` must outlive the session.
@@ -219,6 +226,11 @@ struct DecodedFrame {
 // the receiver decoded 23-33 frames a second -- 15-20 of the sender's 30 states (F69).
 class FrameDecoder {
   public:
+    struct Timings {
+        double header_ms = 0;
+        double demod_ms = 0;
+        double fec_ms = 0;
+    };
     FrameDecoder(const FrameLayout& layout, ReceiveConfig cfg = {})
         : mod_(layout), color8_(layout, ModulationProfile::kM5EightColor),
           color4_(layout, ModulationProfile::kM3FourColor), cfg_(cfg) {}
@@ -228,6 +240,7 @@ class FrameDecoder {
 
     // The FEC for a code rate and profile; nullptr when this grid cannot carry it.
     const IntraFec* FecFor(std::size_t nsym, std::size_t bits_per_cell);
+    [[nodiscard]] const Timings& last_timings() const noexcept { return timings_; }
 
   private:
     M0Modulator mod_;
@@ -235,6 +248,7 @@ class FrameDecoder {
     ColorModulator color4_;
     HeaderCodec hdr_;
     ReceiveConfig cfg_;
+    Timings timings_;
     // By (nsym, bits per cell); nullopt = unsupported. Built lazily, per decoder.
     std::map<std::pair<std::size_t, std::size_t>, std::optional<IntraFec>> fec_;
 };

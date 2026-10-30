@@ -73,6 +73,7 @@ class PairActivity : AppCompatActivity() {
     private lateinit var done: MaterialButton
 
     private var thread: HandlerThread? = null
+    private var sessionLogOwner: Long? = null
     private var handler: Handler? = null
     private var camera: CameraDevice? = null
     private var session: CameraCaptureSession? = null
@@ -157,7 +158,7 @@ class PairActivity : AppCompatActivity() {
             status.text = "That team is no longer on this phone."
             return
         }
-        SessionLog.start(this, "pair")
+        sessionLogOwner = SessionLog.start(this, "pair")
         SessionLog.i(TAG, when {
             inviting != null -> "inviting to a team of ${inviting?.members?.size}"
             joining -> "joining a team"
@@ -178,6 +179,11 @@ class PairActivity : AppCompatActivity() {
     override fun onPause() {
         super.onPause()
         closeCamera()
+    }
+
+    override fun onDestroy() {
+        sessionLogOwner?.let(SessionLog::close)
+        super.onDestroy()
     }
 
     override fun onRequestPermissionsResult(code: Int, permissions: Array<out String>, results: IntArray) {

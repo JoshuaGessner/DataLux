@@ -84,6 +84,25 @@ data class LiveStatus(
     val gridKnown: Boolean,
     /** Advisory manifest flag only; the verified envelope is the final authority. */
     val batchSuggested: Boolean = false,
+    val sessionId: Long = 0,
+    val senderSwitches: Long = 0,
+    val usefulSymbols: Long = 0,
+    val headerFrames: Long = 0,
+    val fecFailedFrames: Long = 0,
+    val crcFailedFrames: Long = 0,
+    val timedFrames: Long = 0,
+    val pipelineMs: Double = 0.0,
+    val headerMs: Double = 0.0,
+    val demodMs: Double = 0.0,
+    val fecMs: Double = 0.0,
+    val combineMs: Double = 0.0,
+    val lockWaitMs: Double = 0.0,
+    val commitMs: Double = 0.0,
+    val trackingMs: Double = 0.0,
+    val alignmentMs: Double = 0.0,
+    val lumaSamplingMs: Double = 0.0,
+    val photometryMs: Double = 0.0,
+    val colorSamplingMs: Double = 0.0,
 )
 
 /**
@@ -126,7 +145,9 @@ class LiveDecoder(
      * another lane may be inside one of them at the moment of the switch, and freeing it there
      * would be a use-after-free.
      */
-    private class Candidate(val cols: Int, val rows: Int, val handle: Long)
+    private class Candidate(val cols: Int, val rows: Int, val handle: Long) {
+        val telemetry = ReceiveTelemetryWindow()
+    }
 
     private val candidates: List<Candidate> =
         grids.distinct().map { (c, r) -> Candidate(c, r, NativeReceiver.open(c, r, exposureNs, lanes, lensPrior)) }
@@ -180,8 +201,6 @@ class LiveDecoder(
     private val decoded = java.util.concurrent.atomic.AtomicLong()
     private val decodeNs = java.util.concurrent.atomic.AtomicLong()
     private val windowStartNs = java.util.concurrent.atomic.AtomicLong(System.nanoTime())
-    /** Distinct states at the last telemetry line, for the states-seen rate between lines. */
-    @Volatile private var lastDistinct = 0L
     private val closed = AtomicBoolean(false)
     private val nativeLock = Any()
 
@@ -299,24 +318,39 @@ class LiveDecoder(
         val c = committed ?: pick(ts)
         val t0 = System.nanoTime()
         val s = ingestInto(lane, c, buf, width, height, ts) ?: return null
+        // A losing grid may finish after another lane proved the sender's grid. Its counters and
+        // progress belong to another candidate and must not reset the visible active transfer.
+        if (committed?.let { it !== c } == true) return null
         decodeNs.addAndGet(System.nanoTime() - t0)
         val n = decoded.incrementAndGet()
         if (n % TELEMETRY_EVERY == 0L) {
             val now = System.nanoTime()
             val wall = (now - windowStartNs.getAndSet(now)) / 1e9
+            val interval = c.telemetry.observe(now, ReceiveTelemetryWindow.Sample(
+                s.sessionId, s.senderSwitches, s.timedFrames, s.distinctStates,
+                s.headerFrames, s.fecFailedFrames, s.crcFailedFrames,
+                listOf(s.pipelineMs, s.headerMs, s.demodMs, s.fecMs, s.combineMs, s.lockWaitMs, s.commitMs,
+                    s.trackingMs, s.alignmentMs, s.lumaSamplingMs, s.photometryMs, s.colorSamplingMs),
+            ))
+            val states = interval?.let { "%.1f".format(it.statesPerSecond) } ?: "n/a (new epoch)"
+            val timings = interval?.let {
+                val labels = listOf("sample", "header", "demod", "FEC", "combine", "lock", "commit",
+                    "track", "align", "luma", "photometry", "chroma")
+                "; stage ms/frame " + labels.zip(it.stageMeansMs).joinToString(" ") { (label, ms) -> "$label=${"%.2f".format(ms)}" } +
+                    "; interval headers=${it.headers} fec-fail=${it.fecFailures} crc-fail=${it.crcFailures}"
+            } ?: ""
             SessionLog.i(TAG, "decoded $n of ${taken.get()} taken / ${offered.get()} offered frames; " +
-                "${"%.1f".format(TELEMETRY_EVERY / wall)} decoded/s on ${laneList.size} lanes, " +
+                "${"%.1f".format(TELEMETRY_EVERY / wall)} decoded/s on ${activeLanes.coerceIn(1, laneList.size)} lanes, " +
                 "${"%.1f".format(decodeNs.getAndSet(0) / 1e6 / TELEMETRY_EVERY)} ms each, " +
                 "${width}x$height, grid ${c.cols}x${c.rows}" +
                 "${if (committed == null) " (searching)" else ""}, phase ${s.phase}, " +
                 "read ${"%.2f".format(s.recentReadFraction)}, payloads ${s.payloadFrames} " +
                 "(${s.combinedFrames} combined), lens ${"%.3f".format(s.lensStrength)}, " +
                 "blur ${"%.2f".format(s.motionBlurCells)} cells, " +
-                "${"%.1f".format((s.distinctStates - lastDistinct).coerceAtLeast(0) / wall)} " +
-                "states/s seen, ${"%.0f".format(s.bytesPerSecond / 1024)} KB/s" +
-                if (s.colorSpread > 0) ", colours ${"%.0f".format(s.colorSpread)} apart, " +
-                    "noise ${"%.1f".format(s.colorNoise)}" else "")
-            lastDistinct = s.distinctStates
+                "$states states/s seen, ${"%.0f".format(s.bytesPerSecond / 1024)} KiB/s" +
+                (if (s.colorSpread > 0) ", colours ${"%.0f".format(s.colorSpread)} apart, " +
+                    "noise ${"%.1f".format(s.colorNoise)}" else "") +
+                "; bits/cell=${s.bitsPerCell} useful=${s.usefulSymbols} switches=${s.senderSwitches}" + timings)
         }
         val payloads = s.payloadFrames
         if (payloads > (lastPayloads[c] ?: -1L)) {
@@ -401,6 +435,25 @@ class LiveDecoder(
             rows = c.rows,
             gridKnown = committed === c,
             batchSuggested = slots[Slot.BatchHint.ordinal] == 1.0,
+            sessionId = slots[Slot.SessionId.ordinal].toLong(),
+            senderSwitches = slots[Slot.SenderSwitches.ordinal].toLong(),
+            usefulSymbols = slots[Slot.UsefulSymbols.ordinal].toLong(),
+            headerFrames = slots[Slot.HeaderFrames.ordinal].toLong(),
+            fecFailedFrames = slots[Slot.FecFailedFrames.ordinal].toLong(),
+            crcFailedFrames = slots[Slot.CrcFailedFrames.ordinal].toLong(),
+            timedFrames = slots[Slot.TimedFrames.ordinal].toLong(),
+            pipelineMs = slots[Slot.PipelineMs.ordinal],
+            headerMs = slots[Slot.HeaderMs.ordinal],
+            demodMs = slots[Slot.DemodMs.ordinal],
+            fecMs = slots[Slot.FecMs.ordinal],
+            combineMs = slots[Slot.CombineMs.ordinal],
+            lockWaitMs = slots[Slot.LockWaitMs.ordinal],
+            commitMs = slots[Slot.CommitMs.ordinal],
+            trackingMs = slots[Slot.TrackingMs.ordinal],
+            alignmentMs = slots[Slot.AlignmentMs.ordinal],
+            lumaSamplingMs = slots[Slot.LumaSamplingMs.ordinal],
+            photometryMs = slots[Slot.PhotometryMs.ordinal],
+            colorSamplingMs = slots[Slot.ColorSamplingMs.ordinal],
         )
     }
 
@@ -573,6 +626,9 @@ class LiveDecoder(
         ScreenInView, Frames, FileSize, PayloadFrames, BytesPerSecond, DistinctStates,
         ColorSpread, ColorNoise, TransferSeconds, BitsPerCell, OriginalSize, Codec, CompressMs,
         CombinedFrames, LensStrength, BatchHint,
+        SessionId, SenderSwitches, UsefulSymbols, HeaderFrames, FecFailedFrames, CrcFailedFrames,
+        TimedFrames, PipelineMs, HeaderMs, DemodMs, FecMs, CombineMs, LockWaitMs, CommitMs,
+        TrackingMs, AlignmentMs, LumaSamplingMs, PhotometryMs, ColorSamplingMs,
     }
 
     companion object {

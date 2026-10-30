@@ -13,6 +13,7 @@
 #include <fileflow/grid.h>
 #include <fileflow/image.h>
 
+#include <array>
 #include <vector>
 
 namespace fileflow {
@@ -83,6 +84,13 @@ class CellSampler {
                                              const Homography& grid_to_image,
                                              const RadialDistortion& lens = {}) const;
 
+    // Two planes with the same geometry (e.g. U/V). Equal nonempty dimensions share projection
+    // and bounds work, retaining Sample's per-plane arithmetic order and erasure rules. Missing
+    // or differently sized planes use independent Sample calls.
+    [[nodiscard]] std::array<std::vector<double>, 2> SamplePair(
+        const ImageView8& a, const ImageView8& b, const Homography& grid_to_image,
+        const RadialDistortion& lens = {}) const;
+
     // One cell, same rule as [Sample]: NaN when no sub-sample lands inside the frame.
     //
     // Exposed so a caller can evaluate a handful of cells cheaply. Sub-cell alignment needs to
@@ -97,6 +105,10 @@ class CellSampler {
 
   private:
     CellSampler(GridGeometry g, SamplerConfig cfg);
+
+    [[nodiscard]] std::array<double, 2> SampleCellPair(
+        const ImageView8& a, const ImageView8& b, const Homography& grid_to_image,
+        std::uint32_t col, std::uint32_t row, const RadialDistortion& lens) const;
 
     GridGeometry g_;
     SamplerConfig cfg_;

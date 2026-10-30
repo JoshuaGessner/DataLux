@@ -132,4 +132,97 @@ std::vector<double> CellSampler::Sample(const ImageView8& img, const Homography&
     return out;
 }
 
+std::array<double, 2> CellSampler::SampleCellPair(
+    const ImageView8& a, const ImageView8& b, const Homography& grid_to_image,
+    std::uint32_t col, std::uint32_t row, const RadialDistortion& lens) const {
+    const auto n = static_cast<std::size_t>(cfg_.samples_per_axis);
+    // The same path decision and arithmetic as SampleCell, evaluated once for equal-size planes.
+    const auto& m = grid_to_image.m();
+    const double mid = 0.5 * (offsets_.front() + offsets_.back());
+    const double half = 0.5 * (offsets_.back() - offsets_.front());
+    const double cx = static_cast<double>(col) + mid;
+    const double cy = static_cast<double>(row) + mid;
+    const double w = m[6] * cx + m[7] * cy + m[8];
+    const double dw = (std::fabs(m[6]) + std::fabs(m[7])) * half;
+    if (std::fabs(w) > 1e-12 && dw < 1e-3 * std::fabs(w)) {
+        const double inv = 1.0 / w;
+        double x = (m[0] * cx + m[1] * cy + m[2]) * inv;
+        double y = (m[3] * cx + m[4] * cy + m[5]) * inv;
+        double xu = (m[0] - x * m[6]) * inv;
+        double xv = (m[1] - x * m[7]) * inv;
+        double yu = (m[3] - y * m[6]) * inv;
+        double yv = (m[4] - y * m[7]) * inv;
+        if (lens.active()) {
+            const double s = lens.Scale({x, y});
+            x = lens.cx + (x - lens.cx) * s;
+            y = lens.cy + (y - lens.cy) * s;
+            xu *= s;
+            xv *= s;
+            yu *= s;
+            yv *= s;
+        }
+        const double ex = (std::fabs(xu) + std::fabs(xv)) * half;
+        const double ey = (std::fabs(yu) + std::fabs(yv)) * half;
+        if (x - ex >= 0.0 && y - ey >= 0.0 && x + ex < static_cast<double>(a.width() - 1) &&
+            y + ey < static_cast<double>(a.height() - 1)) {
+            double sum_a = 0.0;
+            double sum_b = 0.0;
+            for (std::size_t oy = 0; oy < n; ++oy) {
+                const double dv = offsets_[oy] - mid;
+                const double rx = x + xv * dv;
+                const double ry = y + yv * dv;
+                for (std::size_t ox = 0; ox < n; ++ox) {
+                    const double du = offsets_[ox] - mid;
+                    const double px = rx + xu * du;
+                    const double py = ry + yu * du;
+                    sum_a += a.SampleBilinearInside(px, py);
+                    sum_b += b.SampleBilinearInside(px, py);
+                }
+            }
+            return {sum_a / static_cast<double>(n * n), sum_b / static_cast<double>(n * n)};
+        }
+    }
+
+    double sum_a = 0.0;
+    double sum_b = 0.0;
+    int hits = 0;
+    for (std::size_t oy = 0; oy < n; ++oy) {
+        const double gy = static_cast<double>(row) + offsets_[oy];
+        for (std::size_t ox = 0; ox < n; ++ox) {
+            const double gx = static_cast<double>(col) + offsets_[ox];
+            const Point2 p = lens.active() ? lens.Apply(grid_to_image.Apply({gx, gy}))
+                                           : grid_to_image.Apply({gx, gy});
+            const double va = a.SampleBilinear(p.x, p.y);
+            // For equally sized nonempty byte planes, coverage/NaN depends only on the point.
+            if (std::isnan(va)) continue;
+            const double vb = b.SampleBilinear(p.x, p.y);
+            sum_a += va;
+            sum_b += vb;
+            ++hits;
+        }
+    }
+    if (hits == 0) return {std::nan(""), std::nan("")};
+    return {sum_a / static_cast<double>(hits), sum_b / static_cast<double>(hits)};
+}
+
+std::array<std::vector<double>, 2> CellSampler::SamplePair(
+    const ImageView8& a, const ImageView8& b, const Homography& grid_to_image,
+    const RadialDistortion& lens) const {
+    if (a.empty() || b.empty() || a.width() != b.width() || a.height() != b.height()) {
+        return {Sample(a, grid_to_image, lens), Sample(b, grid_to_image, lens)};
+    }
+    const auto cells = static_cast<std::size_t>(g_.cells());
+    std::array<std::vector<double>, 2> out{
+        std::vector<double>(cells, std::nan("")), std::vector<double>(cells, std::nan(""))};
+    for (std::uint32_t r = 0; r < g_.rows; ++r) {
+        for (std::uint32_t c = 0; c < g_.cols; ++c) {
+            const auto values = SampleCellPair(a, b, grid_to_image, c, r, lens);
+            const auto i = static_cast<std::size_t>(r) * g_.cols + c;
+            if (!std::isnan(values[0])) out[0][i] = values[0];
+            if (!std::isnan(values[1])) out[1][i] = values[1];
+        }
+    }
+    return out;
+}
+
 }  // namespace fileflow

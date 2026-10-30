@@ -304,7 +304,7 @@ Status ColorModulator::Render(std::span<const std::uint8_t> header_coded,
 }
 
 void ColorModulator::DemodulatePayload(std::span<const double> rgb, SoftSymbolBuffer* out,
-                                       ColorDiagnostics* diag) const {
+                                       ColorDiagnostics* diag, ColorDemodulationConfig cfg) const {
     using Vec = std::array<double, 3>;
     const auto& pay_cells = layout_->payload_cells();
     out->resize(pay_cells.size() * bits_);  // every bit an erasure until proven otherwise
@@ -434,7 +434,7 @@ void ColorModulator::DemodulatePayload(std::span<const double> rgb, SoftSymbolBu
         }
         return best;
     };
-    for (int round = 0; round < 2; ++round) {
+    for (int round = 0; cfg.enable_local_centroids && round < 2; ++round) {
         std::vector<std::array<Vec, 8>> sum(tmu.size());
         std::vector<std::array<double, 8>> n(tmu.size());
         for (std::size_t s = 0; s < x.size(); ++s) {
@@ -586,35 +586,37 @@ void ColorModulator::DemodulatePayload(std::span<const double> rgb, SoftSymbolBu
     };
     auto diff = [](const Vec& a, const Vec& b) { return Vec{a[0] - b[0], a[1] - b[1], a[2] - b[2]}; };
 
-    std::vector<std::array<Vec, 2>> near(x.size());
+    std::vector<std::array<Vec, 2>> near(cfg.enable_bleed ? x.size() : 0);
     std::vector<bool> has_near(x.size(), false);
     Bleed bleed{};
     Mat w{};
     for (std::size_t i = 0; i < 3; ++i) w[i][i] = 1.0;
     double residual_var = 0.0;
-    constexpr int kPasses = 2;
+    const int kPasses = cfg.enable_bleed ? 2 : 1;
     for (int pass = 0; pass < kPasses; ++pass) {
-        // Least squares for the bleed: (F^T F) B^T = F^T R.
-        std::vector<std::vector<double>> ftf(kF, std::vector<double>(kF, 0.0));
-        std::vector<std::vector<double>> ftr(kF, std::vector<double>(3, 0.0));
-        std::size_t fitted = 0;
-        for (std::size_t s = 0; s < x.size(); ++s) {
-            has_near[s] = neighbours(pay_cells[slot[s]], &near[s]);
-            if (!has_near[s]) continue;
-            const Vec& own = tmu[tile_of(pay_cells[slot[s]])][static_cast<std::size_t>(label[pay_cells[slot[s]]])];
-            const Feat f = features(near[s], own);
-            const Vec r = diff(x[s], own);
-            for (std::size_t i = 0; i < kF; ++i) {
-                for (std::size_t k = 0; k < kF; ++k) ftf[i][k] += f[i] * f[k];
-                for (std::size_t k = 0; k < 3; ++k) ftr[i][k] += f[i] * r[k];
-            }
-            ++fitted;
-        }
         bleed = Bleed{};
-        std::vector<std::vector<double>> bt;
-        if (fitted > 64 && solve(ftf, ftr, &bt)) {
-            for (std::size_t i = 0; i < 3; ++i) {
-                for (std::size_t k = 0; k < kF; ++k) bleed[i][k] = bt[k][i];
+        if (cfg.enable_bleed) {
+            // Least squares for the bleed: (F^T F) B^T = F^T R.
+            std::vector<std::vector<double>> ftf(kF, std::vector<double>(kF, 0.0));
+            std::vector<std::vector<double>> ftr(kF, std::vector<double>(3, 0.0));
+            std::size_t fitted = 0;
+            for (std::size_t s = 0; s < x.size(); ++s) {
+                has_near[s] = neighbours(pay_cells[slot[s]], &near[s]);
+                if (!has_near[s]) continue;
+                const Vec& own = tmu[tile_of(pay_cells[slot[s]])][static_cast<std::size_t>(label[pay_cells[slot[s]]])];
+                const Feat f = features(near[s], own);
+                const Vec r = diff(x[s], own);
+                for (std::size_t i = 0; i < kF; ++i) {
+                    for (std::size_t k = 0; k < kF; ++k) ftf[i][k] += f[i] * f[k];
+                    for (std::size_t k = 0; k < 3; ++k) ftr[i][k] += f[i] * r[k];
+                }
+                ++fitted;
+            }
+            std::vector<std::vector<double>> bt;
+            if (fitted > 64 && solve(ftf, ftr, &bt)) {
+                for (std::size_t i = 0; i < 3; ++i) {
+                    for (std::size_t k = 0; k < kF; ++k) bleed[i][k] = bt[k][i];
+                }
             }
         }
         // Residual spread once the bleed is accounted for: the noise the decisions face.

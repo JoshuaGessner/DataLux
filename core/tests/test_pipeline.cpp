@@ -167,3 +167,79 @@ TEST(Alignment, AnAlreadyCorrectGridIsLeftAlone) {
     ASSERT_TRUE(p.ok());
     EXPECT_LT(WorstErrorCells(p.value().Align(s.img.view(), s.truth), s.truth), 0.06);
 }
+
+namespace {
+
+void ExpectValidTimings(const FramePipeline::Timings& t) {
+    const std::array stages{t.tracking_ms, t.alignment_ms, t.luma_sampling_ms,
+                            t.photometry_ms, t.color_sampling_ms};
+    double measured = 0;
+    for (const double ms : stages) {
+        EXPECT_TRUE(std::isfinite(ms));
+        EXPECT_GE(ms, 0);
+        measured += ms;
+    }
+    EXPECT_TRUE(std::isfinite(t.total_ms));
+    EXPECT_GE(t.total_ms, measured);
+}
+
+}  // namespace
+
+TEST(PipelineTiming, ResetsSkippedStagesAfterColorSuccessAndGeometryFailure) {
+    const Scene s;
+    auto pipeline = FramePipeline::Create(s.layout).value();
+    EXPECT_DOUBLE_EQ(pipeline.last_timings().total_ms, 0);
+    const Image8 u(s.img.width() / 2, s.img.height() / 2, 128);
+    const Image8 v(s.img.width() / 2, s.img.height() / 2, 128);
+    const ChromaPlanes chroma{u.view(), v.view()};
+
+    const auto colored = pipeline.Process(s.img.view(), 1, 1, &chroma);
+    ASSERT_TRUE(pipeline.last_ok());
+    ASSERT_FALSE(colored.cell_rgb.empty());
+    ExpectValidTimings(pipeline.last_timings());
+    EXPECT_GT(pipeline.last_timings().tracking_ms, 0);
+    EXPECT_GT(pipeline.last_timings().alignment_ms, 0);
+    EXPECT_GT(pipeline.last_timings().luma_sampling_ms, 0);
+    EXPECT_GT(pipeline.last_timings().photometry_ms, 0);
+    EXPECT_GT(pipeline.last_timings().color_sampling_ms, 0);
+
+    const auto luma = pipeline.Process(s.img.view(), 2, 33'333'334);
+    ASSERT_TRUE(pipeline.last_ok());
+    EXPECT_TRUE(luma.cell_rgb.empty());
+    ExpectValidTimings(pipeline.last_timings());
+    EXPECT_DOUBLE_EQ(pipeline.last_timings().color_sampling_ms, 0);
+
+    pipeline.Reset();
+    const Image8 blank(s.img.width(), s.img.height());
+    const auto failed = pipeline.Process(blank.view(), 3, 66'666'667, &chroma);
+    ASSERT_FALSE(pipeline.last_ok());
+    EXPECT_TRUE(failed.cell_rgb.empty());
+    ExpectValidTimings(pipeline.last_timings());
+    EXPECT_GT(pipeline.last_timings().tracking_ms, 0);
+    EXPECT_DOUBLE_EQ(pipeline.last_timings().alignment_ms, 0);
+    EXPECT_DOUBLE_EQ(pipeline.last_timings().luma_sampling_ms, 0);
+    EXPECT_DOUBLE_EQ(pipeline.last_timings().photometry_ms, 0);
+    EXPECT_DOUBLE_EQ(pipeline.last_timings().color_sampling_ms, 0);
+}
+
+TEST(PipelineTiming, PhotometricEarlyReturnRetainsCompletedStagesOnly) {
+    const Scene s;
+    PipelineConfig cfg;
+    // Geometry remains valid; the field estimator deliberately refuses this configuration.
+    cfg.photometric.search_radius = 0;
+    auto pipeline = FramePipeline::Create(s.layout, cfg).value();
+    const Image8 u(s.img.width() / 2, s.img.height() / 2, 128);
+    const Image8 v(s.img.width() / 2, s.img.height() / 2, 128);
+    const ChromaPlanes chroma{u.view(), v.view()};
+    const auto failed = pipeline.Process(s.img.view(), 1, 1, &chroma);
+    ASSERT_FALSE(pipeline.last_ok());
+    EXPECT_EQ(pipeline.diagnostics().geometry_failures, 0);
+    EXPECT_EQ(pipeline.diagnostics().photometric_failures, 1);
+    EXPECT_TRUE(failed.cell_rgb.empty());
+    ExpectValidTimings(pipeline.last_timings());
+    EXPECT_GT(pipeline.last_timings().tracking_ms, 0);
+    EXPECT_GT(pipeline.last_timings().alignment_ms, 0);
+    EXPECT_GT(pipeline.last_timings().luma_sampling_ms, 0);
+    EXPECT_GT(pipeline.last_timings().photometry_ms, 0);
+    EXPECT_DOUBLE_EQ(pipeline.last_timings().color_sampling_ms, 0);
+}

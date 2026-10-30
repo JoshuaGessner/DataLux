@@ -182,8 +182,15 @@ class AimView(context: Context, private var cols: Int, private var rows: Int) : 
     /** Show the coverage map and the numbers. Off in the receive screen until asked for. */
     @Volatile var details = true
 
-    /** The decoder has the screen (its markers matched): the simple outline turns green. */
-    @Volatile var locked = false
+    /** Amber confirms the pattern; green is reserved for recent useful file progress. */
+    @Volatile var patternFound = false
+    @Volatile var receivingData = false
+
+    private fun trackingColour(): Int = when {
+        receivingData -> "#69F0AE".toColorInt()
+        patternFound -> "#FFB74D".toColorInt()
+        else -> "#B3FFFFFF".toColorInt()
+    }
 
     /** Status bar / cutout above and navigation bar below, which text must stay clear of. */
     private var insetTop = 0f
@@ -287,7 +294,7 @@ class AimView(context: Context, private var cols: Int, private var rows: Int) : 
         val r = l + w
         val b = t + h
         val arm = minOf(w, h) * 0.14f
-        guidePaint.color = if (locked) "#69F0AE".toColorInt() else "#B3FFFFFF".toColorInt()
+        guidePaint.color = trackingColour()
         for ((x, y, dx, dy) in listOf(
             arrayOf(l, t, 1f, 1f), arrayOf(r, t, -1f, 1f),
             arrayOf(l, b, 1f, -1f), arrayOf(r, b, -1f, -1f),
@@ -324,7 +331,7 @@ class AimView(context: Context, private var cols: Int, private var rows: Int) : 
         val ox = (cr?.left ?: 0f) + (areaW - dispW * scale) / 2f
         val oy = (cr?.top ?: 0f) + (areaH - dispH * scale) / 2f
 
-        val colour = when (a.verdict) {
+        val colour = if (!showGuidance) trackingColour() else when (a.verdict) {
             AimVerdict.Ready -> "#69F0AE".toColorInt()
             AimVerdict.Clipped -> "#FF5252".toColorInt()
             AimVerdict.TooFar, AimVerdict.NoScreenFound -> "#90A4AE".toColorInt()
@@ -334,15 +341,14 @@ class AimView(context: Context, private var cols: Int, private var rows: Int) : 
         }
         screenPaint.color = colour
 
-        // The simple view, for someone receiving a file: only an outline round the screen, green
-        // once the decoder has actually locked on to it. The coverage map, clipped-edge bars and
+        // The simple receive view tracks the pattern in amber and useful progress in green.
+        // The coverage map, clipped-edge bars and
         // numbers are for working out WHY something fails -- one tap away, not in the way.
         if (!details) {
             if (a.bboxW > 0 && a.bboxH > 0 && a.verdict != AimVerdict.NoScreenFound) {
                 val (bx0, by0) = rotatePoint(a.bboxX, a.bboxY)
                 val (bx1, by1) = rotatePoint(a.bboxX + a.bboxW, a.bboxY + a.bboxH)
-                screenPaint.color = if (locked) "#69F0AE".toColorInt()
-                                    else "#99FFFFFF".toColorInt()
+                screenPaint.color = trackingColour()
                 canvas.drawRoundRect(
                     ox + minOf(bx0, bx1) * scale, oy + minOf(by0, by1) * scale,
                     ox + maxOf(bx0, bx1) * scale, oy + maxOf(by0, by1) * scale,

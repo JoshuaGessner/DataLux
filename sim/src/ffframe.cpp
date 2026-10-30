@@ -118,7 +118,8 @@ int MakeFrame(int argc, char** argv) {
     tc.profile = colours == 8   ? ModulationProfile::kM5EightColor
                  : colours == 4 ? ModulationProfile::kM3FourColor
                                 : ModulationProfile::kM0BinaryLuminance;
-    auto tx = TransmitSession::Create(layout, env, name, SessionIdFor(env, name), tc).value();
+    auto tx = TransmitSession::Create(
+        layout, env, name, SessionIdForConfiguration(env, name, g, tc), tc).value();
     CellMatrix cells(g.cols, g.rows);
     for (std::uint32_t n = 0; n <= seq; ++n) (void)tx.Next(&cells);
     sim::OpticalRenderConfig rc;
@@ -157,6 +158,9 @@ int main(int argc, char** argv) {
     std::string file_name;
     long compress_ms = -1;
     int settle = 40;
+    ColorDemodulationConfig color_config;
+    PipelineConfig pipeline_config;
+    Llr erase_below = 0;
     for (int i = 4; i + 1 < argc; i += 2) {
         if (std::strcmp(argv[i], "--grid") == 0) {
             std::sscanf(argv[i + 1], "%ux%u", &cols, &rows);
@@ -170,6 +174,26 @@ int main(int argc, char** argv) {
             compress_ms = std::atol(argv[i + 1]);
         } else if (std::strcmp(argv[i], "--settle") == 0) {
             settle = std::atoi(argv[i + 1]);
+        } else if (std::strcmp(argv[i], "--bleed") == 0 || std::strcmp(argv[i], "--local") == 0) {
+            if (std::strcmp(argv[i + 1], "0") != 0 && std::strcmp(argv[i + 1], "1") != 0) return 2;
+            const bool enabled = std::strcmp(argv[i + 1], "1") == 0;
+            if (std::strcmp(argv[i], "--bleed") == 0) color_config.enable_bleed = enabled;
+            else color_config.enable_local_centroids = enabled;
+        } else if (std::strcmp(argv[i], "--erase") == 0) {
+            char* end = nullptr;
+            const long value = std::strtol(argv[i + 1], &end, 10);
+            if (end == argv[i + 1] || *end != '\0' || value < 0 || value > 127) return 2;
+            erase_below = static_cast<Llr>(value);
+        } else if (std::strcmp(argv[i], "--chroma-samples") == 0) {
+            char* end = nullptr;
+            const long value = std::strtol(argv[i + 1], &end, 10);
+            if (end == argv[i + 1] || *end != '\0' || value < 1 || value > 8) return 2;
+            pipeline_config.chroma_sampler.samples_per_axis = static_cast<int>(value);
+        } else if (std::strcmp(argv[i], "--chroma-margin") == 0) {
+            char* end = nullptr;
+            const double value = std::strtod(argv[i + 1], &end);
+            if (end == argv[i + 1] || *end != '\0' || !std::isfinite(value) || value < 0 || value >= 0.5) return 2;
+            pipeline_config.chroma_sampler.interior_margin = value;
         }
     }
 
@@ -191,7 +215,9 @@ int main(int argc, char** argv) {
 
     const GridGeometry g{cols, rows};
     const FrameLayout layout = FrameLayout::Create(g, LayoutConfig{}).value();
-    auto pipeline = FramePipeline::Create(layout).value();
+    auto pipeline = FramePipeline::Create(layout, pipeline_config).value();
+    std::printf("comparison sampling: chroma-samples=%d margin=%.3f\n",
+                pipeline_config.chroma_sampler.samples_per_axis, pipeline_config.chroma_sampler.interior_margin);
     using Clock = std::chrono::steady_clock;
     auto ms = [](Clock::time_point a, Clock::time_point b) {
         return std::chrono::duration<double, std::milli>(b - a).count();
@@ -249,7 +275,20 @@ int main(int argc, char** argv) {
     const std::size_t bits = mod.bits_per_cell();
     SoftSymbolBuffer soft;
     ColorDiagnostics diag;
-    mod.DemodulatePayload(cf.cell_rgb, &soft, &diag);
+    mod.DemodulatePayload(cf.cell_rgb, &soft, &diag, color_config);
+    std::printf("comparison: local=%d bleed=%d erase-below=%d (decode above uses default demodulation with selected sampling)\n",
+                color_config.enable_local_centroids, color_config.enable_bleed, static_cast<int>(erase_below));
+    if (hd.fec_nsym > 0) {
+        auto fec = IntraFec::Create(mod.payload_capacity_bytes(), {.nsym = hd.fec_nsym});
+        if (fec.ok()) {
+            const auto decision = HardDecide(soft, fec.value().coded_bytes(), erase_below);
+            IntraFec::Stats stats;
+            const auto corrected = fec.value().Decode(decision.bytes, decision.erased_bytes, &stats);
+            std::printf("comparison RS correction: %s, worst budget %zu/%u; %zu erased bytes (not a file verification)\n",
+                        corrected.ok() ? "succeeded" : "failed", stats.worst_budget_used,
+                        hd.fec_nsym, decision.erased_bytes.size());
+        }
+    }
     std::printf("colours %.0f apart, noise %.1f (after bleed), %zu cells sampled\n",
                 diag.centroid_spread, diag.noise_sigma, diag.cells);
     std::printf("learned:");
@@ -272,8 +311,16 @@ int main(int argc, char** argv) {
     }
     // The envelope: version 1 (older senders), or version 2 as sent as-is or zstd-compressed,
     // over every compress time it could have recorded.
+    TransmitConfig tc;
+    tc.fec_nsym = hd.fec_nsym;
+    tc.profile = hd.profile;
+    const auto matching_id = [&](const std::vector<std::uint8_t>& bytes) {
+        const auto configured = SessionIdForConfiguration(bytes, name, {cols, rows}, tc);
+        // Accept captures from native senders before configuration-bound identities, too.
+        return configured == hd.session_id ? configured : SessionIdFor(bytes, name);
+    };
     std::vector<std::uint8_t> env = Envelope(file, name);
-    std::uint32_t sid = SessionIdFor(env, name);
+    std::uint32_t sid = matching_id(env);
     std::uint8_t env_codec = 0;
     long env_ms = 0;
     if (sid != hd.session_id) {
@@ -288,7 +335,7 @@ int main(int argc, char** argv) {
             const std::vector<std::uint8_t>& body = codec == 2 ? zstd : file;
             for (long t = lo; t <= hi && sid != hd.session_id; ++t) {
                 env = Envelope2(file, name, body, codec, static_cast<std::uint32_t>(t));
-                sid = SessionIdFor(env, name);
+                sid = matching_id(env);
                 env_codec = codec;
                 env_ms = t;
             }
@@ -302,9 +349,6 @@ int main(int argc, char** argv) {
     }
     std::printf("truth: %s, %zu bytes, envelope codec %u, compress %ld ms\n", name.c_str(), file.size(),
                 static_cast<unsigned>(env_codec), env_ms);
-    TransmitConfig tc;
-    tc.fec_nsym = hd.fec_nsym;
-    tc.profile = hd.profile;
     if (env.size() > 4 && env[3] == '2') {
         tc.content = ContentHint{.original_size = file.size(), .codec = env_codec,
                                  .compress_ms = static_cast<std::uint32_t>(env_ms)};

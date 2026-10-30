@@ -134,17 +134,17 @@ jlong Start(JNIEnv* env, Prepared prep, std::vector<std::uint8_t> payload, std::
         ThrowIllegalState(env, "the file is empty");
         return 0;
     }
-    const std::uint32_t session_id = fileflow::SessionIdFor(payload, name);
+    fileflow::TransmitConfig tc;
+    tc.fec_nsym = static_cast<std::size_t>(nsym);
+    tc.profile = prep.profile;
+    tc.content = content;
+    const std::uint32_t session_id = fileflow::SessionIdForConfiguration(payload, name, prep.geom, tc);
     auto* handle = new (std::nothrow) TxHandle(std::move(prep.layout), prep.geom, std::move(payload));
     if (handle == nullptr) {
         ThrowIllegalState(env, "out of memory opening the transmitter");
         return 0;
     }
 
-    fileflow::TransmitConfig tc;
-    tc.fec_nsym = static_cast<std::size_t>(nsym);
-    tc.profile = prep.profile;
-    tc.content = content;
     auto tx_r = fileflow::TransmitSession::Create(*handle->layout, handle->payload, std::move(name),
                                                   session_id, tc);
     if (!tx_r.ok()) {

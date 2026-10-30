@@ -131,6 +131,12 @@ struct ColorDiagnostics {
     std::array<std::array<double, 3>, 8> centroids{};
 };
 
+// Diagnostic comparisons isolate the existing stages; production callers retain both stages.
+struct ColorDemodulationConfig {
+    bool enable_local_centroids = true;
+    bool enable_bleed = true;
+};
+
 // M5: three bits a cell, one each on red, green and blue (kM5EightColor). And M3: two bits a
 // cell in four colours (kM3FourColor) -- black, cyan, magenta and yellow, any two of which differ
 // in TWO channels where the nearest of the eight differ in one. Two-thirds the data, for cameras
@@ -165,7 +171,8 @@ class ColorModulator {
     // white pilots read 255 and the black ones 0 in that channel (FramePipeline). NaN = erased.
     // `out` receives bits_per_cell() soft bits per payload cell, in payload-bit order.
     void DemodulatePayload(std::span<const double> rgb, SoftSymbolBuffer* out,
-                           ColorDiagnostics* diag = nullptr) const;
+                           ColorDiagnostics* diag = nullptr,
+                           ColorDemodulationConfig cfg = {}) const;
 
     // The palette index colour-pilot `i` (raster order among them) shows: each colour in turn.
     [[nodiscard]] unsigned PilotColor(std::size_t i) const noexcept {

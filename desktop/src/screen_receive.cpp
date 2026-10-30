@@ -36,6 +36,12 @@ std::string Rate(double bytes_per_second) {
     return FormatBytes(static_cast<std::uint64_t>(bytes_per_second)) + "/s";
 }
 
+std::string Decimal(double value) {
+    char text[48];
+    std::snprintf(text, sizeof text, "%.1f", value);
+    return text;
+}
+
 // A tick in a ring: received.
 void Tick(Painter& p, float cx, float cy, float r, Rgba c) {
     p.Glow(cx, cy, r * 2.2F, WithAlpha(c, 0.25F));
@@ -72,7 +78,7 @@ void App::ReceiveScreen(float x0, float W, float H) {
     if (receiver_) {
         if (rx_camera_.Poll(renderer_)) {
             receiver_->Offer(rx_camera_.luma(), rx_camera_.u(), rx_camera_.v(), rx_camera_.width(), rx_camera_.height(),
-                             rx_camera_.timestamp_ns());
+                             rx_camera_.timestamp_ns(), true);
         }
         if (auto r = receiver_->Result()) {
             rx_result_ = std::move(r);
@@ -81,11 +87,12 @@ void App::ReceiveScreen(float x0, float W, float H) {
             return;
         }
         const LiveStatus s = receiver_->Status();
-        const float vh = std::min(H - 210, cw * 0.62F);
+        const auto diagnostics = receiver_->Diagnostics();
+        const float vh = std::max(120.0F, std::min(H - (rx_diagnostics_open_ ? 430 : 210), cw * 0.62F));
         const SDL_FRect view{L, 76, cw, vh};
         paint_.RoundRect(view, 22, Hex(0x000000));
         const auto state = rx_camera_.state();
-        if (state == Camera::State::kOn && rx_camera_.preview() != nullptr) {
+        if (rx_camera_.preview() != nullptr) {
             const float aspect = static_cast<float>(rx_camera_.width()) / static_cast<float>(std::max(1, rx_camera_.height()));
             float w = cw;
             float h = w / aspect;
@@ -97,18 +104,35 @@ void App::ReceiveScreen(float x0, float W, float H) {
             // Mirrored, as a camera facing you is: moving the phone left moves it left here.
             const SDL_FRect dst{(L + (cw - w) / 2) * k, (76 + (vh - h) / 2) * k, w * k, h * k};
             SDL_RenderTextureRotated(renderer_, rx_camera_.preview(), nullptr, &dst, 0, nullptr, SDL_FLIP_HORIZONTAL);
-        } else {
-            const char* msg = state == Camera::State::kNone     ? "This computer has no camera to receive with."
-                              : state == Camera::State::kDenied ? "DataLux can't use the camera. Allow it in your system's privacy settings."
-                                                                : "Starting the camera… (allow it if you're asked)";
-            paint_.Text(msg, L + cw / 2, 76 + vh / 2 - 10, 14, Weight::kRegular, th::kTextDim, Align::kCenter);
+        }
+        const bool camera_problem = state == Camera::State::kNone || state == Camera::State::kDenied || state == Camera::State::kError;
+        if (state != Camera::State::kOn) {
+            const std::string msg = state == Camera::State::kNone ? "Connect a camera, then retry."
+                                    : state == Camera::State::kDenied ? "Allow DataLux in your system's camera privacy settings, then retry."
+                                    : state == Camera::State::kError ? rx_camera_.problem()
+                                    : options_.no_camera ? "The camera is disabled for this run."
+                                                         : "Starting the camera… allow access if asked.";
+            paint_.RoundRect({L + 12, 76 + vh / 2 - 28, cw - 24, 56}, 14, WithAlpha(th::kSurface, 0.94F));
+            paint_.Text(paint_.Fit(msg, cw - 48, 14, Weight::kRegular), L + cw / 2, 76 + vh / 2 - 8, 14,
+                        Weight::kRegular, th::kText, Align::kCenter);
         }
         // The status: what to do, or what's coming.
-        const std::string said = s.phase == LivePhase::kReceiving && !s.file_name.empty() ? "Receiving " + s.file_name : s.message;
+        const bool productive = diagnostics.useful_progress_age_ms >= 0 && diagnostics.useful_progress_age_ms <= 3000;
+        const std::string said = camera_problem ? "Camera needs attention"
+            : s.phase == LivePhase::kVerified ? "Verified · saving…"
+            : s.phase == LivePhase::kFailed ? "The file did not verify"
+            : s.sender_switches > 0 && s.session_id == 0 ? "Sender changed the transfer · restarting"
+            : s.phase == LivePhase::kReceiving && productive ? "Receiving data"
+            : s.phase == LivePhase::kReceiving && diagnostics.useful_progress_updates > 0 ? "Transfer paused · keep the whole code steady"
+            : s.screen_in_view ? (s.hint == LiveHint::kHoldSteadier ? "Pattern found · hold steadier"
+                                  : s.hint == LiveHint::kNotReadable ? "Pattern found · adjust distance or reduce glare"
+                                  : "Pattern found · adjusting; keep the whole code in view")
+            : "Find the screen · keep the whole code in view";
         const float pw = std::min(cw - 40, paint_.Measure(said, 15, Weight::kSemiBold) + 60);
         const SDL_FRect pill{L + (cw - pw) / 2, 76 + vh - 64, pw, 44};
         paint_.RoundRect(pill, 22, WithAlpha(th::kSurface, 0.92F));
-        paint_.Circle(pill.x + 22, pill.y + 22, 4.5F, s.screen_in_view ? th::kTertiary : th::kTextDim);
+        paint_.Circle(pill.x + 22, pill.y + 22, 4.5F, camera_problem ? th::kError : productive ? th::kTertiary
+                                                                   : s.screen_in_view ? Hex(0xE8B86A) : th::kTextDim);
         paint_.Text(paint_.Fit(said, pw - 50, 15, Weight::kSemiBold), pill.x + 36, pill.y + 12, 15, Weight::kSemiBold, th::kText);
 
         // Progress, speed and time left.
@@ -122,8 +146,57 @@ void App::ReceiveScreen(float x0, float W, float H) {
         std::string line = std::to_string(static_cast<int>(std::lround(s.progress * 100))) + "%";
         if (s.bytes_per_second > 0) line += "  ·  " + Rate(s.bytes_per_second);
         if (s.seconds_remaining >= 0) line += "  ·  about " + std::to_string(static_cast<int>(std::ceil(s.seconds_remaining))) + " s left";
-        paint_.Text(line, L, y, 14, Weight::kRegular, th::kTextDim);
+        paint_.Text(paint_.Fit(line, std::max(80.0F, cw - 260), 14, Weight::kRegular), L, y, 14, Weight::kRegular, th::kTextDim);
+        if (camera_problem && ui_.Button("rx-camera-retry", {L + cw - 244, y - 6, 116, 42}, "Retry camera", true)) {
+            StopReceiving();
+            StartReceiving();
+            return;
+        }
+        if (!camera_problem && ui_.Button("rx-details", {L + cw - 244, y - 6, 116, 42}, rx_diagnostics_open_ ? "Hide details" : "Details", false)) {
+            rx_diagnostics_open_ = !rx_diagnostics_open_;
+        }
         if (ui_.Button("rx-stop", {L + cw - 120, y - 6, 120, 42}, "Stop", false)) StopReceiving();
+        if (rx_diagnostics_open_ && receiver_) {
+            const auto& camera = rx_camera_.diagnostics();
+            const auto& mode = camera.negotiated;
+            const auto& delivery = diagnostics.delivery;
+            const double fps = mode.framerate_denominator > 0 ? static_cast<double>(mode.framerate_numerator) / mode.framerate_denominator : 0;
+            const double decoded = static_cast<double>(diagnostics.decoded);
+            const double captured = static_cast<double>(camera.frames);
+            const double accepted = static_cast<double>(delivery.accepted);
+            std::vector<std::string> details;
+            details.push_back(camera.have_negotiated ? "SDL delivered: " + std::to_string(mode.width) + " × " + std::to_string(mode.height) +
+                " · " + Decimal(fps) + " fps · " + SDL_GetPixelFormatName(mode.format) + " · colorspace " + std::to_string(mode.colorspace)
+                : "SDL delivered mode: waiting for camera access");
+            details.push_back("Capture: " + std::to_string(camera.frames) + " · timestamp interval avg/min/max: " +
+                Decimal(camera.timestamp_intervals > 0 ? camera.interval_ms_sum / static_cast<double>(camera.timestamp_intervals) : 0) + "/" +
+                Decimal(camera.interval_ms_min) + "/" + Decimal(camera.interval_ms_max) + " ms · stale " + std::to_string(camera.nonmonotonic_timestamps));
+            details.push_back("Convert + preview avg/max: " + Decimal(captured > 0 ? camera.conversion_ms_sum / captured : 0) + "/" +
+                Decimal(camera.conversion_ms_max) + " ms · pending copy " + Decimal(accepted > 0 ? delivery.copy_ms_sum / accepted : 0) + "/" + Decimal(delivery.copy_ms_max) + " ms");
+            details.push_back("Offered/accepted/replaced: " + std::to_string(delivery.offered) + "/" + std::to_string(delivery.accepted) + "/" +
+                std::to_string(delivery.replaced) + " · stale/invalid " + std::to_string(delivery.stale) + "/" + std::to_string(delivery.invalid));
+            details.push_back("Decoded/offered: " + std::to_string(diagnostics.decoded) + "/" + std::to_string(delivery.offered) + " (" +
+                Decimal(delivery.offered > 0 ? 100 * decoded / static_cast<double>(delivery.offered) : 0) + "%) · one worker, one latest pending");
+            details.push_back("Decode wall avg/max: " + Decimal(decoded > 0 ? diagnostics.decode_ms_sum / decoded : 0) + "/" +
+                Decimal(diagnostics.decode_ms_max) + " ms · application queue " + Decimal(decoded > 0 ? diagnostics.queue_ms_sum / decoded : 0) + "/" +
+                Decimal(diagnostics.queue_ms_max) + " ms");
+            const auto& core = s.diagnostics;
+            const double timed = static_cast<double>(core.timed_frames);
+            const auto mean = [timed](double total) { return Decimal(timed > 0 ? total / timed : 0); };
+            details.push_back("Selected grid stage means, ms: pipeline " + mean(core.pipeline_ms) + " · header " + mean(core.header_ms) +
+                " · demod " + mean(core.demod_ms) + " · FEC " + mean(core.fec_ms) + " · combine " + mean(core.combine_ms));
+            details.push_back("Lock wait / commit: " + mean(core.lock_wait_ms) + " / " + mean(core.commit_ms) + " ms · headers " +
+                std::to_string(s.header_frames) + " · FEC / CRC failures " + std::to_string(s.fec_failed_frames) + " / " + std::to_string(s.crc_failed_frames));
+            details.push_back("Pipeline stages, ms: track " + mean(core.tracking_ms) + " · align " + mean(core.alignment_ms) +
+                " · luma " + mean(core.luma_sampling_ms) + " · photometry " + mean(core.photometry_ms) + " · chroma " + mean(core.color_sampling_ms));
+            details.push_back("Useful symbols: " + std::to_string(s.useful_symbols) + " · candidate/session-scoped counters; manifests are not file progress.");
+            details.push_back("Capture timestamp and application queue clocks are separate; no sensor-to-app age inferred.");
+            y += 44;
+            for (const auto& detail : details) {
+                paint_.Text(paint_.Fit(detail, cw, 11, Weight::kRegular), L, y, 11, Weight::kRegular, th::kTextDim);
+                y += 18;
+            }
+        }
         return;
     }
 
@@ -175,9 +248,9 @@ void App::ReceiveScreen(float x0, float W, float H) {
         paint_.RoundRect({x, sy < 0 ? y : y + 22, 26, 4}, 2, th::kText);
     }
     paint_.Text("Receive a file", cx, top + 160, 26, Weight::kSemiBold, th::kText, Align::kCenter);
-    paint_.Text("Hold the sending phone up to this computer's camera, its screen filling the picture.", cx, top + 200, 15,
+    paint_.Text("Hold the sender's screen up to this camera, with the entire code in the picture.", cx, top + 200, 15,
                 Weight::kRegular, th::kTextDim, Align::kCenter);
-    paint_.Text("Set the phone to Steady: a computer's camera is slower than a phone's.", cx, top + 224, 15, Weight::kRegular,
+    paint_.Text("Start with Steady; try Fast once the camera reads reliably.", cx, top + 224, 15, Weight::kRegular,
                 th::kTextDim, Align::kCenter);
     if (settings_.encrypted) {
         paint_.Text("Encrypted is on: only files for your pairing or your teams are accepted.", cx, top + 252, 13,

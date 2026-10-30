@@ -11,6 +11,7 @@ compile_commands.json
 .vscode/
 local.properties
 .gradle/
+.kotlin/
 .externalNativeBuild/
 .cxx/
 __pycache__/

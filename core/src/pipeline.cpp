@@ -4,12 +4,38 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <optional>
 #include <vector>
 
 namespace fileflow {
 namespace {
+
+// Targets are pipeline members, not a returned local: early returns cannot lose a stage's final
+// measurement through a non-elided return-value move. No allocation or per-frame logging.
+class PipelineTimer {
+  public:
+    explicit PipelineTimer(double& target) : target_(&target), start_(Clock::now()) {}
+    ~PipelineTimer() { Stop(); }
+    PipelineTimer(const PipelineTimer&) = delete;
+    PipelineTimer& operator=(const PipelineTimer&) = delete;
+    void Next(double& target) {
+        Stop();
+        target_ = &target;
+        start_ = Clock::now();
+    }
+    void Stop() {
+        if (target_ == nullptr) return;
+        *target_ = std::chrono::duration<double, std::milli>(Clock::now() - start_).count();
+        target_ = nullptr;
+    }
+
+  private:
+    using Clock = std::chrono::steady_clock;
+    double* target_;
+    Clock::time_point start_;
+};
 
 // Translate in GRID space, then map to the image: H' = H * T.
 //
@@ -333,10 +359,8 @@ Result<FramePipeline> FramePipeline::Create(const FrameLayout& layout, PipelineC
         CellSampler::Create(layout.geometry(),
                             SamplerConfig{.interior_margin = cfg.subcell.align_margin,
                                           .samples_per_axis = cfg.subcell.align_samples}));
-    FF_ASSIGN_OR_RETURN(
-        auto chroma_sampler,
-        CellSampler::Create(layout.geometry(),
-                            SamplerConfig{.interior_margin = 0.3, .samples_per_axis = 4}));
+    FF_ASSIGN_OR_RETURN(auto chroma_sampler,
+                        CellSampler::Create(layout.geometry(), cfg.chroma_sampler));
     FF_ASSIGN_OR_RETURN(auto tracker, ScreenTracker::Create(layout, cfg.tracker));
 
     // The known cells, levels taken from the modulator's own render of the structure so they can
@@ -396,8 +420,9 @@ std::vector<double> FramePipeline::SampleColor(const ChromaPlanes& chroma, const
     lens_c.cx = lens_.cx * scale + offset;
     lens_c.cy = lens_.cy * scale + offset;
     lens_c.inv_norm2 = lens_.inv_norm2 / (scale * scale);
-    const std::vector<double> u = chroma_sampler_.Sample(chroma.u, hc, lens_c);
-    const std::vector<double> v = chroma_sampler_.Sample(chroma.v, hc, lens_c);
+    const auto uv = chroma_sampler_.SamplePair(chroma.u, chroma.v, hc, lens_c);
+    const auto& u = uv[0];
+    const auto& v = uv[1];
     if (u.size() != n || v.size() != n) return rgb;
 
     // Camera RGB, BT.601 full range -- what Camera2's YUV_420_888 carries. Exactness does not
@@ -453,6 +478,8 @@ std::vector<double> FramePipeline::SampleColor(const ChromaPlanes& chroma, const
 
 CapturedFrame FramePipeline::Process(const ImageView8& img, std::uint64_t index,
                                      std::int64_t timestamp_ns, const ChromaPlanes* chroma) {
+    timings_ = {};
+    PipelineTimer total(timings_.total_ms);
     const GridGeometry g = layout_->geometry();
 
     CapturedFrame out;
@@ -466,6 +493,7 @@ CapturedFrame FramePipeline::Process(const ImageView8& img, std::uint64_t index,
     last_score_ = 0.0;
 
     // --- Geometry ---
+    PipelineTimer stage(timings_.tracking_ms);
     if (cfg_.disable_tracking) tracker_.Reset();
     const TrackResult tr = tracker_.Track(img, timestamp_ns);
     diag_.total_pixels_examined += tracker_.last_pixels_examined();
@@ -475,6 +503,7 @@ CapturedFrame FramePipeline::Process(const ImageView8& img, std::uint64_t index,
         return out;
     }
     // --- Sub-cell alignment: global shift, then the corners independently ---
+    stage.Next(timings_.alignment_ms);
     // This frame's lens model: distortion about the image centre, normalised to the half-diagonal,
     // with this lane's current estimate of its strength (TuneLens).
     {
@@ -504,9 +533,11 @@ CapturedFrame FramePipeline::Process(const ImageView8& img, std::uint64_t index,
     last_score_ = tr.marker_score;
 
     // --- Rectify and sample ---
+    stage.Next(timings_.luma_sampling_ms);
     const auto raw = sampler_.Sample(img, h, lens_);
 
     // --- Photometry ---
+    stage.Next(timings_.photometry_ms);
     auto field = PhotometricField::Estimate(*layout_, raw, cfg_.photometric);
     if (!field.ok()) {
         // The screen was located but cannot be read -- a different failure from not finding
@@ -529,12 +560,14 @@ CapturedFrame FramePipeline::Process(const ImageView8& img, std::uint64_t index,
         pf.nodes_above_residual(cfg_.photometric.max_pilot_residual_ratio);
 
     out.cell_samples = pf.Normalise(raw);
+    stage.Stop();
     const bool valid_chroma = chroma != nullptr && !chroma->u.empty() && !chroma->v.empty() &&
         chroma->u.stride() >= chroma->u.width() && chroma->v.stride() >= chroma->v.width() &&
         (!chroma->full_resolution || (chroma->u.width() == img.width() &&
          chroma->v.width() == img.width() && chroma->u.height() == img.height() &&
          chroma->v.height() == img.height()));
     if (valid_chroma) {
+        PipelineTimer color(timings_.color_sampling_ms);
         out.cell_rgb = SampleColor(*chroma, h, raw);
     }
     out.phase = FramePhase::kClean;  // temporal classification is component C07, not here

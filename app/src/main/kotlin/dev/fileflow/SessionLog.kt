@@ -3,7 +3,6 @@ package dev.fileflow
 import android.content.Context
 import android.util.Log
 import java.io.File
-import java.io.Writer
 
 /**
  * Logs a send or receive session to logcat AND to a file in the app's own storage.
@@ -17,21 +16,27 @@ object SessionLog {
     private const val DIR = "logs"
     private const val KEEP = 20
 
-    private var out: Writer? = null
+    private val writers = SessionLogWriter()
     private val clock = java.text.SimpleDateFormat("HH:mm:ss.SSS", java.util.Locale.US)
 
-    /** Starts a new file, "receive-20261023-214442.txt" for [kind] "receive". */
+    /**
+     * Starts a file such as `receive-20261029-204048-123-00000042.txt`.
+     * Milliseconds plus a monotonically increasing owner distinguish rapid starts; padding keeps
+     * filename retention chronological. Save the returned token and pass it to [close].
+     */
     @Synchronized
-    fun start(context: Context, kind: String) {
-        close()
+    fun start(context: Context, kind: String): Long = writers.start { owner ->
         runCatching {
             val dir = File(context.filesDir, DIR).apply { mkdirs() }
             dir.listFiles()?.sortedByDescending { it.name.substringAfter('-') }
                 ?.drop(KEEP - 1)?.forEach { it.delete() }
-            val stamp = java.text.SimpleDateFormat("yyyyMMdd-HHmmss", java.util.Locale.US)
+            val stamp = java.text.SimpleDateFormat("yyyyMMdd-HHmmss-SSS", java.util.Locale.US)
                 .format(java.util.Date())
-            out = File(dir, "$kind-$stamp.txt").bufferedWriter()
-        }.onFailure { Log.w("FileFlow.Log", "no session log: ${it.message}") }
+            val file = File(dir, "$kind-$stamp-${owner.toString().padStart(8, '0')}.txt")
+            // Never truncate an existing log, even after an unlikely clock/process collision.
+            check(file.createNewFile()) { "session log already exists" }
+            file.bufferedWriter()
+        }.onFailure { Log.w("FileFlow.Log", "no session log: ${it.message}") }.getOrNull()
     }
 
     @Synchronized
@@ -47,18 +52,11 @@ object SessionLog {
     }
 
     @Synchronized
-    fun close() {
-        runCatching { out?.close() }
-        out = null
-    }
+    fun close(owner: Long): Boolean = writers.close(owner)
 
     private fun write(tag: String, message: String) {
-        val w = out ?: return
         // Flushed per line: a session usually ends with the app killed or the phone pocketed, and
         // the lines nearest the end are the ones that explain it.
-        runCatching {
-            w.write("${clock.format(java.util.Date())} $tag: $message\n")
-            w.flush()
-        }.onFailure { close() }
+        writers.write("${clock.format(java.util.Date())} $tag: $message\n")
     }
 }

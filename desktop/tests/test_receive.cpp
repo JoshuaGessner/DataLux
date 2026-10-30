@@ -2,15 +2,19 @@
 // a camera would see a screen held square to it, offered to the Receiver as camera frames -- through
 // its thread, its grid search, opening the envelope and saving.
 #include "receiver.h"
+#include "camera.h"
 
 #include <fileflow/envelope.h>
 #include <fileflow/session.h>
+#include <fileflow/modulation.h>
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <future>
 #include <thread>
 
 namespace fileflow::desktop {
@@ -33,6 +37,24 @@ std::vector<std::uint8_t> Draw(const CellMatrix& cells, int* w, int* h) {
     return img;
 }
 
+// The desktop renderer's RGB channel rule, with row padding as camera surfaces can have.
+// These bytes go through the production RGB conversion before they reach the real receiver.
+std::vector<std::uint8_t> DrawRgb(const CellMatrix& cells, int* w, int* h, int* pitch) {
+    *w = static_cast<int>(cells.cols()) * kPitch + 2 * kMargin;
+    *h = static_cast<int>(cells.rows()) * kPitch + 2 * kMargin;
+    *pitch = *w * 4 + 16;
+    std::vector<std::uint8_t> rgba(static_cast<std::size_t>(*pitch) * static_cast<std::size_t>(*h), 0);
+    for (int y = 0; y < static_cast<int>(cells.rows()) * kPitch; ++y) {
+        for (int x = 0; x < static_cast<int>(cells.cols()) * kPitch; ++x) {
+            const auto cell = cells.data()[static_cast<std::size_t>(y / kPitch) * cells.cols() + static_cast<std::size_t>(x / kPitch)];
+            const auto at = static_cast<std::size_t>(y + kMargin) * static_cast<std::size_t>(*pitch) + static_cast<std::size_t>(x + kMargin) * 4;
+            for (int channel = 0; channel < 3; ++channel) rgba[at + static_cast<std::size_t>(channel)] = ColorChannelOn(cell, channel) ? 255 : 0;
+            rgba[at + 3] = 255;
+        }
+    }
+    return rgba;
+}
+
 std::vector<std::uint8_t> Text(std::size_t n) {
     std::vector<std::uint8_t> v(n);
     for (std::size_t i = 0; i < n; ++i) v[i] = static_cast<std::uint8_t>("light camera screen "[i % 20]);
@@ -41,11 +63,12 @@ std::vector<std::uint8_t> Text(std::size_t n) {
 
 // Runs a whole transfer of [envelope] into a Receiver; returns its result.
 std::optional<ReceiveResult> Transfer(const std::vector<std::uint8_t>& envelope, const std::string& link_name,
-                                      std::vector<secure::SealKey> keys, bool require_encrypted, const std::filesystem::path& dir) {
+                                      std::vector<secure::SealKey> keys, bool require_encrypted, const std::filesystem::path& dir,
+                                      bool full_rgb = false) {
     auto layout = FrameLayout::Create({120, 260}, LayoutConfig{});
     EXPECT_TRUE(layout.ok());
     TransmitConfig tc;
-    tc.profile = ModulationProfile::kM0BinaryLuminance;
+    tc.profile = full_rgb ? ModulationProfile::kM5EightColor : ModulationProfile::kM0BinaryLuminance;
     auto tx = TransmitSession::Create(layout.value(), envelope, link_name, SessionIdFor(envelope, link_name), tc);
     EXPECT_TRUE(tx.ok());
     Receiver rx(std::move(keys), require_encrypted, dir);
@@ -55,10 +78,20 @@ std::optional<ReceiveResult> Transfer(const std::vector<std::uint8_t>& envelope,
         ASSERT_TRUE(tx.value().Next(&cells).ok()) << i, std::nullopt;
         int w = 0;
         int h = 0;
-        const auto luma = Draw(cells, &w, &h);
-        const std::vector<std::uint8_t> chroma(static_cast<std::size_t>(w / 2) * static_cast<std::size_t>(h / 2), 128);
         const auto before = rx.decoded();
-        rx.Offer(luma, chroma, chroma, w, h, ts += 33'000'000);
+        if (full_rgb) {
+            int pitch = 0;
+            const auto rgba = DrawRgb(cells, &w, &h, &pitch);
+            std::vector<std::uint8_t> luma, u, v;
+            detail::RgbaToYuv444(rgba.data(), w, h, pitch, &luma, &u, &v);
+            EXPECT_EQ(u.size(), luma.size());
+            EXPECT_EQ(v.size(), luma.size());
+            rx.Offer(luma, u, v, w, h, ts += 33'000'000, true);
+        } else {
+            const auto luma = Draw(cells, &w, &h);
+            const std::vector<std::uint8_t> chroma(static_cast<std::size_t>(w / 2) * static_cast<std::size_t>(h / 2), 128);
+            rx.Offer(luma, chroma, chroma, w, h, ts += 33'000'000);
+        }
         // One frame at a time: wait for the decoder to take this one before showing the next.
         for (int k = 0; k < 2000 && rx.decoded() == before && !rx.Result(); ++k) std::this_thread::sleep_for(std::chrono::microseconds(200));
     }
@@ -76,6 +109,135 @@ class ReceiveTest : public ::testing::Test {
     void TearDown() override { std::filesystem::remove_all(dir_); }
     std::filesystem::path dir_;
 };
+
+TEST(CameraColor, AdjacentRgbPixelsKeepTheirOwnChromaWithPaddedRows) {
+    // Opposite primaries sit at adjacent pixels, including odd x/y. Decimating a 2x2 block
+    // would erase their distinction even though the camera's RGB surface retained it.
+    const std::vector<std::uint8_t> rgba = {
+        255, 0, 0, 255, 0, 0, 255, 255, 99, 99, 99, 99,
+        0, 255, 0, 255, 255, 255, 255, 255, 99, 99, 99, 99};
+    std::vector<std::uint8_t> luma, u, v;
+    detail::RgbaToYuv444(rgba.data(), 2, 2, 12, &luma, &u, &v);
+    ASSERT_EQ(luma.size(), 4U);
+    ASSERT_EQ(u.size(), 4U);
+    ASSERT_EQ(v.size(), 4U);
+    EXPECT_GT(v[0], v[1]);  // red carries more V than blue
+    EXPECT_GT(u[1], u[0]);  // blue carries more U than red
+    EXPECT_LT(u[2], u[3]);  // green and white remain distinct on the second row
+    EXPECT_LT(v[2], v[3]);
+    EXPECT_EQ(u[3], 128);
+    EXPECT_EQ(v[3], 128);
+}
+
+TEST_F(ReceiveTest, FullResolutionRgbEightColorFileVerifiesAndIsSaved) {
+    const auto data = Text(30'000);
+    const auto env = PackEnvelope(data, "color.bin", CompressionMode::kOff).value().bytes;
+    const auto r = Transfer(env, "color.bin", {}, false, dir_, true);
+    ASSERT_TRUE(r.has_value());
+    ASSERT_TRUE(r->ok) << r->problem;
+    ASSERT_EQ(r->files.size(), 1U);
+    std::ifstream in(r->files[0].path, std::ios::binary);
+    const std::vector<std::uint8_t> got((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    EXPECT_EQ(got, data);
+}
+
+TEST(ReceiveDelivery, BusyWorkerOwnsItsFrameAndNextDecodeGetsNewestPending) {
+    detail::LatestFrame frames;
+    std::vector<std::uint8_t> luma(16, 10), chroma(16, 128);
+    ASSERT_TRUE(frames.Offer(luma, chroma, chroma, 4, 4, 10, true));
+    std::promise<void> active_started, release;
+    auto started = active_started.get_future();
+    auto resume = release.get_future();
+    struct Observed { int active = -1, next = -1; std::uint64_t timestamp = 0; bool full_resolution = false; };
+    auto worker = std::async(std::launch::async, [&] {
+        Observed observed;
+        detail::CameraFrame active;
+        if (!frames.Take(&active)) return observed;
+        active_started.set_value();
+        resume.wait();  // deterministic busy decoder, while the producer replaces pending frames
+        observed.active = active.luma[0];
+        if (frames.Take(&active)) {
+            observed.next = active.luma[0];
+            observed.timestamp = active.timestamp_ns;
+            observed.full_resolution = active.full_resolution;
+        }
+        return observed;
+    });
+    const bool running = started.wait_for(std::chrono::seconds(2)) == std::future_status::ready;
+    if (!running) {
+        frames.Close();
+        release.set_value();
+        worker.wait();
+        FAIL() << "Worker did not take the first frame";
+    }
+    std::fill(luma.begin(), luma.end(), 20);
+    EXPECT_TRUE(frames.Offer(luma, chroma, chroma, 4, 4, 20, true));
+    std::fill(luma.begin(), luma.end(), 30);
+    EXPECT_TRUE(frames.Offer(luma, chroma, chroma, 4, 4, 30, true));
+    std::fill(luma.begin(), luma.end(), 40);  // producer reuses its buffer after the copy
+    EXPECT_FALSE(frames.Offer(luma, chroma, chroma, 4, 4, 20, true));
+    EXPECT_FALSE(frames.Offer(luma, chroma, chroma, 4, 4, 30, true));
+    release.set_value();
+    const bool completed = worker.wait_for(std::chrono::seconds(2)) == std::future_status::ready;
+    if (!completed) frames.Close();
+    const auto observed = worker.get();
+    EXPECT_TRUE(completed) << "Finishing the active decode lost the newer pending frame";
+    EXPECT_EQ(observed.active, 10);
+    EXPECT_EQ(observed.next, 30);
+    EXPECT_EQ(observed.timestamp, 30U);
+    EXPECT_TRUE(observed.full_resolution);
+    const auto stats = frames.Stats();
+    EXPECT_EQ(stats.offered, 5U);
+    EXPECT_EQ(stats.accepted, 3U);
+    EXPECT_EQ(stats.replaced, 1U);
+    EXPECT_EQ(stats.stale, 2U);
+    frames.Close();
+    EXPECT_FALSE(frames.Offer(luma, chroma, chroma, 4, 4, 40, true));
+}
+
+TEST(ReceiveDelivery, CloseWakesAnIdleWorkerAndDiscardsPendingFrames) {
+    detail::LatestFrame idle;
+    auto waiter = std::async(std::launch::async, [&] { detail::CameraFrame active; return idle.Take(&active); });
+    idle.Close();
+    ASSERT_EQ(waiter.wait_for(std::chrono::seconds(2)), std::future_status::ready);
+    EXPECT_FALSE(waiter.get());
+    detail::LatestFrame pending;
+    const std::vector<std::uint8_t> luma(16, 10), chroma(4, 128);
+    ASSERT_TRUE(pending.Offer(luma, chroma, chroma, 4, 4, 0, false));
+    pending.Close();
+    detail::CameraFrame active;
+    EXPECT_FALSE(pending.Take(&active));
+}
+
+TEST(CameraFormat, PreservesMoreSamplesAlongTheCodeInsteadOfMaximizingSquareArea) {
+    SDL_CameraSpec square{SDL_PIXELFORMAT_NV12, SDL_COLORSPACE_BT709_LIMITED, 1552, 1552, 30, 1};
+    SDL_CameraSpec wide{SDL_PIXELFORMAT_NV12, SDL_COLORSPACE_BT709_LIMITED, 1920, 1080, 30, 1};
+    auto portrait = wide;
+    std::swap(portrait.width, portrait.height);
+    EXPECT_GT(square.width * square.height, wide.width * wide.height);
+    EXPECT_TRUE(detail::PreferReceiveFormat(wide, &square));
+    EXPECT_FALSE(detail::PreferReceiveFormat(square, &wide));
+    EXPECT_DOUBLE_EQ(detail::ReceiveCellPitch(wide), detail::ReceiveCellPitch(portrait));
+    EXPECT_GT(detail::ReceiveCellPitch(wide), detail::ReceiveCellPitch(square) * 1.2);
+}
+
+TEST(CameraFormat, RejectsInvalidSlowAndOversizedModesAndBreaksPitchTiesByRate) {
+    SDL_CameraSpec mode{SDL_PIXELFORMAT_NV12, SDL_COLORSPACE_BT709_LIMITED, 1920, 1080, 30, 1};
+    auto faster = mode;
+    faster.framerate_numerator = 60;
+    EXPECT_TRUE(detail::PreferReceiveFormat(faster, &mode));
+    EXPECT_FALSE(detail::PreferReceiveFormat(mode, &faster));
+    for (int value : {0, -1, 2000}) {
+        auto invalid = mode;
+        invalid.height = value;
+        EXPECT_FALSE(detail::PreferReceiveFormat(invalid, nullptr));
+    }
+    mode.framerate_numerator = 15;
+    EXPECT_FALSE(detail::PreferReceiveFormat(mode, nullptr));
+    mode.framerate_numerator = 30;
+    mode.framerate_denominator = 0;
+    EXPECT_FALSE(detail::PreferReceiveFormat(mode, nullptr));
+}
 
 TEST_F(ReceiveTest, AFileArrivesWholeAndIsSaved) {
     const auto data = Text(30'000);

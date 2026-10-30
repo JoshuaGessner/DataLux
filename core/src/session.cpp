@@ -3,9 +3,26 @@
 #include <fileflow/hash.h>
 
 #include <algorithm>
+#include <array>
+#include <chrono>
 #include <cmath>
 
 namespace fileflow {
+namespace {
+// Timing state belongs to the lane's decoder, so even early returns record their stage without
+// depending on copy elision of the returned DecodedFrame. No per-frame allocation or logging.
+class StageTimer {
+  public:
+    explicit StageTimer(double& target) : target_(&target), start_(Clock::now()) {}
+    ~StageTimer() { Add(); }
+    void Next(double& target) { Add(); target_ = &target; start_ = Clock::now(); }
+  private:
+    using Clock = std::chrono::steady_clock;
+    void Add() { *target_ += std::chrono::duration<double, std::milli>(Clock::now() - start_).count(); }
+    double* target_;
+    Clock::time_point start_;
+};
+}  // namespace
 
 // ---------------------------------------------------------------- transmit
 
@@ -185,6 +202,8 @@ FrameOutcome ReceiveSession::AcceptManifest(const FrameHeader& h,
 
 DecodedFrame FrameDecoder::Decode(std::span<const double> cell_samples,
                                   std::span<const double> cell_rgb) {
+    timings_ = {};
+    StageTimer timing(timings_.header_ms);
     DecodedFrame f;
     f.readable = std::any_of(cell_samples.begin(), cell_samples.end(),
                              [](double v) { return !std::isnan(v); });
@@ -222,6 +241,7 @@ DecodedFrame FrameDecoder::Decode(std::span<const double> cell_samples,
     }
     f.supported = true;
 
+    timing.Next(timings_.demod_ms);
     SoftSymbolBuffer soft;
     if (color != nullptr) {
         color->DemodulatePayload(cell_rgb, &soft, &f.color);
@@ -241,6 +261,7 @@ DecodedFrame FrameDecoder::Decode(std::span<const double> cell_samples,
         return f;
     }
     f.reached_fec = true;
+    timing.Next(timings_.fec_ms);
     auto dec = fec->Decode(hd.bytes, hd.erased_bytes, &f.fec);
     if (dec.ok()) {
         f.fec_ok = true;
@@ -462,6 +483,25 @@ std::uint32_t SessionIdFor(std::span<const std::uint8_t> payload, std::string_vi
     const std::uint32_t id = (static_cast<std::uint32_t>(d[0]) << 24) |
                              (static_cast<std::uint32_t>(d[1]) << 16) |
                              (static_cast<std::uint32_t>(d[2]) << 8) | d[3];
+    return id != 0 ? id : 1U;
+}
+
+std::uint32_t SessionIdForConfiguration(std::span<const std::uint8_t> payload,
+                                        std::string_view name, GridGeometry grid,
+                                        const TransmitConfig& cfg) {
+    const std::array<std::uint64_t, 8> values{SessionIdFor(payload, name), grid.cols, grid.rows,
+        static_cast<std::uint64_t>(cfg.profile), cfg.fec_nsym, cfg.symbol_size,
+        cfg.block_symbols, cfg.manifest_interval};
+    std::array<std::uint8_t, 64> bytes{};
+    for (std::size_t i = 0; i < values.size(); ++i) {
+        for (std::size_t j = 0; j < 8; ++j) {
+            bytes[i * 8 + j] = static_cast<std::uint8_t>(values[i] >> (56 - j * 8));
+        }
+    }
+    const auto digest = Sha256::Of(bytes);
+    const std::uint32_t id = (static_cast<std::uint32_t>(digest[0]) << 24) |
+                             (static_cast<std::uint32_t>(digest[1]) << 16) |
+                             (static_cast<std::uint32_t>(digest[2]) << 8) | digest[3];
     return id != 0 ? id : 1U;
 }
 

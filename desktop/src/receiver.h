@@ -8,11 +8,11 @@
 #pragma once
 
 #include "secure.h"
+#include "latest_frame.h"
 
 #include <fileflow/live.h>
 
 #include <atomic>
-#include <condition_variable>
 #include <cstdint>
 #include <filesystem>
 #include <memory>
@@ -44,6 +44,17 @@ struct ReceiveResult {
     std::string sealed_to;          // when it was encrypted
 };
 
+struct ReceiveDiagnostics {
+    detail::FrameDeliveryStats delivery;
+    std::uint64_t decoded = 0;
+    double decode_ms_sum = 0;  // full LiveReceiver::Ingest wall time, including core locking
+    double decode_ms_max = 0;
+    double queue_ms_sum = 0;   // application offer-to-worker time; not sensor capture age
+    double queue_ms_max = 0;
+    std::uint64_t useful_progress_updates = 0;
+    double useful_progress_age_ms = -1;
+};
+
 class Receiver {
   public:
     // [dir]: where files are saved; empty for Downloads/FileFlow (a test gives its own).
@@ -52,14 +63,17 @@ class Receiver {
     Receiver(const Receiver&) = delete;
     Receiver& operator=(const Receiver&) = delete;
 
-    // One camera frame: luma w x h, chroma planes at half size. Copied; dropped if the decoder is
-    // still busy with the last -- a receiver too slow for every frame just reads fewer of them.
+    // One camera frame: luma w x h, half-size chroma by default for existing callers. Co-sited
+    // RGB-derived planes use full_resolution=true. Copied into a bounded latest pending slot;
+    // the worker owns its active frame while newer pending frames can replace each other.
     void Offer(const std::vector<std::uint8_t>& luma, const std::vector<std::uint8_t>& u,
-               const std::vector<std::uint8_t>& v, int w, int h, std::uint64_t timestamp_ns);
+               const std::vector<std::uint8_t>& v, int w, int h, std::uint64_t timestamp_ns,
+               bool full_resolution = false);
 
     [[nodiscard]] LiveStatus Status() const;
     // Set once the file has verified (or failed to), and been saved (or not).
     [[nodiscard]] std::optional<ReceiveResult> Result() const;
+    [[nodiscard]] ReceiveDiagnostics Diagnostics() const;
     [[nodiscard]] std::uint64_t decoded() const { return decoded_.load(); }
 
   private:
@@ -74,15 +88,11 @@ class Receiver {
     std::size_t next_ = 0;
 
     mutable std::mutex mu_;
-    std::condition_variable cv_;
-    bool stop_ = false;
-    bool have_frame_ = false;
-    std::vector<std::uint8_t> luma_, u_, v_;
-    int w_ = 0;
-    int h_ = 0;
-    std::uint64_t ts_ = 0;
+    detail::LatestFrame frames_;
     LiveStatus status_;
     std::optional<ReceiveResult> result_;
+    ReceiveDiagnostics diagnostics_;
+    std::optional<std::chrono::steady_clock::time_point> last_progress_at_;
     std::atomic<std::uint64_t> decoded_{0};
     std::thread worker_;
 };

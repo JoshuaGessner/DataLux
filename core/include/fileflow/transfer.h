@@ -162,6 +162,8 @@ class FileReceiver {
 
     [[nodiscard]] bool complete() const noexcept;
     [[nodiscard]] std::uint32_t blocks_complete() const noexcept;
+    // Independent source-symbol rank gained from this transfer, excluding known padding.
+    [[nodiscard]] std::uint64_t useful_symbols() const noexcept;
     [[nodiscard]] double progress() const noexcept;
 
     // Total symbols ingested across all blocks, and the resulting reception overhead --

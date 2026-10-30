@@ -47,7 +47,8 @@ int Usage() {
     std::fprintf(stderr,
                  "usage: fileflow-send [--speed steady|fast|fastest] [--compression off|auto|max] [--windowed]\n"
                  "                     [--window WxH] [--code-window] [--seconds N]\n"
-                 "                     [--snapshot OUT.bmp [--snapshot-after S]] [FILE...]\n"
+                  "                     [--snapshot OUT.bmp [--snapshot-after S]] [FILE...]\n"
+                  "Diagnostics: --camera-modes | --freeze-frame N (0..1000; holds one state) | --fec 16|32|48|64\n"
                  "With no files, the app opens: drop files on it, or choose them.\n");
     return 2;
 }
@@ -61,6 +62,7 @@ int main(int argc, char** argv) {
     int win_w = 1100;
     int win_h = 760;
     std::vector<std::string> files;
+    bool camera_modes = false;
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
         if (a == "--speed" && i + 1 < argc) {
@@ -73,6 +75,21 @@ int main(int argc, char** argv) {
             else if (v == "auto") settings.compression = 1;
             else if (v == "max") settings.compression = 2;
             else return Usage();
+        } else if (a == "--camera-modes") {
+            camera_modes = true;
+        } else if (a == "--fec" && i + 1 < argc) {
+            const std::string value = argv[++i];
+            if (value == "16") options.diagnostic_fec_nsym = 16;
+            else if (value == "32") options.diagnostic_fec_nsym = 32;
+            else if (value == "48") options.diagnostic_fec_nsym = 48;
+            else if (value == "64") options.diagnostic_fec_nsym = 64;
+            else return Usage();
+        } else if (a == "--freeze-frame" && i + 1 < argc) {
+            char* end = nullptr;
+            const char* value = argv[++i];
+            const long frame = std::strtol(value, &end, 10);
+            if (end == value || *end != '\0' || frame < 0 || frame > 1000) return Usage();
+            options.diagnostic_frame = static_cast<std::uint32_t>(frame);
         } else if (a == "--windowed") {
             options.windowed = true;
         } else if (a == "--code-window") {
@@ -104,6 +121,30 @@ int main(int argc, char** argv) {
         return 1;
     }
     SDL_SetAppMetadata("DataLux", FILEFLOW_VERSION, "dev.fileflow.desktop");
+    if (camera_modes) {
+        if (!SDL_InitSubSystem(SDL_INIT_CAMERA)) {
+            std::fprintf(stderr, "camera: %s\n", SDL_GetError());
+            SDL_Quit();
+            return 1;
+        }
+        int count = 0;
+        SDL_CameraID* cameras = SDL_GetCameras(&count);
+        for (int i = 0; cameras != nullptr && i < count; ++i) {
+            int modes = 0;
+            SDL_CameraSpec** specs = SDL_GetCameraSupportedFormats(cameras[i], &modes);
+            for (int j = 0; specs != nullptr && j < modes; ++j) {
+                const auto& s = *specs[j];
+                std::printf("camera %d position %d: %dx%d %d/%d fps %s colorspace=%u\n", i,
+                            static_cast<int>(SDL_GetCameraPosition(cameras[i])), s.width, s.height,
+                            s.framerate_numerator, s.framerate_denominator, SDL_GetPixelFormatName(s.format),
+                            static_cast<unsigned>(s.colorspace));
+            }
+            SDL_free(specs);
+        }
+        SDL_free(cameras);
+        SDL_Quit();
+        return 0;
+    }
     // Straight to full screen when there are files to send; otherwise a window.
     SDL_WindowFlags flags = SDL_WINDOW_HIGH_PIXEL_DENSITY | SDL_WINDOW_RESIZABLE;
     if (!files.empty() && !options.windowed && !options.code_window) flags |= SDL_WINDOW_FULLSCREEN;

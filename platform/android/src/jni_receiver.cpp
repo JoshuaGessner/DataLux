@@ -54,6 +54,10 @@ enum Slot : int {
     kCombinedFrames,
     kLensStrength,
     kBatchHint,
+    kSessionId, kSenderSwitches, kUsefulSymbols,
+    kHeaderFrames, kFecFailedFrames, kCrcFailedFrames,
+    kTimedFrames, kPipelineMs, kHeaderMs, kDemodMs, kFecMs, kCombineMs, kLockWaitMs, kCommitMs,
+    kTrackingMs, kAlignmentMs, kLumaSamplingMs, kPhotometryMs, kColorSamplingMs,
     kSlotCount,
 };
 
@@ -250,6 +254,25 @@ Java_dev_fileflow_rx_NativeReceiver_ingest(JNIEnv* env, jclass /*unused*/, jlong
     v[kCombinedFrames] = static_cast<jdouble>(s.combined_frames);
     v[kLensStrength] = s.lens_strength;
     v[kBatchHint] = s.content.batch ? 1.0 : 0.0;
+    v[kSessionId] = static_cast<jdouble>(s.session_id);
+    v[kSenderSwitches] = static_cast<jdouble>(s.sender_switches);
+    v[kUsefulSymbols] = static_cast<jdouble>(s.useful_symbols);
+    v[kHeaderFrames] = static_cast<jdouble>(s.header_frames);
+    v[kFecFailedFrames] = static_cast<jdouble>(s.fec_failed_frames);
+    v[kCrcFailedFrames] = static_cast<jdouble>(s.crc_failed_frames);
+    v[kTimedFrames] = static_cast<jdouble>(s.diagnostics.timed_frames);
+    v[kPipelineMs] = s.diagnostics.pipeline_ms;
+    v[kHeaderMs] = s.diagnostics.header_ms;
+    v[kDemodMs] = s.diagnostics.demod_ms;
+    v[kFecMs] = s.diagnostics.fec_ms;
+    v[kCombineMs] = s.diagnostics.combine_ms;
+    v[kLockWaitMs] = s.diagnostics.lock_wait_ms;
+    v[kCommitMs] = s.diagnostics.commit_ms;
+    v[kTrackingMs] = s.diagnostics.tracking_ms;
+    v[kAlignmentMs] = s.diagnostics.alignment_ms;
+    v[kLumaSamplingMs] = s.diagnostics.luma_sampling_ms;
+    v[kPhotometryMs] = s.diagnostics.photometry_ms;
+    v[kColorSamplingMs] = s.diagnostics.color_sampling_ms;
     env->SetDoubleArrayRegion(out, 0, static_cast<jsize>(kSlotCount), v);
     return env->NewStringUTF(s.message.c_str());
 }

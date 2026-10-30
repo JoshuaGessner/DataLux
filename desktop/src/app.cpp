@@ -322,7 +322,11 @@ void App::Frame() {
             v.turned = turned;
             MakeTexture(v);
         }
-        Pace(s.states_per_second);
+        if (options_.diagnostic_frame) {
+            if (states_ <= *options_.diagnostic_frame) Advance();
+        } else {
+            Pace(s.states_per_second);
+        }
         if (presenting()) {
             // The code on its own display, at its refresh; the presenter's view here, not waited for.
             SDL_SetRenderDrawColor(v.renderer, 0, 0, 0, 255);
@@ -467,7 +471,7 @@ void App::TakePrepared() {
 void App::Restart() {
     if (!prepared_) return;
     std::string problem;
-    transfer_ = Open(*prepared_, kSpeeds[settings_.speed], &problem);
+    transfer_ = Open(*prepared_, kSpeeds[settings_.speed], &problem, options_.diagnostic_fec_nsym);
     if (!transfer_) {
         problem_ = problem;
         Stop();
@@ -482,9 +486,9 @@ void App::Restart() {
     states_ = 0;
     Wake();
     const auto& e = prepared_->envelope;
-    std::printf("sending %s: %llu bytes as %zu, %s%s\n", prepared_->name.c_str(),
+    std::printf("sending %s: %llu bytes as %zu, %s%s, FEC %zu\n", prepared_->name.c_str(),
                 static_cast<unsigned long long>(e.original_size), e.bytes.size(), transfer_->speed.name,
-                presenting() ? ", presenting" : "");
+                presenting() ? ", presenting" : "", options_.diagnostic_fec_nsym);
     std::fflush(stdout);
 }
 

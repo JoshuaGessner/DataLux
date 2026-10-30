@@ -8,6 +8,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <vector>
 
@@ -167,6 +168,84 @@ TEST(ColorModulator, ThreeTimesTheBitsOfM0) {
               layout.payload_cells().size() * 3 / 8);
     EXPECT_EQ(PayloadCapacityBytes(layout, ModulationProfile::kM0BinaryLuminance),
               layout.payload_cells().size() / 8);
+}
+
+TEST(ColorModulator, DiagnosticComparisonsDecodeCleanColoursAndRetainDefaultOutput) {
+    const auto layout = FrameLayout::Create(kGrid, {}).value();
+    for (const auto profile : {ModulationProfile::kM3FourColor, ModulationProfile::kM5EightColor}) {
+        const ColorModulator mod(layout, profile);
+        const auto payload = File(mod.payload_capacity_bytes());
+        CellMatrix cells(kGrid.cols, kGrid.rows);
+        ASSERT_TRUE(mod.Render({}, payload, &cells).ok());
+        std::vector<double> rgb(static_cast<std::size_t>(kGrid.cells()) * 3);
+        for (std::uint32_t idx = 0; idx < kGrid.cells(); ++idx) {
+            for (int k = 0; k < 3; ++k) {
+                // Distinct camera colours, not a textbook RGB cube: the pilots must still seed
+                // each comparison's identities. No local shading/bleed is present in this case.
+                const auto value = cells.at(idx % kGrid.cols, idx / kGrid.cols);
+                rgb[idx * 3 + static_cast<std::size_t>(k)] = 8.0 +
+                    (ColorChannelOn(value, k) ? 220.0 : 0.0) +
+                    (ColorChannelOn(value, (k + 1) % 3) ? 14.0 : 0.0);
+            }
+        }
+        SoftSymbolBuffer reference;
+        mod.DemodulatePayload(rgb, &reference);
+        for (const bool local : {false, true}) for (const bool bleed : {false, true}) {
+            SoftSymbolBuffer soft;
+            ColorDiagnostics diag;
+            mod.DemodulatePayload(rgb, &soft, &diag,
+                                 {.enable_local_centroids = local, .enable_bleed = bleed});
+            ASSERT_EQ(soft.size(), layout.payload_cells().size() * mod.bits_per_cell());
+            const auto hard = HardDecide(soft, payload.size());
+            EXPECT_EQ(hard.erasures, 0U) << local << '/' << bleed;
+            EXPECT_EQ(hard.bytes, payload) << local << '/' << bleed;
+            EXPECT_EQ(diag.cells, layout.payload_cells().size());
+            EXPECT_EQ(diag.pilots, layout.color_pilot_cells().size());
+            EXPECT_TRUE(std::isfinite(diag.noise_sigma));
+            EXPECT_GE(diag.noise_sigma, 0.0);
+            EXPECT_TRUE(std::isfinite(diag.centroid_spread));
+            EXPECT_GT(diag.centroid_spread, 0.0);
+            for (const auto& centre : diag.centroids) for (const double v : centre) EXPECT_TRUE(std::isfinite(v));
+            if (local && bleed) {
+                ASSERT_EQ(soft.size(), reference.size());
+                for (std::size_t i = 0; i < soft.size(); ++i) {
+                    EXPECT_EQ(soft.symbols[i].llr, reference.symbols[i].llr);
+                    EXPECT_EQ(soft.symbols[i].erased, reference.symbols[i].erased);
+                }
+            }
+        }
+    }
+}
+
+TEST(ColorModulator, DiagnosticComparisonsKeepMissingCellsErased) {
+    const auto layout = FrameLayout::Create(kGrid, {}).value();
+    for (const auto profile : {ModulationProfile::kM3FourColor, ModulationProfile::kM5EightColor}) {
+        const ColorModulator mod(layout, profile);
+        CellMatrix cells(kGrid.cols, kGrid.rows);
+        ASSERT_TRUE(mod.Render({}, File(mod.payload_capacity_bytes()), &cells).ok());
+        std::vector<double> rgb(static_cast<std::size_t>(kGrid.cells()) * 3);
+        for (std::uint32_t idx = 0; idx < kGrid.cells(); ++idx) for (int k = 0; k < 3; ++k) {
+            rgb[idx * 3 + static_cast<std::size_t>(k)] =
+                ColorChannelOn(cells.at(idx % kGrid.cols, idx / kGrid.cols), k) ? 255.0 : 0.0;
+        }
+        const std::size_t missing = layout.payload_cells().size() / 2;
+        const auto idx = layout.payload_cells()[missing];
+        for (std::size_t k = 0; k < 3; ++k) rgb[idx * 3 + k] = std::nan("");
+        for (const bool local : {false, true}) for (const bool bleed : {false, true}) {
+            SoftSymbolBuffer soft;
+            ColorDiagnostics diag;
+            mod.DemodulatePayload(rgb, &soft, &diag,
+                                 {.enable_local_centroids = local, .enable_bleed = bleed});
+            ASSERT_EQ(soft.size(), layout.payload_cells().size() * mod.bits_per_cell());
+            EXPECT_EQ(diag.cells, layout.payload_cells().size() - 1);
+            EXPECT_TRUE(std::isfinite(diag.noise_sigma));
+            for (std::size_t bit = 0; bit < mod.bits_per_cell(); ++bit) {
+                const auto& s = soft.symbols[missing * mod.bits_per_cell() + bit];
+                EXPECT_TRUE(s.erased);
+                EXPECT_EQ(s.llr, kLlrErasure);
+            }
+        }
+    }
 }
 
 TEST(ColorTransfer, EightColoursThroughACrosstalkingCameraVerify) {

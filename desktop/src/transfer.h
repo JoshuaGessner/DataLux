@@ -79,7 +79,8 @@ struct Transfer {
     [[nodiscard]] std::uint64_t PassFrames() const;
 };
 
-std::unique_ptr<Transfer> Open(const Prepared& p, const Speed& speed, std::string* problem);
+std::unique_ptr<Transfer> Open(const Prepared& p, const Speed& speed, std::string* problem,
+                             std::size_t fec_nsym = kFecNsym);
 
 // The app's fragment shader: a cell's low three bits light red, green and blue. M0's 0 and 255
 // come out black and white by the same rule.

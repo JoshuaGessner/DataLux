@@ -8,16 +8,24 @@ import android.hardware.camera2.CameraDevice
 import android.hardware.camera2.CameraManager
 import android.hardware.camera2.CameraMetadata
 import android.hardware.camera2.CaptureRequest
+import android.hardware.camera2.CaptureFailure
 import android.hardware.camera2.CaptureResult
 import android.hardware.camera2.TotalCaptureResult
 import android.hardware.camera2.params.StreamConfigurationMap
+import android.hardware.camera2.params.OutputConfiguration
+import android.hardware.camera2.params.SessionConfiguration
 import android.media.ImageReader
 import android.os.Handler
 import android.os.HandlerThread
+import android.os.SystemClock
 import android.util.Log
 import android.util.Size
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.CancellationException
 import java.util.concurrent.TimeUnit
+import java.util.Collections
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 
 /**
  * The CPU capture path of C05: opens the camera with locked settings and writes every Y plane
@@ -92,6 +100,24 @@ class CameraRecorder(private val context: Context) {
     var frameChroma: Chroma? = null
         private set
 
+    /** Sensor exposure timestamp, ns, valid only during onFrame; -1 outside that callback. */
+    @Volatile
+    var frameTimestampNs: Long = -1L
+        private set
+
+    /** Camera clock domain. Only REALTIME timestamps can be compared to elapsedRealtimeNanos. */
+    @Volatile
+    var sensorTimestampSource: Int = CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE_UNKNOWN
+        private set
+
+    val timestampsAreRealtime: Boolean
+        get() = sensorTimestampSource == CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE_REALTIME
+
+    /** Constant-space capture diagnostics, refreshed at most once per second and at shutdown. */
+    @Volatile
+    var telemetry = CaptureTelemetry.Summary()
+        private set
+
     /** `SENSOR_ROLLING_SHUTTER_SKEW` of the latest frame, ns; -1 when the camera does not say. */
     @Volatile
     var rollingShutterSkewNs: Long = -1L
@@ -130,6 +156,7 @@ class CameraRecorder(private val context: Context) {
         val callback: CameraCaptureSession.CaptureCallback,
         val handler: Handler,
         val chars: CameraCharacteristics,
+        val fail: (String, Exception?) -> Unit,
     ) {
         /** Bumped by every refocus, so a stale "return to continuous" from an older one is ignored. */
         var generation = 0
@@ -137,6 +164,16 @@ class CameraRecorder(private val context: Context) {
 
         fun repeat() {
             runCatching { session.setRepeatingRequest(builder.build(), callback, handler) }
+                .onFailure { fail("updating camera request: ${it.message}", it as? Exception) }
+        }
+
+        fun post(action: () -> Unit): Boolean {
+            val posted = handler.post {
+                if (control !== this) return@post
+                try { action() } catch (e: Exception) { fail("camera control: ${e.message}", e) }
+            }
+            if (!posted) fail("camera control thread stopped", null)
+            return posted
         }
     }
 
@@ -157,7 +194,7 @@ class CameraRecorder(private val context: Context) {
     fun focusAt(nx: Float, ny: Float): Boolean {
         val c = control ?: return false
         if (minFocusDiopters <= 0f) return false  // fixed-focus lens: nothing to do
-        c.handler.post {
+        return c.post {
             if (control !== c) return@post
             val gen = ++c.generation
             c.scanning = true
@@ -172,10 +209,10 @@ class CameraRecorder(private val context: Context) {
                 c.session.capture(c.builder.build(), c.callback, c.handler)
                 c.builder.set(CaptureRequest.CONTROL_AF_TRIGGER, CameraMetadata.CONTROL_AF_TRIGGER_IDLE)
             }
+                .onFailure { c.fail("focus scan: ${it.message}", it as? Exception) }
             // A scan that never reports locked must not leave AF switched off for good.
             c.handler.postDelayed({ resumeContinuous(c, gen) }, AF_SCAN_TIMEOUT_MS)
         }
-        return true
     }
 
     /** Refocus on the centre of the view. */
@@ -196,12 +233,11 @@ class CameraRecorder(private val context: Context) {
         val clamped = ratio.coerceIn(maxOf(1f, range.lower), minOf(range.upper, MAX_LIVE_ZOOM))
         if (kotlin.math.abs(clamped - zoom) < 0.01f) return false
         zoom = clamped
-        c.handler.post {
+        return c.post {
             if (control !== c) return@post
             c.builder.set(CaptureRequest.CONTROL_ZOOM_RATIO, clamped)
             c.repeat()
         }
-        return true
     }
 
     /** Sets sensor sensitivity, clamped to what the sensor accepts. No-op without manual control. */
@@ -210,7 +246,7 @@ class CameraRecorder(private val context: Context) {
         val clamped = value.coerceIn(isoRange.lower, isoRange.upper)
         if (clamped == iso) return
         iso = clamped
-        c.handler.post {
+        c.post {
             if (control !== c) return@post
             c.builder.set(CaptureRequest.SENSOR_SENSITIVITY, clamped)
             c.repeat()
@@ -233,7 +269,7 @@ class CameraRecorder(private val context: Context) {
         val clamped = ns.coerceIn(range?.lower ?: 1L, minOf(range?.upper ?: ns, maxExposureNs))
         if (clamped == exposureNs) return
         exposureNs = clamped
-        c.handler.post {
+        c.post {
             if (control !== c) return@post
             c.builder.set(CaptureRequest.SENSOR_EXPOSURE_TIME, clamped)
             c.repeat()
@@ -259,12 +295,16 @@ class CameraRecorder(private val context: Context) {
 
     private fun resumeContinuous(c: LiveControl, gen: Int) {
         if (control !== c || c.generation != gen) return
-        c.scanning = false
-        c.builder.set(CaptureRequest.CONTROL_AF_TRIGGER, CameraMetadata.CONTROL_AF_TRIGGER_IDLE)
-        c.builder.set(
-            CaptureRequest.CONTROL_AF_MODE, CameraMetadata.CONTROL_AF_MODE_CONTINUOUS_PICTURE,
-        )
-        c.repeat()
+        try {
+            c.scanning = false
+            c.builder.set(CaptureRequest.CONTROL_AF_TRIGGER, CameraMetadata.CONTROL_AF_TRIGGER_IDLE)
+            c.builder.set(
+                CaptureRequest.CONTROL_AF_MODE, CameraMetadata.CONTROL_AF_MODE_CONTINUOUS_PICTURE,
+            )
+            c.repeat()
+        } catch (e: Exception) {
+            c.fail("resume autofocus: ${e.message}", e)
+        }
     }
 
     /** The middle of the view, for continuous AF. Null when the camera takes no AF regions. */
@@ -300,10 +340,14 @@ class CameraRecorder(private val context: Context) {
      */
     @Volatile
     private var cancelled = false
+    private val recording = AtomicBoolean(false)
+    @Volatile
+    private var activeDone: CountDownLatch? = null
 
     /** Ends a run started with `frameCount <= 0`. Safe to call from any thread. */
     fun cancel() {
         cancelled = true
+        activeDone?.countDown()
     }
 
     /**
@@ -356,6 +400,8 @@ class CameraRecorder(private val context: Context) {
          * zero — duplicate detection lives in the writer.
          */
         val framesWereWritten: Boolean,
+        /** Full-run counters; live sensor timestamps retain only a recent bounded window. */
+        val telemetry: CaptureTelemetry.Summary = CaptureTelemetry.Summary(),
     ) {
         /**
          * Delivered rate from the FIRST to the LAST sensor timestamp.
@@ -472,6 +518,8 @@ class CameraRecorder(private val context: Context) {
          * sensor that cannot hit the rate. Run both arms and the difference names the culprit.
          */
         writeFrames: Boolean = true,
+        /** Live callers may discard queued stale images; diagnostic recordings stay sequential. */
+        latestFrameOnly: Boolean = false,
         /**
          * Called for every delivered frame, on the CAMERA THREAD, with a view of the driver's own Y
          * plane. Must return promptly: the buffer is released as soon as it returns, and holding it
@@ -483,49 +531,80 @@ class CameraRecorder(private val context: Context) {
          */
         onFrame: ((java.nio.ByteBuffer, Int, Int, Int) -> Unit)? = null,
     ): Outcome {
-        // `rig` carries the grid, and the grid decides which capture mode maximises px/cell, so it
-        // must be known before the mode is chosen.
-        val mgr = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
-
-        // Back camera. The front camera is not a candidate: it is lower resolution on every
-        // device we care about, and a receiver is held facing the transmitting screen.
-        val cameraId = mgr.cameraIdList.firstOrNull { id ->
-            mgr.getCameraCharacteristics(id)
-                .get(CameraCharacteristics.LENS_FACING) == CameraCharacteristics.LENS_FACING_BACK
-        } ?: mgr.cameraIdList.firstOrNull()
-            ?: return failure("no camera on this device")
-
-        val chars = mgr.getCameraCharacteristics(cameraId)
-        sensorOrientation = chars.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 0
-        minFocusDiopters = chars.get(CameraCharacteristics.LENS_INFO_MINIMUM_FOCUS_DISTANCE) ?: 0f
-        val map = chars.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
-            ?: return failure("no stream configuration map", cameraId)
-
-        val size = pickSize(map, targetFps, maxWidth, rig.gridCols, rig.gridRows)
-            ?: return failure("no YUV_420_888 size at <= $maxWidth px wide", cameraId)
-
+        if (!recording.compareAndSet(false, true)) {
+            return failure("capture already running", fps = targetFps, writeFrames = writeFrames)
+        }
+        var cameraId = ""
+        var size = Size(0, 0)
         var thread: HandlerThread? = null
+        var cameraHandler: Handler? = null
         var reader: ImageReader? = null
         var device: CameraDevice? = null
         var session: CameraCaptureSession? = null
         var recorder: Recorder? = null
 
-        val timestamps = ArrayList<Long>(maxOf(frameCount, 64))
+        val timestamps = Collections.synchronizedList(ArrayList<Long>(frameCount.coerceIn(64, LIVE_TIMESTAMP_LIMIT)))
         var reportedExposure = -1L
         var reportedIso = -1
         var reportedFocus = -1f
-        val minFocus = chars.get(CameraCharacteristics.LENS_INFO_MINIMUM_FOCUS_DISTANCE) ?: -1f
+        var minFocus = -1f
         var aeMode = -1
         var reportedFrameDuration = -1L
         var edgeMode = -1
         var shadingMode = -1
         var nrMode = -1
         var manualRequested = false
-        var error: String? = null
+        val error = AtomicReference<String?>(null)
+        val stopping = AtomicBoolean(false)
+        val done = CountDownLatch(1)
+        activeDone = done
+        var metrics = CaptureTelemetry(latestFrameOnly, false)
+        var nextTelemetryNs = 0L
+        val fail: (String, Exception?) -> Unit = { message, cause ->
+            error.compareAndSet(null, message)
+            Log.e(TAG, message, cause)
+            done.countDown()
+        }
+        fun cleanup(action: String, block: () -> Unit) {
+            try { block() } catch (e: Exception) { fail("$action: ${e.message}", e) }
+        }
+        var dupes = -1
+        var written = -1
+        var framesReceived = 0
 
         try {
+            if (cancelled) throw CancellationException()
+            frameTimestampNs = -1L
+            frameChroma = null
+            sensorTimestampSource = CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE_UNKNOWN
+            telemetry = metrics.snapshot()
+            require(targetFps > 0) { "targetFps must be positive" }
+            require(maxWidth > 0) { "maxWidth must be positive" }
+            check(context.checkSelfPermission(android.Manifest.permission.CAMERA) ==
+                android.content.pm.PackageManager.PERMISSION_GRANTED) { "camera permission not granted" }
+            val mgr = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
+            // Camera discovery may itself fail after permission revocation or service failure.
+            val ids = mgr.cameraIdList
+            cameraId = ids.firstOrNull { id ->
+                mgr.getCameraCharacteristics(id).get(CameraCharacteristics.LENS_FACING) ==
+                    CameraCharacteristics.LENS_FACING_BACK
+            } ?: ids.firstOrNull() ?: throw IllegalStateException("no camera on this device")
+            val chars = mgr.getCameraCharacteristics(cameraId)
+            sensorOrientation = chars.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 0
+            minFocusDiopters = chars.get(CameraCharacteristics.LENS_INFO_MINIMUM_FOCUS_DISTANCE) ?: 0f
+            minFocus = chars.get(CameraCharacteristics.LENS_INFO_MINIMUM_FOCUS_DISTANCE) ?: -1f
+            sensorTimestampSource = chars.get(CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE)
+                ?: CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE_UNKNOWN
+            metrics = CaptureTelemetry(latestFrameOnly, timestampsAreRealtime)
+            telemetry = metrics.snapshot()
+            val map = chars.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+                ?: throw IllegalStateException("no stream configuration map")
+            size = pickSize(map, targetFps, maxWidth, rig.gridCols, rig.gridRows)
+                ?: throw IllegalStateException("no YUV_420_888 size at <= $maxWidth px wide")
+            if (cancelled) throw CancellationException()
             thread = HandlerThread("ff-capture").apply { start() }
             val handler = Handler(thread.looper)
+            cameraHandler = handler
 
             val meta = CaptureMetadata(
                 senderModel = rig.senderModel,
@@ -558,47 +637,66 @@ class CameraRecorder(private val context: Context) {
                 size.width, size.height, ImageFormat.YUV_420_888, IMAGE_BUFFERS,
             )
 
-            val done = CountDownLatch(1)
             val rec = recorder
             // `frameCount <= 0` means run until cancelled, which is what the aiming UI wants: it
             // needs a steady stream of verdicts, not a fixed-size dataset.
             val unbounded = frameCount <= 0
             reader.setOnImageAvailableListener({ r ->
-                val image = r.acquireNextImage() ?: return@setOnImageAvailableListener
+                if (stopping.get() || done.count == 0L) return@setOnImageAvailableListener
                 try {
-                    if (cancelled) {
-                        done.countDown()
-                    } else if (unbounded || timestamps.size < frameCount) {
-                        onFrame?.let { cb ->
-                            val plane = image.planes[0]
-                            // The colour planes ride along for the callback's duration only:
-                            // the buffers go back to the camera when it returns.
-                            frameChroma = image.planes.takeIf { it.size >= 3 }?.let {
-                                Chroma(it[1].buffer, it[2].buffer, it[1].rowStride, it[1].pixelStride)
+                    val image = if (latestFrameOnly) r.acquireLatestImage() else r.acquireNextImage()
+                    metrics.notification(image != null)
+                    if (image == null) return@setOnImageAvailableListener
+                    try {
+                        if (cancelled) {
+                            done.countDown()
+                        } else if (unbounded || timestamps.size < frameCount) {
+                            val arrivalNs = SystemClock.elapsedRealtimeNanos()
+                            metrics.callbackStarted(arrivalNs, image.timestamp)
+                            onFrame?.let { cb ->
+                                val plane = image.planes[0]
+                                frameTimestampNs = image.timestamp
+                                frameChroma = image.planes.takeIf { it.size >= 3 }?.let {
+                                    Chroma(it[1].buffer, it[2].buffer, it[1].rowStride, it[1].pixelStride)
+                                }
+                                val callbackStartNs = SystemClock.elapsedRealtimeNanos()
+                                try {
+                                    cb(plane.buffer, image.width, image.height, plane.rowStride)
+                                } finally {
+                                    metrics.callbackFinished(SystemClock.elapsedRealtimeNanos() - callbackStartNs)
+                                    frameChroma = null
+                                    frameTimestampNs = -1L
+                                }
                             }
-                            try {
-                                cb(plane.buffer, image.width, image.height, plane.rowStride)
-                            } finally {
-                                frameChroma = null
+                            val code = if (writeFrames) rec.writeFrame(image) else 0
+                            if (code == 0) {
+                                // Live runs may last hours; retain timing detail for only a recent window.
+                                if (unbounded && timestamps.size == LIVE_TIMESTAMP_LIMIT) timestamps.removeAt(0)
+                                timestamps.add(image.timestamp)
+                                if (framesReceived < Int.MAX_VALUE) framesReceived++
+                            } else {
+                                fail("writeFrame: ${Recorder.errorName(code)}", null)
+                            }
+                            if (!unbounded && timestamps.size >= frameCount) done.countDown()
+                            if (arrivalNs >= nextTelemetryNs) {
+                                telemetry = metrics.snapshot()
+                                nextTelemetryNs = arrivalNs + 1_000_000_000L
                             }
                         }
-                        val code = if (writeFrames) rec.writeFrame(image) else 0
-                        if (code == 0) {
-                            timestamps.add(image.timestamp)
-                        } else if (error == null) {
-                            error = "writeFrame: ${Recorder.errorName(code)}"
-                        }
-                        if (!unbounded && timestamps.size >= frameCount) done.countDown()
+                    } finally {
+                        image.close()
                     }
-                } finally {
-                    // Always. A held image starves the pipeline, and a starved pipeline looks
-                    // exactly like a camera that cannot hit its rate.
-                    image.close()
+                } catch (e: Exception) {
+                    frameChroma = null
+                    frameTimestampNs = -1L
+                    fail("image callback: ${e::class.simpleName}: ${e.message}", e)
                 }
             }, handler)
 
-            device = openCamera(mgr, cameraId, handler)
-                ?: return failure("could not open camera $cameraId", cameraId, size, targetFps)
+            val isStopping = { cancelled || stopping.get() || done.count == 0L }
+            device = openCamera(mgr, cameraId, isStopping, fail)
+                ?: if (cancelled) throw CancellationException()
+                else throw IllegalStateException("could not open camera $cameraId")
 
             val builder = device.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {
                 addTarget(reader.surface)
@@ -768,15 +866,22 @@ class CameraRecorder(private val context: Context) {
             }
             val request = builder.build()
 
-            session = createSession(device, reader.surface, previewSurface, handler)
-                ?: return failure("could not configure a capture session", cameraId, size, targetFps)
+            session = createSession(device, reader.surface, previewSurface, isStopping, fail)
+                ?: if (cancelled) throw CancellationException()
+                else throw IllegalStateException("could not configure a capture session")
 
             val callback = object : CameraCaptureSession.CaptureCallback() {
+                override fun onCaptureFailed(s: CameraCaptureSession, r: CaptureRequest, f: CaptureFailure) {
+                    if (!isStopping()) fail("camera capture failed (reason ${f.reason})", null)
+                }
+
                 override fun onCaptureCompleted(
                     s: CameraCaptureSession,
                     r: CaptureRequest,
                     result: TotalCaptureResult,
                 ) {
+                    if (isStopping()) return
+                    try {
                     // First row to last row, per frame. With the exposure it bounds how fast the
                     // display can change state before captures tear (F60) -- measured, not assumed.
                     result.get(CaptureResult.SENSOR_ROLLING_SHUTTER_SKEW)?.let {
@@ -805,9 +910,12 @@ class CameraRecorder(private val context: Context) {
                     result.get(CaptureResult.EDGE_MODE)?.let { edgeMode = it }
                     result.get(CaptureResult.SHADING_MODE)?.let { shadingMode = it }
                     result.get(CaptureResult.NOISE_REDUCTION_MODE)?.let { nrMode = it }
+                    } catch (e: Exception) {
+                        fail("capture result: ${e.message}", e)
+                    }
                 }
             }
-            control = LiveControl(session, builder, callback, handler, chars)
+            control = LiveControl(session, builder, callback, handler, chars, fail)
             session.setRepeatingRequest(request, callback, handler)
 
             if (unbounded) {
@@ -821,33 +929,69 @@ class CameraRecorder(private val context: Context) {
                 // point is to fail with data rather than to fail fast.
                 val timeoutSec = 20L + frameCount / maxOf(targetFps, 1)
                 if (!done.await(timeoutSec, TimeUnit.SECONDS)) {
-                    error = "timed out after ${timestamps.size}/$frameCount frames"
+                    fail("timed out after ${timestamps.size}/$frameCount frames", null)
                 }
             }
+        } catch (_: CancellationException) {
+            // Deliberate user cancellation has no error state.
+        } catch (e: InterruptedException) {
+            fail("capture interrupted", e)
+            Thread.currentThread().interrupt()
         } catch (e: Exception) {
-            error = "${e::class.simpleName}: ${e.message}"
-            Log.e(TAG, "capture failed", e)
+            fail("${e::class.simpleName}: ${e.message}", e)
         } finally {
+            stopping.set(true)
             control = null
-            runCatching { session?.stopRepeating() }
-            runCatching { session?.close() }
-            runCatching { device?.close() }
-            runCatching { reader?.close() }
-            val code = recorder?.finish() ?: 0
-            if (code != 0 && error == null) error = "finish: ${Recorder.errorName(code)}"
-            val dupes = recorder?.duplicateFrames ?: -1
-            val written = recorder?.framesWritten ?: -1
-            runCatching { recorder?.close() }
-            runCatching { thread?.quitSafely() }
-
-            return Outcome(
+            // Serialize teardown behind any in-flight image callback. Closing its reader or native
+            // writer from this waiting thread would otherwise race buffers still used by onFrame.
+            val cleaned = CountDownLatch(1)
+            val shutdown = Runnable {
+                try {
+                    cleanup("stop capture") { session?.stopRepeating() }
+                    cleanup("close session") { session?.close() }
+                    cleanup("close camera") { device?.close() }
+                    cleanup("detach image listener") { reader?.setOnImageAvailableListener(null, null) }
+                    cleanup("close image reader") { reader?.close() }
+                    cleanup("finish recording") {
+                        val code = recorder?.finish() ?: 0
+                        if (code != 0) fail("finish: ${Recorder.errorName(code)}", null)
+                    }
+                    cleanup("read recording counts") {
+                        dupes = recorder?.duplicateFrames ?: -1
+                        written = recorder?.framesWritten ?: -1
+                    }
+                    cleanup("close recording") { recorder?.close() }
+                    frameChroma = null
+                    frameTimestampNs = -1L
+                    telemetry = metrics.snapshot()
+                } finally {
+                    cleanup("stop camera thread") { thread?.quitSafely() }
+                    if (activeDone === done) activeDone = null
+                    recording.set(false)
+                    cleaned.countDown()
+                }
+            }
+            val handler = cameraHandler
+            if (handler == null || !handler.post(shutdown)) shutdown.run()
+            // An interrupted caller still needs cleanup to run. Restore the flag after waiting.
+            var interrupted = Thread.interrupted()
+            try {
+                if (!cleaned.await(10, TimeUnit.SECONDS)) fail("camera callback did not finish during shutdown", null)
+            } catch (e: InterruptedException) {
+                interrupted = true
+                fail("camera cleanup interrupted", e)
+            }
+            if (interrupted) Thread.currentThread().interrupt()
+        }
+        val timestampSnapshot = synchronized(timestamps) { timestamps.toLongArray() }
+        return Outcome(
                 framesWereWritten = writeFrames,
                 cameraId = cameraId,
                 size = size,
                 requestedFps = targetFps,
-                framesWritten = if (writeFrames) written else timestamps.size,
+                framesWritten = if (writeFrames) written.coerceAtLeast(0) else framesReceived,
                 duplicateFrames = dupes,
-                timestampsNs = timestamps.toLongArray(),
+                timestampsNs = timestampSnapshot,
                 reportedExposureNs = reportedExposure,
                 reportedIso = reportedIso,
                 reportedFocusDistance = reportedFocus,
@@ -858,9 +1002,9 @@ class CameraRecorder(private val context: Context) {
                 noiseReductionMode = nrMode,
                 shadingMode = shadingMode,
                 manualRequested = manualRequested,
-                error = error,
+                error = error.get(),
+                telemetry = metrics.snapshot(),
             )
-        }
     }
 
     // ------------------------------------------------------------------ helpers
@@ -987,54 +1131,119 @@ class CameraRecorder(private val context: Context) {
             .firstOrNull()
     }
 
-    private fun openCamera(mgr: CameraManager, id: String, handler: Handler): CameraDevice? {
+    private fun openCamera(
+        mgr: CameraManager,
+        id: String,
+        isStopping: () -> Boolean,
+        fail: (String, Exception?) -> Unit,
+    ): CameraDevice? {
         // The callers ask for the permission first; checked again here because it can be revoked
         // from Settings while the app is running, and openCamera would then throw.
         if (context.checkSelfPermission(android.Manifest.permission.CAMERA) !=
             android.content.pm.PackageManager.PERMISSION_GRANTED
         ) {
-            Log.e(TAG, "camera permission not granted")
+            fail("camera permission not granted", null)
             return null
         }
         var device: CameraDevice? = null
+        var expired = false
+        var handedOff = false
+        val lock = Any()
         val latch = CountDownLatch(1)
-        mgr.openCamera(id, object : CameraDevice.StateCallback() {
-            override fun onOpened(c: CameraDevice) { device = c; latch.countDown() }
-            override fun onDisconnected(c: CameraDevice) { c.close(); latch.countDown() }
-            override fun onError(c: CameraDevice, e: Int) {
-                Log.e(TAG, "camera error $e")
+        try {
+            // State callbacks must survive capture-thread shutdown to close late open results.
+            mgr.openCamera(id, context.mainExecutor, object : CameraDevice.StateCallback() {
+            override fun onOpened(c: CameraDevice) {
+                synchronized(lock) {
+                    if (expired || isStopping()) c.close() else device = c
+                }
+                latch.countDown()
+            }
+            override fun onDisconnected(c: CameraDevice) {
+                if (!isStopping()) fail("camera disconnected", null)
+                synchronized(lock) { if (device === c) device = null }
                 c.close()
                 latch.countDown()
             }
-        }, handler)
-        latch.await(10, TimeUnit.SECONDS)
-        return device
+            override fun onError(c: CameraDevice, e: Int) {
+                if (!isStopping()) fail("camera error $e", null)
+                synchronized(lock) { if (device === c) device = null }
+                c.close()
+                latch.countDown()
+            }
+            })
+            val deadline = SystemClock.elapsedRealtimeNanos() + 10_000_000_000L
+            while (!isStopping() && SystemClock.elapsedRealtimeNanos() < deadline) {
+                if (latch.await(100, TimeUnit.MILLISECONDS)) break
+            }
+            synchronized(lock) {
+                expired = true
+                if (isStopping()) { device?.close(); device = null }
+                if (device == null && !isStopping()) fail("timed out opening camera $id", null)
+                handedOff = device != null
+                return device
+            }
+        } finally {
+            synchronized(lock) {
+                expired = true
+                if (!handedOff) device?.close()
+            }
+        }
     }
 
-    @Suppress("DEPRECATION")  // SessionConfiguration is API 28+, but takes an Executor we do not
-    // want here: the capture callbacks must land on the camera Handler thread, and the deprecated
-    // overload expresses that directly.
+    // Setup state uses the main executor so a late configured session can be closed even after
+    // cancellation stops our handler. Actual image/capture callbacks still use that handler.
     private fun createSession(
         device: CameraDevice,
         surface: android.view.Surface,
         preview: android.view.Surface?,
-        handler: Handler,
+        isStopping: () -> Boolean,
+        fail: (String, Exception?) -> Unit,
     ): CameraCaptureSession? {
         var session: CameraCaptureSession? = null
+        var expired = false
+        var handedOff = false
+        val lock = Any()
         val latch = CountDownLatch(1)
-        device.createCaptureSession(
-            listOfNotNull(surface, preview),
+        try {
+            device.createCaptureSession(SessionConfiguration(
+            SessionConfiguration.SESSION_REGULAR,
+            listOfNotNull(surface, preview).map { OutputConfiguration(it) },
+            context.mainExecutor,
             object : CameraCaptureSession.StateCallback() {
-                override fun onConfigured(s: CameraCaptureSession) { session = s; latch.countDown() }
-                override fun onConfigureFailed(s: CameraCaptureSession) {
-                    Log.e(TAG, "session configure failed")
+                override fun onConfigured(s: CameraCaptureSession) {
+                    synchronized(lock) {
+                        if (expired || isStopping()) s.close() else session = s
+                    }
                     latch.countDown()
                 }
+                override fun onConfigureFailed(s: CameraCaptureSession) {
+                    if (!isStopping()) fail("capture session configuration failed", null)
+                    s.close()
+                    latch.countDown()
+                }
+                override fun onClosed(s: CameraCaptureSession) {
+                    if (!isStopping()) fail("capture session closed unexpectedly", null)
+                }
             },
-            handler,
-        )
-        latch.await(10, TimeUnit.SECONDS)
-        return session
+            ))
+            val deadline = SystemClock.elapsedRealtimeNanos() + 10_000_000_000L
+            while (!isStopping() && SystemClock.elapsedRealtimeNanos() < deadline) {
+                if (latch.await(100, TimeUnit.MILLISECONDS)) break
+            }
+            synchronized(lock) {
+                expired = true
+                if (isStopping()) { session?.close(); session = null }
+                if (session == null && !isStopping()) fail("timed out configuring capture session", null)
+                handedOff = session != null
+                return session
+            }
+        } finally {
+            synchronized(lock) {
+                expired = true
+                if (!handedOff) session?.close()
+            }
+        }
     }
 
     private fun versionName(): String = runCatching {
@@ -1046,13 +1255,14 @@ class CameraRecorder(private val context: Context) {
         cameraId: String = "",
         size: Size = Size(0, 0),
         fps: Int = 0,
+        writeFrames: Boolean = true,
     ) = Outcome(
         cameraId = cameraId, size = size, requestedFps = fps, framesWritten = 0,
         duplicateFrames = 0, timestampsNs = LongArray(0), reportedExposureNs = -1,
         reportedIso = -1, reportedFocusDistance = -1f, minFocusDiopters = -1f, aeMode = -1,
         reportedFrameDurationNs = -1L, edgeMode = -1,
         noiseReductionMode = -1, shadingMode = -1,
-        manualRequested = false, error = why, framesWereWritten = true,
+        manualRequested = false, error = why, framesWereWritten = writeFrames,
     )
 
     companion object {
@@ -1064,6 +1274,7 @@ class CameraRecorder(private val context: Context) {
          */
         const val MAX_LIVE_ZOOM = 1.6f
         private const val IMAGE_BUFFERS = 6
+        private const val LIVE_TIMESTAMP_LIMIT = 600
         /** Side of the tap-to-focus region, and of the standing centre region, as array fractions. */
         private const val AF_TAP_FRACTION = 0.15f
         private const val AF_CENTRE_FRACTION = 0.4f

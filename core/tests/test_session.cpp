@@ -81,6 +81,97 @@ TEST(Session, BatchAdvisorySurvivesWithoutLeakingEncryptedContentDetails) {
     EXPECT_EQ(out.value(), payload);
 }
 
+TEST(Session, NativeIdentityBindsWireConfigurationAndUnchangedResendsResume) {
+    const auto payload = Payload(40000);
+    const GridGeometry grid{120, 200};
+    const TransmitConfig original;
+    const auto id = SessionIdForConfiguration(payload, "resume.bin", grid, original);
+    EXPECT_NE(id, 0u);
+    EXPECT_EQ(SessionIdForConfiguration(payload, "resume.bin", grid, original), id);
+    EXPECT_NE(SessionIdForConfiguration(Payload(40000, 32), "resume.bin", grid, original), id);
+    EXPECT_NE(SessionIdForConfiguration(payload, "other.bin", grid, original), id);
+    EXPECT_NE(SessionIdForConfiguration(payload, "resume.bin", {120, 260}, original), id);
+    EXPECT_NE(SessionIdForConfiguration(payload, "resume.bin", {144, 200}, original), id);
+    for (const auto profile : {ModulationProfile::kM3FourColor, ModulationProfile::kM5EightColor}) {
+        auto changed = original;
+        changed.profile = profile;
+        EXPECT_NE(SessionIdForConfiguration(payload, "resume.bin", grid, changed), id);
+    }
+    for (int field = 0; field < 4; ++field) {
+        auto changed = original;
+        if (field == 0) changed.fec_nsym = 24;
+        if (field == 1) changed.symbol_size = 1024;
+        if (field == 2) changed.block_symbols = 64;
+        if (field == 3) changed.manifest_interval = 8;
+        EXPECT_NE(SessionIdForConfiguration(payload, "resume.bin", grid, changed), id) << field;
+    }
+
+    auto first = TransmitSession::Create(Layout(), payload, "resume.bin", id, original);
+    auto resumed = TransmitSession::Create(Layout(), payload, "resume.bin", id, original);
+    auto rx = ReceiveSession::Create(Layout());
+    ASSERT_TRUE(first.ok() && resumed.ok() && rx.ok());
+    CellMatrix frame(120, 200);
+    for (int i = 0; i < 4; ++i) {
+        ASSERT_TRUE(first.value().Next(&frame).ok());
+        rx.value().Ingest(Clean(frame), i + 1);
+    }
+    ASSERT_GT(rx.value().progress(), 0.0);
+    ASSERT_FALSE(rx.value().complete());
+    const auto rank = rx.value().receiver()->useful_symbols();
+    ASSERT_TRUE(resumed.value().Next(&frame).ok());  // repeated manifest
+    rx.value().Ingest(Clean(frame), 5);
+    EXPECT_EQ(rx.value().receiver()->useful_symbols(), rank);
+    for (int i = 0; i < 100 && !rx.value().complete(); ++i) {
+        ASSERT_TRUE(resumed.value().Next(&frame).ok());
+        rx.value().Ingest(Clean(frame), i + 6);
+    }
+    ASSERT_TRUE(rx.value().complete());
+    auto received = rx.value().Finish();
+    ASSERT_TRUE(received.ok());
+    EXPECT_EQ(received.value(), payload);
+    EXPECT_EQ(rx.value().stats().foreign, 0u);
+}
+
+TEST(Session, LegacySameIdWithChangedProfileDecodesFramesWithoutGainingFileRank) {
+    // Historical native senders hashed only content/name. A valid M3 frame can pass its own
+    // FEC/CRC while its larger symbol does not fit the active M0 manifest. Header/payload frame
+    // counts then rise forever, but no independent file symbol arrives: the reported freeze.
+    const auto payload = Payload(40000);
+    const auto id = SessionIdFor(payload, "legacy.bin");
+    TransmitConfig color_config;
+    color_config.profile = ModulationProfile::kM3FourColor;
+    auto mono = TransmitSession::Create(Layout(), payload, "legacy.bin", id);
+    auto color = TransmitSession::Create(Layout(), payload, "legacy.bin", id, color_config);
+    auto rx = ReceiveSession::Create(Layout());
+    ASSERT_TRUE(mono.ok() && color.ok() && rx.ok());
+    CellMatrix frame(120, 200);
+    for (int i = 0; i < 2; ++i) {
+        ASSERT_TRUE(mono.value().Next(&frame).ok());
+        rx.value().Ingest(Clean(frame), i + 1);
+    }
+    const auto rank = rx.value().receiver()->useful_symbols();
+    ASSERT_GT(rank, 0u);
+    const auto symbols = rx.value().stats().symbols;
+    for (int i = 0; i < 5; ++i) {
+        ASSERT_TRUE(color.value().Next(&frame).ok());
+        std::vector<double> luma(frame.data().size()), rgb(frame.data().size() * 3);
+        for (std::size_t cell = 0; cell < frame.data().size(); ++cell) {
+            for (int channel = 0; channel < 3; ++channel) {
+                rgb[cell * 3 + static_cast<std::size_t>(channel)] =
+                    ColorChannelOn(frame.data()[cell], channel) ? 255.0 : 0.0;
+            }
+            luma[cell] = (77 * rgb[cell * 3] + 150 * rgb[cell * 3 + 1] +
+                          29 * rgb[cell * 3 + 2]) / 256.0;
+        }
+        rx.value().Ingest(luma, rgb, i + 3);
+    }
+    EXPECT_GT(rx.value().stats().symbols, symbols) << "color frames must pass FEC and CRC";
+    EXPECT_EQ(rx.value().stats().fec_fail, 0u);
+    EXPECT_EQ(rx.value().stats().crc_fail, 0u);
+    EXPECT_EQ(rx.value().receiver()->useful_symbols(), rank);
+    EXPECT_FALSE(rx.value().complete());
+}
+
 // Cross-build golden: web/tests/transport-wasm.test.js constructs the identical uncompressed FFE2
 // envelope, then asks the Emscripten build of this same protocol path for these two matrices. Fixed
 // hashes catch ABI/packing/default drift between the native and checked-in browser artifacts.

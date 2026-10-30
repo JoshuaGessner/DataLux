@@ -1,11 +1,16 @@
 #include <fileflow/live.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 
 namespace fileflow {
 namespace {
+using ProfileClock = std::chrono::steady_clock;
+double ElapsedMs(ProfileClock::time_point start) {
+    return std::chrono::duration<double, std::milli>(ProfileClock::now() - start).count();
+}
 
 std::string Percent(double p) {
     char buf[16];
@@ -90,8 +95,11 @@ Result<LiveReceiver> LiveReceiver::Create(GridGeometry grid, LiveConfig cfg) {
 LiveStatus LiveReceiver::Ingest(const ImageView8& img, std::int64_t timestamp_ns,
                                 std::size_t lane, const ChromaPlanes* chroma) {
     std::uint64_t frame_no = 0;
+    double lock_wait_ms = 0;
+    auto waiting = ProfileClock::now();
     {
         const std::lock_guard<std::mutex> lock(*mu_);
+        lock_wait_ms += ElapsedMs(waiting);
         frame_no = ++status_.frames;
         // Finished either way: keep reporting the outcome, spend nothing more on frames.
         if (status_.phase == LivePhase::kVerified || status_.phase == LivePhase::kFailed) {
@@ -104,11 +112,15 @@ LiveStatus LiveReceiver::Ingest(const ImageView8& img, std::int64_t timestamp_ns
     // lane is only ever driven by one thread at a time (the caller's promise).
     FramePipeline& p = *pipelines_[lane % pipelines_.size()];
     const std::uint64_t geo_fail_before = p.diagnostics().geometry_failures;
+    const auto pipeline_start = ProfileClock::now();
     CapturedFrame cf = p.Process(img, frame_no, timestamp_ns, chroma);
+    const double pipeline_ms = ElapsedMs(pipeline_start);
     const bool in_view = p.diagnostics().geometry_failures == geo_fail_before;
     FrameDecoder& decoder = *decoders_[lane % decoders_.size()];
     DecodedFrame decoded;
     if (p.last_ok()) decoded = decoder.Decode(cf.cell_samples, cf.cell_rgb);
+    const auto decode_timings = p.last_ok() ? decoder.last_timings() : FrameDecoder::Timings{};
+    double combine_ms = 0;
 
     // Failed FEC alone: combine with the earlier failed captures of the same state HERE, in the
     // lane, with only a brief lock to copy them. Under the lock it was up to four more FEC
@@ -117,11 +129,14 @@ LiveStatus LiveReceiver::Ingest(const ImageView8& img, std::int64_t timestamp_ns
     // be combined with (F69).
     if (decoded.reached_fec && !decoded.fec_ok) {
         std::vector<SoftSymbolBuffer> earlier;
+        waiting = ProfileClock::now();
         {
             const std::lock_guard<std::mutex> lock(*mu_);
+            lock_wait_ms += ElapsedMs(waiting);
             earlier = session_->EarlierCaptures(decoded.header);
         }
         if (!earlier.empty()) {
+            const auto combine_start = ProfileClock::now();
             if (const IntraFec* fec = decoder.FecFor(decoded.header.fec_nsym, decoded.bits)) {
                 auto dec = TryCombine(earlier, decoded.soft, *fec, decoded.coded_len,
                                       cfg_.receive.erase_below, &decoded.fec);
@@ -131,15 +146,33 @@ LiveStatus LiveReceiver::Ingest(const ImageView8& img, std::int64_t timestamp_ns
                     decoded.message = std::move(dec).value();
                 }
             }
+            combine_ms = ElapsedMs(combine_start);
         }
         decoded.combine_tried = true;
     }
 
+    waiting = ProfileClock::now();
     const std::lock_guard<std::mutex> lock(*mu_);
+    lock_wait_ms += ElapsedMs(waiting);
+    auto& timings = status_.diagnostics;
+    ++timings.timed_frames;
+    timings.pipeline_ms += pipeline_ms;
+    const auto& stages = p.last_timings();
+    timings.tracking_ms += stages.tracking_ms;
+    timings.alignment_ms += stages.alignment_ms;
+    timings.luma_sampling_ms += stages.luma_sampling_ms;
+    timings.photometry_ms += stages.photometry_ms;
+    timings.color_sampling_ms += stages.color_sampling_ms;
+    timings.header_ms += decode_timings.header_ms;
+    timings.demod_ms += decode_timings.demod_ms;
+    timings.fec_ms += decode_timings.fec_ms;
+    timings.combine_ms += combine_ms;
+    timings.lock_wait_ms += lock_wait_ms;
     if (status_.phase == LivePhase::kVerified || status_.phase == LivePhase::kFailed) {
         return status_;  // another lane finished it while this one was sampling
     }
     status_.screen_in_view = in_view;
+    const auto commit_start = ProfileClock::now();
     status_.lens_strength = p.lens_strength();
     frames_without_screen_ = in_view ? 0 : frames_without_screen_ + 1;
 
@@ -171,10 +204,10 @@ LiveStatus LiveReceiver::Ingest(const ImageView8& img, std::int64_t timestamp_ns
             default:
                 break;
         }
-        // The sender has moved on to a DIFFERENT file. Every frame now belongs to another session
+        // The sender has moved on to a different file or wire configuration. Every frame belongs
         // and is refused, so without this the receiver would sit "reading" forever while nothing
         // arrived. A run of foreign frames with none of ours is unambiguous -- the session id is a
-        // hash of the file (jni_transmitter.cpp), so resending the SAME file never triggers it --
+        // hash of the file and wire configuration, so an unchanged resend can continue --
         // and the honest thing is to start over on the new one and say so.
         if (foreign_run_ >= cfg_.switch_after_foreign_frames) {
             auto fresh = ReceiveSession::Create(*layout_, cfg_.receive);
@@ -183,6 +216,8 @@ LiveStatus LiveReceiver::Ingest(const ImageView8& img, std::int64_t timestamp_ns
                 status_.progress = 0.0;
                 status_.seconds_remaining = -1.0;
                 status_.payload_frames = 0;
+                status_.useful_symbols = 0;
+                status_.session_id = 0;
                 status_.file_name.clear();
                 status_.file_size = 0;
                 status_.bytes_per_second = 0.0;
@@ -206,7 +241,13 @@ LiveStatus LiveReceiver::Ingest(const ImageView8& img, std::int64_t timestamp_ns
     p.LensFeedback(read, payload, good_lens_, have_good_lens_);
 
     if (session_->complete() && !result_) result_ = session_->Finish();
+    status_.session_id = session_->manifest() ? session_->manifest()->session_id : 0;
+    status_.useful_symbols = session_->receiver() ? session_->receiver()->useful_symbols() : 0;
+    status_.header_frames = session_->stats().header_ok;
+    status_.fec_failed_frames = session_->stats().fec_fail;
+    status_.crc_failed_frames = session_->stats().crc_fail;
     Decide(timestamp_ns, p);
+    timings.commit_ms += ElapsedMs(commit_start);
     return status_;
 }
 
@@ -381,7 +422,7 @@ void LiveReceiver::Decide(std::int64_t timestamp_ns, const FramePipeline& lane) 
                                 ? "Receiving — " + std::to_string(s.payload_frames) +
                                       " pieces so far"
                             : s.sender_switches > 0
-                                ? "The sender switched files — receiving the new one…"
+                                      ? "The sender changed the file or settings — restarting…"
                                 : "Reading…" + where;
                 break;
             case LivePhase::kLocked:

@@ -5,6 +5,7 @@
 
 #include <gtest/gtest.h>
 
+#include <array>
 #include <cmath>
 #include <cstdio>
 #include <deque>
@@ -65,6 +66,23 @@ struct Rig {
         return img;
     }
 };
+
+LiveStatus IngestColorCells(LiveReceiver& rx, const CellMatrix& cells, std::int64_t timestamp) {
+    sim::OpticalRenderConfig config;
+    config.view.image_width = 800;
+    config.view.image_height = 1300;
+    config.blur_radius = 1;
+    config.noise_amplitude = 0.0;
+    const auto image = sim::RenderColorView(cells, kGrid, config, sim::ColorChannelConfig{}, nullptr);
+    const ChromaPlanes chroma{image.u.view(), image.v.view()};
+    return rx.Ingest(image.y.view(), timestamp, 0, &chroma);
+}
+
+std::array<double, 12> StageTimes(const LiveDiagnostics& d) {
+    return {d.pipeline_ms, d.header_ms, d.demod_ms, d.fec_ms, d.combine_ms,
+             d.lock_wait_ms, d.commit_ms, d.tracking_ms, d.alignment_ms, d.luma_sampling_ms,
+             d.photometry_ms, d.color_sampling_ms};
+}
 
 }  // namespace
 
@@ -285,7 +303,8 @@ TEST(LiveReceiver, ASenderThatSwitchesFilesIsFollowedNotIgnored) {
     for (int i = 0; i < 150 && r.status().phase != LivePhase::kVerified; ++i) {
         const Image8 img = second.Capture();
         const LiveStatus s = r.Ingest(img.view(), first.ts() + (i + 1) * 33'333'333LL);
-        if (s.message.find("switched files") != std::string::npos) told = true;
+        if (s.message.find("sender changed") != std::string::npos &&
+            s.message.find("restarting") != std::string::npos) told = true;
     }
     const LiveStatus& s = r.status();
     ASSERT_EQ(s.phase, LivePhase::kVerified) << s.message;
@@ -300,8 +319,11 @@ TEST(LiveReceiver, ASenderThatSwitchesFilesIsFollowedNotIgnored) {
 TEST(LiveReceiver, ResendingTheSameFileIsNotASwitch) {
     // The other half of the rule: the same file sent again (the sender reopened it) carries the
     // same session id, so the receiver must carry on, not start over.
-    Rig a(60000, 0xCCCC, "same.bin");
-    Rig b(60000, 0xCCCC, "same.bin");
+    TransmitConfig config;
+    config.manifest_interval = 8;  // Rig's native sender configuration
+    const auto id = SessionIdForConfiguration(File(60000), "same.bin", kGrid, config);
+    Rig a(60000, id, "same.bin");
+    Rig b(60000, SessionIdForConfiguration(File(60000), "same.bin", kGrid, config), "same.bin");
     auto rx = LiveReceiver::Create(kGrid);
     ASSERT_TRUE(rx.ok());
     for (int i = 0; i < 10; ++i) {
@@ -314,6 +336,125 @@ TEST(LiveReceiver, ResendingTheSameFileIsNotASwitch) {
     }
     EXPECT_EQ(rx.value().status().phase, LivePhase::kVerified) << rx.value().status().message;
     EXPECT_EQ(rx.value().status().sender_switches, 0u);
+    EXPECT_EQ(rx.value().status().session_id, id);
+    auto received = rx.value().File();
+    ASSERT_TRUE(received.ok());
+    EXPECT_EQ(received.value(), a.file);
+}
+
+TEST(LiveReceiver, SameFileProfileChangesReacquireIncludingReturningToAnEarlierProfile) {
+    const auto file = File(60000);
+    const auto layout = FrameLayout::Create(kGrid, {}).value();
+    LiveConfig config;
+    config.switch_after_foreign_frames = 3;  // exercise the real threshold without 30 renderings
+    auto receiver = LiveReceiver::Create(kGrid, config);
+    ASSERT_TRUE(receiver.ok());
+    auto& rx = receiver.value();
+    CellMatrix cells(kGrid.cols, kGrid.rows);
+    std::int64_t timestamp = 1;
+    std::uint32_t first_id = 0;
+    std::uint32_t previous_id = 0;
+    std::uint32_t switches = 0;
+    for (const auto profile : {ModulationProfile::kM0BinaryLuminance, ModulationProfile::kM3FourColor,
+                               ModulationProfile::kM5EightColor, ModulationProfile::kM0BinaryLuminance}) {
+        TransmitConfig tx_config;
+        tx_config.profile = profile;
+        if (profile == ModulationProfile::kM5EightColor) tx_config.fec_nsym = 64;
+        tx_config.manifest_interval = 4;
+        const auto id = SessionIdForConfiguration(file, "same.bin", kGrid, tx_config);
+        if (first_id == 0) first_id = id;
+        if (previous_id != 0) {
+            EXPECT_NE(id, previous_id);
+            ++switches;
+        }
+        auto transmitter = TransmitSession::Create(layout, file, "same.bin", id, tx_config);
+        ASSERT_TRUE(transmitter.ok());
+        for (int i = 0; i < 40; ++i) {
+            ASSERT_TRUE(transmitter.value().Next(&cells).ok());
+            timestamp += 33'333'333;
+            const auto s = IngestColorCells(rx, cells, timestamp);
+            ASSERT_NE(s.phase, LivePhase::kFailed) << s.message;
+            ASSERT_NE(s.phase, LivePhase::kVerified) << "each switch must happen mid-transfer";
+            if (s.session_id == id && s.useful_symbols > 0) break;
+        }
+        ASSERT_EQ(rx.status().session_id, id);
+        ASSERT_GT(rx.status().useful_symbols, 0u);
+        EXPECT_EQ(rx.status().sender_switches, switches);
+        previous_id = id;
+        if (switches != 3) continue;
+        EXPECT_EQ(id, first_id) << "returning to M0 must recreate its original configuration identity";
+        for (int i = 0; i < 120 && rx.status().phase != LivePhase::kVerified; ++i) {
+            ASSERT_TRUE(transmitter.value().Next(&cells).ok());
+            timestamp += 33'333'333;
+            IngestColorCells(rx, cells, timestamp);
+        }
+    }
+    ASSERT_EQ(rx.status().phase, LivePhase::kVerified) << rx.status().message;
+    EXPECT_EQ(rx.status().sender_switches, 3u);
+    auto received = rx.File();
+    ASSERT_TRUE(received.ok());
+    EXPECT_EQ(received.value(), file);
+}
+
+TEST(LiveReceiver, UsefulSymbolsExcludeManifestsAndRepeatedPayloadCaptures) {
+    Rig rig(60000);
+    auto receiver = LiveReceiver::Create(kGrid);
+    ASSERT_TRUE(receiver.ok());
+    auto& rx = receiver.value();
+    const auto manifest = rig.Capture();
+    rx.Ingest(manifest.view(), rig.ts());
+    ASSERT_EQ(rx.status().session_id, 0x11FEu);
+    EXPECT_EQ(rx.status().useful_symbols, 0u);
+    rx.Ingest(manifest.view(), rig.ts() + 1);
+    EXPECT_EQ(rx.status().useful_symbols, 0u);
+
+    const auto payload = rig.Capture();
+    rx.Ingest(payload.view(), rig.ts());
+    ASSERT_EQ(rx.status().useful_symbols, 1u);
+    const auto payload_frames = rx.status().payload_frames;
+    rx.Ingest(payload.view(), rig.ts() + 1);
+    EXPECT_GT(rx.status().payload_frames, payload_frames) << "the repeated capture still passes FEC/CRC";
+    EXPECT_EQ(rx.status().useful_symbols, 1u);
+    const auto second = rig.Capture();
+    rx.Ingest(second.view(), rig.ts());
+    EXPECT_EQ(rx.status().useful_symbols, 2u);
+}
+
+TEST(LiveReceiver, StageDiagnosticsAreFiniteAndCumulativeForUnreadableAndSuccessfulFrames) {
+    Rig rig(8000);
+    auto receiver = LiveReceiver::Create(kGrid);
+    ASSERT_TRUE(receiver.ok());
+    auto& rx = receiver.value();
+    LiveDiagnostics previous;
+    const auto check = [&](const LiveDiagnostics& current) {
+        EXPECT_EQ(current.timed_frames, previous.timed_frames + 1);
+        const auto before = StageTimes(previous);
+        const auto after = StageTimes(current);
+        for (std::size_t i = 0; i < after.size(); ++i) {
+            EXPECT_TRUE(std::isfinite(after[i])) << "stage " << i;
+            EXPECT_GE(after[i], 0.0) << "stage " << i;
+            EXPECT_GE(after[i], before[i]) << "stage " << i;
+        }
+        previous = current;
+    };
+    const Image8 floor(rig.rc.view.image_width, rig.rc.view.image_height, 20);
+    for (int i = 0; i < 3; ++i) {
+        ++rig.n;
+        check(rx.Ingest(floor.view(), rig.ts()).diagnostics);
+    }
+    EXPECT_EQ(rx.status().header_frames, 0u);
+    EXPECT_EQ(rx.status().useful_symbols, 0u);
+    for (int i = 0; i < 40 && rx.status().phase != LivePhase::kVerified; ++i) {
+        const auto frame = rig.Capture();
+        check(rx.Ingest(frame.view(), rig.ts()).diagnostics);
+    }
+    ASSERT_EQ(rx.status().phase, LivePhase::kVerified) << rx.status().message;
+    EXPECT_GT(rx.status().header_frames, 0u);
+    EXPECT_GT(rx.status().useful_symbols, 0u);
+    const auto completed = rx.status().diagnostics;
+    rx.Ingest(floor.view(), rig.ts() + 1);  // terminal status does no more decoder work
+    EXPECT_EQ(rx.status().diagnostics.timed_frames, completed.timed_frames);
+    EXPECT_EQ(StageTimes(rx.status().diagnostics), StageTimes(completed));
 }
 
 TEST(LiveReceiver, HandheldTransferCompletesAndSaysSo) {

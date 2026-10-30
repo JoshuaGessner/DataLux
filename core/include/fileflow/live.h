@@ -101,6 +101,24 @@ enum class LiveHint : std::uint8_t {
 [[nodiscard]] std::string_view LivePhaseName(LivePhase p) noexcept;
 [[nodiscard]] std::string_view LiveHintName(LiveHint h) noexcept;
 
+struct LiveDiagnostics {
+    // Lifetime cumulative wall times across lanes, in milliseconds. These overlap across lanes;
+    // differences / timed_frames measure stage cost, not elapsed transfer time or CPU utilization.
+    std::uint64_t timed_frames = 0;
+    double pipeline_ms = 0;
+    double header_ms = 0;
+    double demod_ms = 0;
+    double fec_ms = 0;
+    double combine_ms = 0;
+    double lock_wait_ms = 0;
+    double commit_ms = 0;
+    double tracking_ms = 0;
+    double alignment_ms = 0;
+    double luma_sampling_ms = 0;
+    double photometry_ms = 0;
+    double color_sampling_ms = 0;
+};
+
 struct LiveStatus {
     LivePhase phase = LivePhase::kLooking;
     LiveHint hint = LiveHint::kPointAtScreen;
@@ -127,6 +145,13 @@ struct LiveStatus {
     // few rows at the top, and a near-miss grid (120x208 against 120x200) puts those rows in nearly
     // the same place and reads them (F58). The payload spans every cell, so a wrong grid cannot.
     std::uint64_t payload_frames = 0;
+    // Actual independent file symbols, excluding manifests, duplicates and primed padding.
+    std::uint64_t useful_symbols = 0;
+    std::uint32_t session_id = 0;  // active validated manifest; 0 while acquiring a new session
+    std::uint64_t header_frames = 0;
+    std::uint64_t fec_failed_frames = 0;
+    std::uint64_t crc_failed_frames = 0;
+    LiveDiagnostics diagnostics;
     // Times the sender switched to a different file and this receiver started over on it.
     std::uint32_t sender_switches = 0;
     // Distinct display states whose header read: over time, the state rate this receiver actually

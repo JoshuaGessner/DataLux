@@ -5,7 +5,9 @@
 #include <fileflow/transfer.h>
 
 #include <cerrno>
+#include <algorithm>
 #include <cstdio>
+#include <stdexcept>
 
 namespace fileflow::desktop {
 
@@ -89,6 +91,7 @@ Receiver::Receiver(std::vector<secure::SealKey> keys, bool require_encrypted, st
         try {
             Run();
         } catch (const std::exception&) {
+            frames_.Close();
             std::lock_guard g(mu_);
             ReceiveResult failed;
             failed.problem = "Receiving failed. Check available memory and disk space, then try again.";
@@ -98,28 +101,13 @@ Receiver::Receiver(std::vector<secure::SealKey> keys, bool require_encrypted, st
 }
 
 Receiver::~Receiver() {
-    {
-        std::lock_guard g(mu_);
-        stop_ = true;
-    }
-    cv_.notify_all();
+    frames_.Close();
     if (worker_.joinable()) worker_.join();
 }
 
 void Receiver::Offer(const std::vector<std::uint8_t>& luma, const std::vector<std::uint8_t>& u, const std::vector<std::uint8_t>& v,
-                     int w, int h, std::uint64_t timestamp_ns) {
-    {
-        std::lock_guard g(mu_);
-        if (have_frame_ || result_) return;  // busy: this frame is dropped, the next will do
-        luma_ = luma;
-        u_ = u;
-        v_ = v;
-        w_ = w;
-        h_ = h;
-        ts_ = timestamp_ns;
-        have_frame_ = true;
-    }
-    cv_.notify_one();
+                     int w, int h, std::uint64_t timestamp_ns, bool full_resolution) {
+    frames_.Offer(luma, u, v, w, h, timestamp_ns, full_resolution);
 }
 
 LiveStatus Receiver::Status() const {
@@ -132,37 +120,58 @@ std::optional<ReceiveResult> Receiver::Result() const {
     return result_;
 }
 
+ReceiveDiagnostics Receiver::Diagnostics() const {
+    ReceiveDiagnostics d;
+    {
+        std::lock_guard g(mu_);
+        d = diagnostics_;
+        if (last_progress_at_) d.useful_progress_age_ms =
+            std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - *last_progress_at_).count();
+    }
+    d.delivery = frames_.Stats();
+    return d;
+}
+
 void Receiver::Run() {
-    std::vector<std::uint8_t> luma, u, v;
-    for (;;) {
-        int w = 0;
-        int h = 0;
-        std::uint64_t ts = 0;
-        {
-            std::unique_lock lk(mu_);
-            cv_.wait(lk, [&] { return stop_ || have_frame_; });
-            if (stop_) return;
-            luma.swap(luma_);
-            u.swap(u_);
-            v.swap(v_);
-            w = w_;
-            h = h_;
-            ts = ts_;
-        }
+    if (candidates_.empty()) throw std::runtime_error("No receiver configuration");
+    detail::CameraFrame frame;
+    while (frames_.Take(&frame)) {
+        const auto started = std::chrono::steady_clock::now();
+        const double queue_ms = std::chrono::duration<double, std::milli>(started - frame.offered_at).count();
         LiveReceiver* rx = committed_ != nullptr ? committed_ : candidates_[next_++ % candidates_.size()].get();
-        const ImageView8 img(luma.data(), w, h, w);
-        ChromaPlanes chroma{ImageView8(u.data(), w / 2, h / 2, w / 2), ImageView8(v.data(), w / 2, h / 2, w / 2)};
-        LiveStatus s = rx->Ingest(img, static_cast<std::int64_t>(ts), 0, &chroma);
+        const ImageView8 img(frame.luma.data(), frame.width, frame.height, frame.width);
+        const int cw = frame.full_resolution ? frame.width : frame.width / 2;
+        const int ch = frame.full_resolution ? frame.height : frame.height / 2;
+        ChromaPlanes chroma{ImageView8(frame.u.data(), cw, ch, cw), ImageView8(frame.v.data(), cw, ch, cw), frame.full_resolution};
+        LiveStatus s = rx->Ingest(img, static_cast<std::int64_t>(frame.timestamp_ns), 0, &chroma);
+        const auto finished = std::chrono::steady_clock::now();
+        const double decode_ms = std::chrono::duration<double, std::milli>(finished - started).count();
         ++decoded_;
         if (committed_ == nullptr && s.payload_frames > 0) committed_ = rx;  // the grid, proven
         const bool show = committed_ == nullptr || rx == committed_;
         {
             std::lock_guard g(mu_);
             // While searching, the furthest-along candidate speaks, so the status doesn't flicker.
-            if (show && (committed_ != nullptr || static_cast<int>(s.phase) >= static_cast<int>(status_.phase))) status_ = s;
-            have_frame_ = false;
+            if (show && (committed_ != nullptr || static_cast<int>(s.phase) >= static_cast<int>(status_.phase))) {
+                const bool new_session = s.session_id != status_.session_id || s.sender_switches != status_.sender_switches;
+                if (new_session) {
+                    last_progress_at_.reset();
+                    diagnostics_.useful_progress_updates = 0;
+                }
+                if (s.useful_symbols > (new_session ? 0 : status_.useful_symbols)) {
+                    last_progress_at_ = finished;
+                    ++diagnostics_.useful_progress_updates;
+                }
+                status_ = s;
+            }
+            ++diagnostics_.decoded;
+            diagnostics_.decode_ms_sum += decode_ms;
+            diagnostics_.decode_ms_max = std::max(diagnostics_.decode_ms_max, decode_ms);
+            diagnostics_.queue_ms_sum += queue_ms;
+            diagnostics_.queue_ms_max = std::max(diagnostics_.queue_ms_max, queue_ms);
         }
         if (s.phase == LivePhase::kVerified || s.phase == LivePhase::kFailed) {
+            frames_.Close();
             Finish(*rx);
             return;
         }

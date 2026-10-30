@@ -412,13 +412,17 @@ std::uint32_t FileReceiver::blocks_complete() const noexcept {
         decoders_.begin(), decoders_.end(), [](const FountainDecoder& d) { return d.complete(); }));
 }
 
+std::uint64_t FileReceiver::useful_symbols() const noexcept {
+    std::uint64_t recovered = 0;
+    for (const auto& d : decoders_) recovered += d.recovered() - d.primed();
+    return recovered;
+}
+
 double FileReceiver::progress() const noexcept {
     // Primed padding is excluded on both sides: progress measures what the CHANNEL has delivered,
     // so a fresh receiver reads exactly zero however much padding it already knows.
     if (needed_ == 0) return complete() ? 1.0 : 0.0;
-    std::uint64_t recovered = 0;
-    for (const auto& d : decoders_) recovered += d.recovered() - d.primed();
-    return static_cast<double>(recovered) / static_cast<double>(needed_);
+    return static_cast<double>(useful_symbols()) / static_cast<double>(needed_);
 }
 
 double FileReceiver::overhead() const noexcept {

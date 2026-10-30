@@ -428,7 +428,8 @@ void App::PairScreen(float W, float H) {
     } else {
         const char* msg = state == Camera::State::kNone     ? "This computer has no camera to read the phone's code."
                           : state == Camera::State::kDenied ? "DataLux can't use the camera. Allow it in your system's privacy settings."
-                                                            : "Starting the camera… (allow it if you're asked)";
+                             : state == Camera::State::kError ? p.camera.problem().c_str()
+                             : "Starting the camera… (allow it if you're asked)";
         paint_.Text(paint_.Fit(msg, rw - 32, 14, Weight::kRegular), rx + rw / 2, qy + ph / 2 - 10, 14, Weight::kRegular, th::kTextDim,
                     Align::kCenter);
     }

@@ -47,6 +47,7 @@ class TransmitActivity : AppCompatActivity() {
 
     private var glView: GLSurfaceView? = null
     private var tx: Transmitter? = null
+    private var sessionLogOwner: Long? = null
     private var renderer: OpticalRenderer? = null
     private var requestedHz = 0.0
     private var requestedMode = "?"
@@ -355,7 +356,7 @@ class TransmitActivity : AppCompatActivity() {
     /** Starts presenting frames for [t]. */
     private fun begin(t: Transmitter, divisor: Int, marginPx: Int, seconds: Int) {
         tx = t
-        SessionLog.start(this, "send")
+        sessionLogOwner = SessionLog.start(this, "send")
         val p = packed
         SessionLog.i(LOG_TAG, "sending ${displayName ?: t.fileName}, " +
             "${formatBytes(p?.originalSize ?: t.fileBytes)} as ${formatBytes(t.fileBytes)}" +
@@ -611,7 +612,7 @@ class TransmitActivity : AppCompatActivity() {
         ticker.removeCallbacks(tick)
         tx?.close()
         tx = null
-        SessionLog.close()
+        sessionLogOwner?.let(SessionLog::close)
     }
 
     companion object {

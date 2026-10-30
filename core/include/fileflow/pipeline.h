@@ -7,9 +7,9 @@
 // That substitutability is the entire premise of ADR-0010, so the shared stage is a shared
 // object, not a shared convention.
 //
-// Everything here is deterministic: identical pixels in, identical samples out. The replay
-// harness depends on that for regression testing, and the simulator depends on it for the
-// determinism gate in CI.
+// Image processing is deterministic: identical pixels in, identical samples out. The replay
+// harness and simulator depend on that. Wall-clock timings are separate observational metadata
+// and do not affect the samples or the determinism gate.
 #pragma once
 
 #include <fileflow/capture_source.h>
@@ -137,6 +137,9 @@ struct SubcellConfig {
 struct PipelineConfig {
     TrackerConfig tracker;
     SamplerConfig sampler{.interior_margin = 0.3, .samples_per_axis = 3};
+    // Diagnostic sweeps can vary the chroma window without changing the luma sampler. The
+    // default retains the existing 4x4 interior sampling; Create validates both configurations.
+    SamplerConfig chroma_sampler{.interior_margin = 0.3, .samples_per_axis = 4};
     PhotometricConfig photometric;
     SubcellConfig subcell{};
 
@@ -241,6 +244,17 @@ struct ChromaPlanes {
 
 class FramePipeline {
   public:
+    // Per-Process wall-clock milliseconds, reset even when a frame returns early. Subphases do
+    // not overlap; total_ms also includes setup/bookkeeping. Each lane owns its own pipeline.
+    struct Timings {
+        double total_ms = 0;
+        double tracking_ms = 0;
+        double alignment_ms = 0;  // includes lens-model preparation and any lens tuning
+        double luma_sampling_ms = 0;
+        double photometry_ms = 0;  // estimate, diagnostic updates and luma normalisation
+        double color_sampling_ms = 0;
+    };
+
     static Result<FramePipeline> Create(const FrameLayout& layout, PipelineConfig cfg = {});
 
     // Turn one image into per-cell samples.
@@ -271,6 +285,7 @@ class FramePipeline {
     void LensFeedback(bool header_read, bool payload_ok, double fallback, bool have_fallback) noexcept;
     [[nodiscard]] bool last_ok() const noexcept { return last_ok_; }
     [[nodiscard]] double last_marker_score() const noexcept { return last_score_; }
+    [[nodiscard]] const Timings& last_timings() const noexcept { return timings_; }
 
     [[nodiscard]] const PipelineDiagnostics& diagnostics() const noexcept { return diag_; }
     [[nodiscard]] const ScreenTracker& tracker() const noexcept { return tracker_; }
@@ -362,6 +377,7 @@ class FramePipeline {
     bool last_ok_ = false;
     double last_score_ = 0.0;
     PipelineDiagnostics diag_;
+    Timings timings_;
 };
 
 }  // namespace fileflow

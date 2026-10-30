@@ -113,7 +113,7 @@ std::uint64_t Transfer::PassFrames() const {
     return (m.file_size + m.symbol_size - 1) / m.symbol_size;
 }
 
-std::unique_ptr<Transfer> Open(const Prepared& p, const Speed& speed, std::string* problem) {
+std::unique_ptr<Transfer> Open(const Prepared& p, const Speed& speed, std::string* problem, std::size_t fec_nsym) {
     auto layout = FrameLayout::Create({speed.cols, speed.rows}, LayoutConfig{});
     if (!layout.ok()) {
         *problem = "Layout: " + std::string(ErrorName(layout.error()));
@@ -121,7 +121,7 @@ std::unique_ptr<Transfer> Open(const Prepared& p, const Speed& speed, std::strin
     }
     auto t = std::make_unique<Transfer>(std::make_unique<FrameLayout>(std::move(layout).value()), speed);
     TransmitConfig tc;
-    tc.fec_nsym = kFecNsym;
+    tc.fec_nsym = fec_nsym;
     tc.profile = speed.profile;
     if (!p.sealed) {
         tc.content = {.original_size = p.envelope.original_size, .codec = p.envelope.codec,
@@ -132,7 +132,8 @@ std::unique_ptr<Transfer> Open(const Prepared& p, const Speed& speed, std::strin
     tc.content.batch = p.files > 1;
     const std::string link_name = p.sealed ? "Encrypted file" : p.name;
     auto s = TransmitSession::Create(*t->layout, p.envelope.bytes, link_name,
-                                     SessionIdFor(p.envelope.bytes, link_name), tc);
+                                     SessionIdForConfiguration(p.envelope.bytes, link_name,
+                                                               t->layout->geometry(), tc), tc);
     if (!s.ok()) {
         *problem = "Transmitter: " + std::string(ErrorName(s.error()));
         return nullptr;
