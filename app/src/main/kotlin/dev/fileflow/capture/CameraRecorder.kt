@@ -872,7 +872,11 @@ class CameraRecorder(private val context: Context) {
 
             val callback = object : CameraCaptureSession.CaptureCallback() {
                 override fun onCaptureFailed(s: CameraCaptureSession, r: CaptureRequest, f: CaptureFailure) {
-                    if (!isStopping()) fail("camera capture failed (reason ${f.reason})", null)
+                    if (isStopping()) return
+                    // A failed request does not invalidate other requests; its image buffers may
+                    // still arrive. Device/session errors handle fatal failures separately.
+                    metrics.captureFailed()
+                    telemetry = metrics.snapshot()
                 }
 
                 override fun onCaptureCompleted(

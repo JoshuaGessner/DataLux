@@ -18,6 +18,7 @@ class CaptureTelemetry(
         val deliveryAge: Timing = Timing(),
         val callbackDuration: Timing = Timing(),
         val invalidDeliveryTimestamps: Long = 0,
+        val captureFailures: Long = 0,
     ) {
         /** acquireLatestImage discards internally; ImageReader does not expose an exact count. */
         val supersededImages: Long? get() = null
@@ -41,6 +42,7 @@ class CaptureTelemetry(
     private var empty = 0L
     private var callbacks = 0L
     private var invalidTimestamps = 0L
+    private var failures = 0L
     private var lastCallbackNs: Long? = null
     private val intervals = Counter()
     private val ages = Counter()
@@ -63,8 +65,10 @@ class CaptureTelemetry(
 
     @Synchronized fun callbackFinished(durationNs: Long) = durations.add(durationNs)
 
+    @Synchronized fun captureFailed() { failures++ }
+
     @Synchronized fun snapshot() = Summary(
         latestFrameOnly, timestampsAreRealtime, notifications, acquired, empty, callbacks,
-        intervals.snapshot(), ages.snapshot(), durations.snapshot(), invalidTimestamps,
+        intervals.snapshot(), ages.snapshot(), durations.snapshot(), invalidTimestamps, failures,
     )
 }

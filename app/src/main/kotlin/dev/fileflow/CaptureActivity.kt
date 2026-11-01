@@ -1004,7 +1004,7 @@ class CaptureActivity : AppCompatActivity() {
         val t = rec.telemetry
         fun ms(v: dev.fileflow.capture.CaptureTelemetry.Timing) =
             if (v.samples > 0) "%.1f/%.1f ms".format(v.meanNs / 1e6, v.maxNs / 1e6) else "unavailable"
-        return "camera latest=${t.latestFrameOnly} acquired=${t.acquiredImages} empty=${t.emptyNotifications}; " +
+        return "camera latest=${t.latestFrameOnly} acquired=${t.acquiredImages} empty=${t.emptyNotifications} failed requests=${t.captureFailures}; " +
             "arrival avg/max=${ms(t.callbackInterval)} callback=${ms(t.callbackDuration)}; " +
             "delivery age=${if (t.timestampsAreRealtime) ms(t.deliveryAge) else "unknown clock"}; " +
             "invalid timestamps=${t.invalidDeliveryTimestamps}; internally superseded count unavailable"
