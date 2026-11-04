@@ -12,6 +12,7 @@
 
 #include <fileflow/live.h>
 
+#include <array>
 #include <atomic>
 #include <cstdint>
 #include <filesystem>
@@ -45,6 +46,13 @@ struct ReceiveResult {
 };
 
 struct ReceiveDiagnostics {
+    struct Tracking {
+        std::array<Point2, 4> corners;  // normalized in the unmirrored camera frame
+        int width;
+        int height;
+        std::chrono::steady_clock::time_point offered_at;
+    };
+    std::optional<Tracking> tracking;
     detail::FrameDeliveryStats delivery;
     std::uint64_t decoded = 0;
     double decode_ms_sum = 0;  // full LiveReceiver::Ingest wall time, including core locking

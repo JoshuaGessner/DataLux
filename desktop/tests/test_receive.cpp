@@ -129,6 +129,58 @@ TEST(CameraColor, AdjacentRgbPixelsKeepTheirOwnChromaWithPaddedRows) {
     EXPECT_EQ(v[3], 128);
 }
 
+TEST(CameraOutline, MirrorsWithinTheFittedPreview) {
+    const std::array<Point2, 4> corners{{{0.1, 0.2}, {0.4, 0.1}, {0.5, 0.8}, {0.0, 1.0}}};
+    const auto portrait = detail::MirrorCameraOutline(corners, {80, 20, 160, 280});
+    EXPECT_FLOAT_EQ(portrait[0].x, 224);
+    EXPECT_FLOAT_EQ(portrait[0].y, 76);
+    EXPECT_FLOAT_EQ(portrait[1].x, 176);
+    EXPECT_FLOAT_EQ(portrait[1].y, 48);
+    const auto landscape = detail::MirrorCameraOutline(corners, {20, 60, 280, 160});
+    EXPECT_FLOAT_EQ(landscape[2].x, 160);
+    EXPECT_FLOAT_EQ(landscape[2].y, 188);
+    EXPECT_FLOAT_EQ(landscape[3].x, 300);
+    EXPECT_FLOAT_EQ(landscape[3].y, 220);
+}
+
+TEST_F(ReceiveTest, PublishedOutlineFollowsCameraFrameAndClearsWhenLost) {
+    const auto data = Text(30'000);
+    const auto envelope = PackEnvelope(data, "tracking.bin", CompressionMode::kOff).value().bytes;
+    const auto layout = FrameLayout::Create({120, 260}, LayoutConfig{});
+    ASSERT_TRUE(layout.ok());
+    auto tx = TransmitSession::Create(layout.value(), envelope, "tracking.bin", SessionIdFor(envelope, "tracking.bin"));
+    ASSERT_TRUE(tx.ok());
+    CellMatrix cells(120, 260);
+    ASSERT_TRUE(tx.value().Next(&cells).ok());
+    int w = 0;
+    int h = 0;
+    auto luma = Draw(cells, &w, &h);
+    const std::vector<std::uint8_t> chroma(static_cast<std::size_t>(w / 2) * static_cast<std::size_t>(h / 2), 128);
+    Receiver rx({}, false, dir_);
+    const auto wait_for_frame = [&](std::uint64_t decoded) {
+        for (int i = 0; i < 100 && rx.Diagnostics().decoded < decoded; ++i) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+        return rx.Diagnostics();
+    };
+    rx.Offer(luma, chroma, chroma, w, h, 33'000'000);
+    const auto located = wait_for_frame(1);
+    ASSERT_EQ(located.decoded, 1U);
+    ASSERT_TRUE(located.tracking);
+    EXPECT_EQ(located.tracking->width, w);
+    EXPECT_EQ(located.tracking->height, h);
+    const auto corners = located.tracking->corners;
+    const auto x = std::minmax_element(corners.begin(), corners.end(), [](auto a, auto b) { return a.x < b.x; });
+    EXPECT_NEAR(x.first->x, static_cast<double>(kMargin) / w, 0.01);
+    EXPECT_NEAR(x.second->x, 1.0 - static_cast<double>(kMargin) / w, 0.01);
+    std::fill(luma.begin(), luma.end(), 0);
+    for (std::uint64_t i = 2; i <= 4; ++i) {
+        rx.Offer(luma, chroma, chroma, w, h, i * 33'000'000);
+        ASSERT_EQ(wait_for_frame(i).decoded, i);
+    }
+    EXPECT_FALSE(rx.Diagnostics().tracking);
+}
+
 TEST_F(ReceiveTest, FullResolutionRgbEightColorFileVerifiesAndIsSaved) {
     const auto data = Text(30'000);
     const auto env = PackEnvelope(data, "color.bin", CompressionMode::kOff).value().bytes;

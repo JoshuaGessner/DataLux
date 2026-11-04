@@ -269,9 +269,9 @@ class FramePipeline {
                                         std::int64_t timestamp_ns,
                                         const ChromaPlanes* chroma = nullptr);
 
-    // Geometry from the most recent Process() call. Only meaningful when the last frame
-    // decoded; check last_ok() first.
+    // Geometry from the most recent Process() call, valid when tracking succeeded.
     [[nodiscard]] const Homography& last_homography() const noexcept { return last_h_; }
+    [[nodiscard]] const RadialDistortion& last_lens() const noexcept { return lens_; }
     // The lens distortion this pipeline has learned (SubcellConfig::fit_lens); 0 = none.
     [[nodiscard]] double lens_strength() const noexcept { return lens_k1_; }
 

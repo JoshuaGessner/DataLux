@@ -171,14 +171,15 @@ class LightGridView(context: Context) : HeroView(context) {
 }
 
 /**
- * Receive: a viewfinder, its corners bracketing a faint frame, and a beam of light sweeping down
- * and up it -- lighting the cells it passes, as the camera reads them.
+ * Receive: a sending display and a camera viewfinder connected by a quiet beam of light.
  */
 class ScanView(context: Context) : HeroView(context) {
     private val cells = 7
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val box = RectF()
     private val cell = RectF()
+    private val display = RectF()
+    private val viewfinder = RectF()
     private var beamShader: LinearGradient? = null
     private val beamMatrix = android.graphics.Matrix()
     private val corners = android.graphics.Path()
@@ -192,8 +193,35 @@ class ScanView(context: Context) : HeroView(context) {
     override fun onDraw(c: Canvas) {
         if (width < 2 || height < 2) return  // hidden for want of room (see onMeasure)
         drawGlow(c, tertiary)
-        val side = minOf(width, height) * 0.62f
-        box.set((width - side) / 2, (height - side) / 2, (width + side) / 2, (height + side) / 2)
+        val side = minOf(width, height) * 0.46f
+        val left = width * 0.42f
+        val top = (height - side) / 2
+        box.set(left, top, left + side, top + side)
+
+        // The smaller sending screen sits across from the receiving camera.
+        display.set(width * 0.09f, height * 0.32f, width * 0.32f, height * 0.68f)
+        viewfinder.set(box.left - side * 0.1f, box.top - side * 0.26f,
+            box.right + side * 0.1f, box.bottom + side * 0.16f)
+        paint.style = Paint.Style.FILL
+        paint.color = surfaceHigh
+        c.drawRoundRect(display, side * 0.1f, side * 0.1f, paint)
+        c.drawRoundRect(viewfinder, side * 0.12f, side * 0.12f, paint)
+        paint.style = Paint.Style.STROKE
+        paint.strokeWidth = density
+        paint.color = ColorUtils.setAlphaComponent(primary, 165)
+        c.drawRoundRect(display, side * 0.1f, side * 0.1f, paint)
+        c.drawRoundRect(viewfinder, side * 0.12f, side * 0.12f, paint)
+        paint.style = Paint.Style.FILL
+        c.drawCircle(viewfinder.centerX(), viewfinder.top + side * 0.11f, density * 2.5f, paint)
+        paint.color = ColorUtils.setAlphaComponent(primary, 85)
+        c.drawRect(display.right, height * 0.5f - density, viewfinder.left, height * 0.5f + density, paint)
+        val step = display.width() / 5f
+        for (y in 0 until 5) for (x in 0 until 3) {
+            val px = display.left + step * (x + 1)
+            val py = display.centerY() + step * (y - 2.5f)
+            paint.color = ColorUtils.setAlphaComponent(primary, if (hash(x, y) > 0.5f) 220 else 65)
+            c.drawRoundRect(px, py, px + step * 0.7f, py + step * 0.7f, density, density, paint)
+        }
 
         // The beam: down and back, eased at each end, a moment's rest at the top.
         val cycle = 3.2f

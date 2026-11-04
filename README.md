@@ -50,10 +50,10 @@ with the sending screen filling the receiving camera's view:
 | **Fast** (default) | 4 colours, 30 frames a second | ≈ 175 KB/s, expected |
 | **Steady** | black and white, 20 frames a second | ≈ 35–45 KB/s, measured |
 
-A 2 MB photo takes about 8 seconds on Fastest and 12 on Fast. Eight colours need a receiving
-camera that sees colour sharply; four colours are much easier to tell apart, so **Fast** is the
-default and works with more phones. If the receiver says it can read the screen but not its
-colours, step the sender down a setting.
+The table is a close-range phone benchmark. On a different camera, Fastest can take longer
+than Fast if more frames fail to decode. **Fast** is the native default. If a pattern is found
+but the file stops advancing, hold the whole pattern steady or step the sender down a setting.
+Use **Steady** to start with an untested webcam.
 
 Text, documents and other compressible files go faster still: DataLux compresses them with
 Zstandard before sending, so a 1 MB text file may need only a few hundred kilobytes on the link.
@@ -63,9 +63,9 @@ prepare) and **Off**. The receiver shows the link's speed and the file's *effect
 counts the time spent compressing and opening, along with how much time compression saved or cost
 compared with sending the file uncompressed. Turn compression off to compare the two.
 
-Speeds depend on both phones — the receiving camera needs to run at 50–60 frames a second for the
-faster settings, which most recent phones do. The receiver works out the sender's setting on its
-own.
+Speeds depend on both devices. Camera focus, actual capture cadence, color detail and the
+sending display all affect how much of the file is recovered per second. The receiver detects
+the sender's mode automatically.
 
 ## Using it
 

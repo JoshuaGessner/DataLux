@@ -70,7 +70,20 @@ std::optional<std::string> ReadQr(const std::uint8_t* luma, int w, int h) {
 
 Camera::~Camera() { Close(); }
 
-void Camera::Open() {
+std::vector<Camera::Device> Camera::Devices() {
+    if (!SDL_WasInit(SDL_INIT_CAMERA) && !SDL_InitSubSystem(SDL_INIT_CAMERA)) return {};
+    int count = 0;
+    SDL_CameraID* ids = SDL_GetCameras(&count);
+    std::vector<Device> devices;
+    for (int i = 0; ids != nullptr && i < count; ++i) {
+        const char* name = SDL_GetCameraName(ids[i]);
+        devices.push_back({ids[i], name != nullptr && *name != '\0' ? name : "Camera " + std::to_string(i + 1)});
+    }
+    SDL_free(ids);
+    return devices;
+}
+
+void Camera::Open(SDL_CameraID preferred) {
     if (camera_ != nullptr) return;
     none_ = false;
     problem_.clear();
@@ -90,12 +103,19 @@ void Camera::Open() {
         SDL_free(ids);
         return;
     }
-    SDL_CameraID pick = ids[0];
-    for (int i = 0; i < n; ++i) {
-        if (SDL_GetCameraPosition(ids[i]) == SDL_CAMERA_POSITION_FRONT_FACING) {
-            pick = ids[i];
-            break;
+    SDL_CameraID pick = preferred;
+    if (pick == 0) {
+        pick = ids[0];
+        for (int i = 0; i < n; ++i) {
+            if (SDL_GetCameraPosition(ids[i]) == SDL_CAMERA_POSITION_FRONT_FACING) {
+                pick = ids[i];
+                break;
+            }
         }
+    } else if (std::find(ids, ids + n, pick) == ids + n) {
+        SDL_free(ids);
+        Fail("That camera is unavailable. Choose a connected camera or Automatic.");
+        return;
     }
     SDL_free(ids);
     // Fit the long optical code, rather than maximizing image area. A square 1552x1552 mode
@@ -108,6 +128,7 @@ void Camera::Open() {
         if (detail::PreferReceiveFormat(*s, best)) best = s;
     }
     camera_ = SDL_OpenCamera(pick, best);
+    if (camera_ == nullptr && best != nullptr) camera_ = SDL_OpenCamera(pick, nullptr);
     camera_id_ = pick;
     SDL_free(specs);
     if (camera_ == nullptr) Fail("The camera could not open. Close other camera apps and check camera access, then retry.");
@@ -173,12 +194,13 @@ bool Camera::Poll(SDL_Renderer* r) {
         else if (arrival - last_arrival_ns_ > 10'000'000'000) Fail("The camera is not delivering frames. Check its connection, then retry.");
         return false;
     }
-    last_arrival_ns_ = arrival;
     if (diagnostics_.frames > 0 && ts <= ts_) {
         ++diagnostics_.nonmonotonic_timestamps;
         SDL_ReleaseCameraFrame(camera_, frame);
+        if (arrival - last_arrival_ns_ > 10'000'000'000) Fail("The camera stopped delivering new frames. Retry receiving.");
         return false;
     }
+    last_arrival_ns_ = arrival;
     const Uint64 conversion_started = SDL_GetTicksNS();
     // One format to read, whatever the camera gives: RGBA, from which luma and chroma follow.
     SDL_Surface* rgba = SDL_ConvertSurface(frame, SDL_PIXELFORMAT_RGBA32);
@@ -230,6 +252,16 @@ double detail::ReceiveCellPitch(const SDL_CameraSpec& mode) {
     const double height = mode.height;
     return std::max(std::min(width / 120.0, height / 260.0),
                     std::min(width / 260.0, height / 120.0));
+}
+
+std::array<SDL_FPoint, 4> detail::MirrorCameraOutline(const std::array<Point2, 4>& corners, SDL_FRect preview) {
+    std::array<SDL_FPoint, 4> outline{};
+    for (std::size_t i = 0; i < outline.size(); ++i) {
+        const float x = static_cast<float>(std::clamp(corners[i].x, 0.0, 1.0));
+        const float y = static_cast<float>(std::clamp(corners[i].y, 0.0, 1.0));
+        outline[i] = {preview.x + (1.0F - x) * preview.w, preview.y + y * preview.h};
+    }
+    return outline;
 }
 
 bool detail::PreferReceiveFormat(const SDL_CameraSpec& candidate, const SDL_CameraSpec* current) {

@@ -494,8 +494,8 @@ class MainActivity : AppCompatActivity() {
                 space(20),
                 centred(title("Send files", 26f)),
                 space(8),
-                centred(text("They appear on this screen as light for the other phone to scan. " +
-                    "One file at a time is free. Pro sends several together; a receiving phone needs Pro for batches too.")),
+                centred(text("Choose a file, then point the receiving device's camera at this screen. " +
+                    "For several files at once, use DataLux Pro on Android.")),
             ),
             listOf(
                 securityRow(),
@@ -521,7 +521,7 @@ class MainActivity : AppCompatActivity() {
             space(20),
             centred(title("Receive a file", 26f)),
             space(8),
-            centred(text("Fill this camera's picture with the sending screen.")),
+            centred(text("Point this camera at the sending screen. Keep all four corners of the pattern in view.")),
         ),
         listOf(
             securityRow(),
@@ -1050,7 +1050,7 @@ class MainActivity : AppCompatActivity() {
                 "all at once."
 
         private const val HOW_IT_WORKS =
-            "One phone shows the file as a fast-changing pattern of light. The other phone's " +
+            "One device shows the file as a fast-changing pattern of light. The other device's " +
                 "camera reads it.\n\n" +
                 "Nothing goes over Wi-Fi, Bluetooth, NFC or a cable. Every file is checked " +
                 "(SHA-256) before it is saved, so a received file is exactly the one sent.\n\n" +
@@ -1059,9 +1059,10 @@ class MainActivity : AppCompatActivity() {
         private const val RECEIVE_HELP =
             "• Fill the picture with the sending screen: its pattern just inside the corner " +
                 "marks. That is where it reads fastest.\n\n" +
-                "• Keep the two phones parallel.\n\n" +
+                "• Hold the camera square to the screen. Move a little farther back if it can't focus.\n\n" +
                 "• It finds the sender's speed setting by itself.\n\n" +
-                "• If it pauses, just aim back: nothing received so far is lost."
+                "• If it pauses, aim back at the same sender to continue. If it still can't read, " +
+                "switch the sender to Fast or Steady."
 
         private const val ENCRYPTION_HELP =
             "Off: like a QR code, anyone whose camera can see the sending screen could read the " +

@@ -58,6 +58,7 @@ class TransmitActivity : AppCompatActivity() {
     /** Colours per cell: 8 (M5, F62), 4 (M3, F66), 0 black and white. */
     private var colours = Speed.DEFAULT.colours
     private var reported = false
+    private var changingSpeed = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -236,13 +237,7 @@ class TransmitActivity : AppCompatActivity() {
                 // Under encryption the link itself carries no name -- it is inside the envelope --
                 // and no original size or codec either: the receiver learns those on opening it.
                 // A batch advisory carries only the existing public batch flag, never names/counts.
-                if (key != null) {
-                    Transmitter.openFile(cols, rows, nsym, p.bytes, SEALED_NAME, colours)
-                } else {
-                    Transmitter.openFile(cols, rows, nsym, p.bytes, name, colours,
-                                         originalSize = p.originalSize, codec = p.codec,
-                                         compressMs = p.compressMs.coerceAtMost(Int.MAX_VALUE.toLong()).toInt())
-                }
+                openPacked(p, name, cols, rows, nsym, colours)
             }
             runOnUiThread {
                 if (isFinishing || isDestroyed) {
@@ -397,7 +392,12 @@ class TransmitActivity : AppCompatActivity() {
         // real size is known and the row fits; otherwise a toast says the same thing once.
         // The best the link can do, a perfect one: what compression is projected against.
         val linkRate = if (perFrame > 0 && stateRate > 0.0) perFrame * stateRate / 1.05 else 0.0
-        val bar = sendingBar(t, estimate, linkRate)
+        val slower = when (colours) {
+            Speed.Fastest.colours -> Speed.Fast
+            Speed.Fast.colours -> Speed.Steady
+            else -> null
+        }?.takeIf { seconds <= 0 && !intent.hasExtra("divisor") }
+        val bar = sendingBar(t, estimate, linkRate, slower, marginPx)
         setContentView(android.widget.FrameLayout(this).apply {
             setBackgroundColor(android.graphics.Color.BLACK)
             addView(glView)
@@ -408,6 +408,7 @@ class TransmitActivity : AppCompatActivity() {
             ))
         })
         bar.postDelayed({
+            if (renderer !== r || isFinishing || isDestroyed) return@postDelayed
             val margin = (r.surfaceHeight - r.drawnHeight) / 2
             if (r.drawnHeight > 0 && bar.height in 1..(margin - dp(8))) {
                 bar.visibility = android.view.View.VISIBLE
@@ -441,7 +442,13 @@ class TransmitActivity : AppCompatActivity() {
     }
 
     /** The row in the top margin: file, size, elapsed time, Stop. Starts hidden; see [begin]. */
-    private fun sendingBar(t: Transmitter, estimate: String?, linkRate: Double): android.view.View {
+    private fun sendingBar(
+        t: Transmitter,
+        estimate: String?,
+        linkRate: Double,
+        slower: Speed?,
+        marginPx: Int,
+    ): android.view.View {
         // ~12% linear luminance against the frame's 100%: readable on black, and captured far
         // below the threshold that separates the frame's lit cells from its dark ones.
         val dim = "#70757A".toColorInt()
@@ -474,6 +481,11 @@ class TransmitActivity : AppCompatActivity() {
             }, android.widget.LinearLayout.LayoutParams(
                 0, android.widget.LinearLayout.LayoutParams.WRAP_CONTENT, 1f,
             ))
+            if (slower != null) {
+                addView(button("Use ${slower.label}", style = dev.fileflow.ui.Ui.Style.Text) {
+                    offerSlowerSpeed(t, slower, marginPx)
+                }.apply { setTextColor(dim) })
+            }
             addView(button("Stop", R.drawable.ic_close, dev.fileflow.ui.Ui.Style.Text) { finish() }
                 .apply {
                     setTextColor(dim)
@@ -481,6 +493,66 @@ class TransmitActivity : AppCompatActivity() {
                     minHeight = dp(40)
                 })
         }
+    }
+
+    private fun openPacked(file: Envelope.Packed, name: String, cols: Int, rows: Int, nsym: Int, colours: Int): Transmitter =
+        if (file.encrypted) {
+            Transmitter.openFile(cols, rows, nsym, file.bytes, SEALED_NAME, colours)
+        } else {
+            Transmitter.openFile(cols, rows, nsym, file.bytes, name, colours,
+                originalSize = file.originalSize, codec = file.codec,
+                compressMs = file.compressMs.coerceAtMost(Int.MAX_VALUE.toLong()).toInt())
+        }
+
+    private fun offerSlowerSpeed(current: Transmitter, speed: Speed, marginPx: Int) {
+        if (changingSpeed) return
+        val file = packed ?: return
+        val name = displayName ?: current.fileName
+        com.google.android.material.dialog.MaterialAlertDialogBuilder(this)
+            .setTitle("Switch to ${speed.label}?")
+            .setMessage("DataLux will send the same file again from the beginning. Keep the other device in Receive.")
+            .setPositiveButton("Switch speed") { _, _ ->
+                changingSpeed = true
+                Thread {
+                    val replacement = runCatching {
+                        // Keep the current grid so a receiver already locked to it can reacquire.
+                        openPacked(file, name, current.cols, current.rows, intent.getIntExtra("nsym", 32), speed.colours)
+                    }
+                    runOnUiThread {
+                        changingSpeed = false
+                        val next = replacement.getOrNull()
+                        if (tx !== current || isFinishing || isDestroyed ||
+                            !lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)) {
+                            next?.close()
+                            return@runOnUiThread
+                        }
+                        if (next == null) {
+                            android.widget.Toast.makeText(this, "Couldn't switch speed. Still sending at the current speed.",
+                                android.widget.Toast.LENGTH_LONG).show()
+                            return@runOnUiThread
+                        }
+                        if (batchNames != null && !Entitlements.has(Entitlements.Feature.Batch)) {
+                            next.close()
+                            finish()
+                            return@runOnUiThread
+                        }
+                        glView?.onPause() // The old GL thread has stopped using the native sender.
+                        ticker.removeCallbacks(tick)
+                        renderer?.let { if (!reported) report(null, it) }
+                        current.close()
+                        sessionLogOwner?.let(SessionLog::close)
+                        reported = false
+                        colours = speed.colours
+                        targetStateRate = speed.statesPerSecond
+                        val panelHz = display?.refreshRate?.toDouble()?.takeIf { it > 0.0 } ?: 60.0
+                        val divisor = Math.round(panelHz / targetStateRate).toInt().coerceAtLeast(1)
+                        stateRate = panelHz / divisor
+                        begin(next, divisor, marginPx, seconds = 0)
+                    }
+                }.start()
+            }
+            .setNegativeButton("Keep current speed", null)
+            .show()
     }
 
     /** A centred holding screen: a spinner while working, or an icon when something went wrong. */

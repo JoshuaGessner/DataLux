@@ -25,6 +25,7 @@ import java.util.concurrent.CancellationException
 import java.util.concurrent.TimeUnit
 import java.util.Collections
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 
 /**
@@ -556,6 +557,7 @@ class CameraRecorder(private val context: Context) {
         var manualRequested = false
         val error = AtomicReference<String?>(null)
         val stopping = AtomicBoolean(false)
+        val lastImageNs = AtomicLong(0L)
         val done = CountDownLatch(1)
         activeDone = done
         var metrics = CaptureTelemetry(latestFrameOnly, false)
@@ -652,6 +654,7 @@ class CameraRecorder(private val context: Context) {
                             done.countDown()
                         } else if (unbounded || timestamps.size < frameCount) {
                             val arrivalNs = SystemClock.elapsedRealtimeNanos()
+                            lastImageNs.lazySet(arrivalNs)
                             metrics.callbackStarted(arrivalNs, image.timestamp)
                             onFrame?.let { cb ->
                                 val plane = image.planes[0]
@@ -701,10 +704,10 @@ class CameraRecorder(private val context: Context) {
             val builder = device.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {
                 addTarget(reader.surface)
                 if (previewSurface != null) addTarget(previewSurface)
-                set(
-                    CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE,
-                    android.util.Range(targetFps, targetFps),
-                )
+                chars.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES)
+                    ?.filter { it.contains(targetFps) }
+                    ?.minByOrNull { it.upper - it.lower }
+                    ?.let { set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, it) }
                 // Everything below exists so consecutive frames are photometrically comparable.
                 // Auto-anything re-tunes between frames, which moves the dark/bright references
                 // the photometric field (C09) is trying to estimate.
@@ -814,7 +817,9 @@ class CameraRecorder(private val context: Context) {
                     // silently produces the wrong rate, which is indistinguishable from a device
                     // that cannot hit the rate.
                     set(CaptureRequest.SENSOR_FRAME_DURATION, 1_000_000_000L / targetFps)
-                } else {
+                } else if (!latestFrameOnly && chars.get(CameraCharacteristics.CONTROL_AE_LOCK_AVAILABLE) == true) {
+                    // A fixed exposure is useful for recordings. A live receiver on a camera
+                    // without manual sensor control needs AE to adjust as the sender enters view.
                     set(CaptureRequest.CONTROL_AE_LOCK, true)
                 }
 
@@ -920,13 +925,22 @@ class CameraRecorder(private val context: Context) {
                 }
             }
             control = LiveControl(session, builder, callback, handler, chars, fail)
+            val streamStartedNs = SystemClock.elapsedRealtimeNanos()
             session.setRepeatingRequest(request, callback, handler)
 
             if (unbounded) {
-                // No deadline: an aiming session lasts as long as the user needs. Polled rather than
-                // awaited without limit so a cancel is never missed if it lands between checks.
+                // Aiming can last indefinitely while images arrive. Measure camera delivery here,
+                // independently of whether a frame contains a pattern or advances a transfer.
                 while (!cancelled) {
                     if (done.await(200, TimeUnit.MILLISECONDS)) break
+                    val lastImage = lastImageNs.get()
+                    if (!isStopping() && SystemClock.elapsedRealtimeNanos() -
+                        maxOf(streamStartedNs, lastImage) >= LIVE_CAMERA_STALL_NS) {
+                        fail(if (lastImage == 0L)
+                            "The camera opened but did not deliver an image. Close other camera apps and retry."
+                        else "The camera stopped delivering images. Check camera access and retry.", null)
+                        break
+                    }
                 }
             } else {
                 // Generous: a cold camera start plus AE settling can take a second or two, and the
@@ -1025,34 +1039,33 @@ class CameraRecorder(private val context: Context) {
          * the same long axis -- and the long axis is the one the screen's long side lies along.
          */
         fun chooseFps(context: Context, maxWidth: Int, rates: List<Int> = listOf(60, 50, 30)): Int {
-            val longest = { fps: Int ->
-                runCatching {
-                    val mgr = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
-                    val id = mgr.cameraIdList.firstOrNull { cid ->
-                        mgr.getCameraCharacteristics(cid).get(CameraCharacteristics.LENS_FACING) ==
-                            CameraCharacteristics.LENS_FACING_BACK
-                    } ?: return@runCatching 0
-                    val map = mgr.getCameraCharacteristics(id)
-                        .get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
-                        ?: return@runCatching 0
-                    map.getOutputSizes(ImageFormat.YUV_420_888)
-                        .filter { it.width <= maxWidth }
-                        .filter {
-                            map.getOutputMinFrameDuration(ImageFormat.YUV_420_888, it) <=
-                                1_000_000_000L / fps
-                        }
-                        .maxOfOrNull { maxOf(it.width, it.height) } ?: 0
-                }.getOrDefault(0)
-            }
+            val slowest = rates.minOrNull() ?: 30
+            val modes = runCatching {
+                val mgr = context.getSystemService(Context.CAMERA_SERVICE) as CameraManager
+                val ids = mgr.cameraIdList
+                val id = ids.firstOrNull { cid ->
+                    mgr.getCameraCharacteristics(cid).get(CameraCharacteristics.LENS_FACING) ==
+                        CameraCharacteristics.LENS_FACING_BACK
+                } ?: ids.firstOrNull() ?: return slowest
+                val map = mgr.getCameraCharacteristics(id)
+                    .get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP) ?: return slowest
+                map.getOutputSizes(ImageFormat.YUV_420_888).orEmpty()
+                    .filter { it.width <= maxWidth }
+                    .map { it to map.getOutputMinFrameDuration(ImageFormat.YUV_420_888, it) }
+            }.getOrElse { return slowest }
+            fun longest(fps: Int): Int = modes
+                .filter { (_, durationNs) -> supportsNominalRate(durationNs, fps) }
+                .maxOfOrNull { (size, _) -> maxOf(size.width, size.height) } ?: 0
             // The fastest rate that keeps (nearly) the resolution of the slowest. Not just 60-or-30:
             // the S26 Ultra offers 60 fps only up to 2336x1080, but 50 fps at 4000x1848 -- the
             // same long side as its 30 fps mode, so 50 is two thirds more captures for free.
-            val slowest = rates.minOrNull() ?: 30
             val base = longest(slowest)
             return rates.sortedDescending().firstOrNull { r ->
                 val l = longest(r)
                 l > 0 && l >= base * 0.9
-            } ?: slowest
+            } ?: if (slowest == 30 && base == 0) {
+                listOf(24, 15).firstOrNull { longest(it) > 0 } ?: slowest
+            } else slowest
         }
     }
 
@@ -1083,11 +1096,18 @@ class CameraRecorder(private val context: Context) {
         cols: Int,
         rows: Int,
     ): Size? {
-        val minDurationNs = 1_000_000_000L / targetFps
-        val candidates = map.getOutputSizes(ImageFormat.YUV_420_888)
+        val sizes = map.getOutputSizes(ImageFormat.YUV_420_888)
             ?.filter { it.width <= maxWidth }
-            ?.filter { map.getOutputMinFrameDuration(ImageFormat.YUV_420_888, it) <= minDurationNs }
             ?: return null
+        val candidates = sizes.filter {
+            supportsNominalRate(map.getOutputMinFrameDuration(ImageFormat.YUV_420_888, it), targetFps)
+        }.ifEmpty {
+            // Older/limited devices may omit timing metadata. Try an unknown mode at the
+            // compatibility rate; do not use it as proof that a high-rate mode is supported.
+            if (targetFps <= 30) sizes.filter {
+                map.getOutputMinFrameDuration(ImageFormat.YUV_420_888, it) == 0L
+            } else emptyList()
+        }
         if (cols <= 0 || rows <= 0) return candidates.maxByOrNull { it.width.toLong() * it.height }
 
         val r = cols.toDouble() / rows       // screen short : long
@@ -1279,6 +1299,10 @@ class CameraRecorder(private val context: Context) {
         const val MAX_LIVE_ZOOM = 1.6f
         private const val IMAGE_BUFFERS = 6
         private const val LIVE_TIMESTAMP_LIMIT = 600
+        private const val LIVE_CAMERA_STALL_NS = 10_000_000_000L
+        // A nominal 30 fps mode can report 29.97 fps or round its frame period up.
+        private fun supportsNominalRate(durationNs: Long, fps: Int): Boolean =
+            durationNs in 1L..(1_005_000_000L / fps)
         /** Side of the tap-to-focus region, and of the standing centre region, as array fractions. */
         private const val AF_TAP_FRACTION = 0.15f
         private const val AF_CENTRE_FRACTION = 0.4f

@@ -34,6 +34,7 @@
 #include <SDL3/SDL_main.h>
 
 #include <cstdio>
+#include <cmath>
 #include <cstdlib>
 #include <exception>
 #include <string>
@@ -48,7 +49,7 @@ int Usage() {
                  "usage: fileflow-send [--speed steady|fast|fastest] [--compression off|auto|max] [--windowed]\n"
                  "                     [--window WxH] [--code-window] [--seconds N]\n"
                   "                     [--snapshot OUT.bmp [--snapshot-after S]] [FILE...]\n"
-                  "Diagnostics: --camera-modes | --freeze-frame N (0..1000; holds one state) | --fec 16|32|48|64\n"
+                  "Diagnostics: --camera-modes | --freeze-frame N (0..1000) | --fec 16|32|48|64 | --state-rate 10..60\n"
                  "With no files, the app opens: drop files on it, or choose them.\n");
     return 2;
 }
@@ -84,6 +85,12 @@ int main(int argc, char** argv) {
             else if (value == "48") options.diagnostic_fec_nsym = 48;
             else if (value == "64") options.diagnostic_fec_nsym = 64;
             else return Usage();
+        } else if (a == "--state-rate" && i + 1 < argc) {
+            char* end = nullptr;
+            const char* value = argv[++i];
+            const double rate = std::strtod(value, &end);
+            if (end == value || *end != '\0' || !std::isfinite(rate) || rate < 10.0 || rate > 60.0) return Usage();
+            options.diagnostic_state_rate = rate;
         } else if (a == "--freeze-frame" && i + 1 < argc) {
             char* end = nullptr;
             const char* value = argv[++i];

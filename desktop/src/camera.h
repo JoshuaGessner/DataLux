@@ -8,6 +8,9 @@
 
 #include <SDL3/SDL.h>
 
+#include <fileflow/geometry.h>
+
+#include <array>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -27,11 +30,16 @@ bool PreferReceiveFormat(const SDL_CameraSpec& candidate, const SDL_CameraSpec* 
 // Extract co-sited planes from a valid RGBA32 surface, reusing the output vectors' storage.
 void RgbaToYuv444(const std::uint8_t* pixels, int width, int height, int pitch,
                   std::vector<std::uint8_t>* luma, std::vector<std::uint8_t>* u, std::vector<std::uint8_t>* v);
+std::array<SDL_FPoint, 4> MirrorCameraOutline(const std::array<Point2, 4>& corners, SDL_FRect preview);
 }
 
 class Camera {
   public:
     enum class State { kOff, kNone, kWaiting, kDenied, kOn, kError };
+    struct Device {
+        SDL_CameraID id;
+        std::string name;
+    };
 
     struct Diagnostics {
         SDL_CameraSpec negotiated{};  // SDL's delivered format; not necessarily native sensor data
@@ -51,8 +59,9 @@ class Camera {
     Camera(const Camera&) = delete;
     Camera& operator=(const Camera&) = delete;
 
-    // Opens the camera facing the person (a laptop's built-in one) or else the first.
-    void Open();
+    // An ID is valid only while its camera is connected. Zero chooses the built-in or first camera.
+    static std::vector<Device> Devices();
+    void Open(SDL_CameraID preferred = 0);
     void Close();
     [[nodiscard]] State state() const;
 

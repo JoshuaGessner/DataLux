@@ -163,7 +163,7 @@ void App::SendScreen(float x0, float W, float H) {
     }
 
     // The one line of instruction, where there's room for it.
-    const char* footer = "Point a phone running DataLux at the code. No network, no pairing, nothing to install.";
+    const char* footer = "On the other device, open DataLux, select Receive and aim at the whole pattern.";
     if (bottom + 20 <= footer_y && paint_.Measure(footer, 13, Weight::kRegular) <= SW - 2 * margin) {
         paint_.Text(footer, L + SW / 2, footer_y, 13, Weight::kRegular, th::kTextDim, Align::kCenter);
     }
@@ -199,6 +199,8 @@ void App::SendingOverlay(float W, float H, float alpha) {
     const std::size_t speed = ui_.Segmented("send-speed", {bar.x + 9, bar.y + 9, bw - 140, 40}, SpeedNames(), settings_.speed);
     if (speed != settings_.speed) SetSpeed(speed);
     if (ui_.Button("stop", {bar.x + bw - 122, bar.y + 9, 113, 40}, "Stop", false)) Stop();
+    paint_.Text("Changing speed restarts the transfer", W / 2, bar.y + bar.h + 3, 12,
+                Weight::kRegular, WithAlpha(th::kText, alpha), Align::kCenter);
 }
 
 // Presenting: the code is full screen on the other display; this window is the presenter's -- a
@@ -245,6 +247,8 @@ void App::Presenter(float W, float H) {
     const std::size_t speed = ui_.Segmented("present-speed", {frame.x, row, std::min(360.0F, pw - 140), 42}, SpeedNames(), settings_.speed);
     if (speed != settings_.speed) SetSpeed(speed);
     if (ui_.Button("present-stop", {frame.x + pw - 120, row, 120, 42}, "Stop", false)) Stop();
+    paint_.Text("If receiving stalls, try Steady. Changing speed restarts the transfer.", frame.x, row + 52, 13,
+                Weight::kRegular, th::kTextDim);
 }
 
 }  // namespace fileflow::desktop

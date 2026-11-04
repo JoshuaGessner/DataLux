@@ -3,6 +3,7 @@
 #include "app.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <numbers>
@@ -12,6 +13,29 @@ namespace fileflow::desktop {
 namespace th = theme;
 
 namespace {
+
+constexpr auto kTrackingFreshFor = std::chrono::milliseconds(300);
+constexpr Rgba kPatternFound = Hex(0xE8B86A);
+
+void DrawOutline(Painter& paint, const std::array<SDL_FPoint, 4>& points, Rgba color) {
+    std::vector<SDL_FPoint> edge(4);
+    for (std::size_t i = 0; i < points.size(); ++i) {
+        const auto a = points[i];
+        const auto b = points[(i + 1) % points.size()];
+        const float length = std::hypot(b.x - a.x, b.y - a.y);
+        if (length < 1.0F) continue;
+        const float nx = (b.y - a.y) / length;
+        const float ny = (a.x - b.x) / length;
+        const auto stroke = [&](float radius, Rgba tint) {
+            const float x = nx * radius;
+            const float y = ny * radius;
+            edge = {{a.x - x, a.y - y}, {b.x - x, b.y - y}, {b.x + x, b.y + y}, {a.x + x, a.y + y}};
+            paint.Polygon(edge, tint);
+        };
+        stroke(2.8F, Hex(0x000000, 0.7F));
+        stroke(1.4F, color);
+    }
+}
 
 // A path as a file:// URL, for the system to open: everything but the safe characters escaped.
 std::string FileUrl(const std::filesystem::path& p) {
@@ -59,13 +83,51 @@ void Tick(Painter& p, float cx, float cy, float r, Rgba c) {
 
 void App::StartReceiving() {
     rx_result_.reset();
+    ui_.Anim("rx-progress").value = 0;
     receiver_ = std::make_unique<Receiver>(Keys(), settings_.encrypted);
-    if (!options_.no_camera) rx_camera_.Open();
+    if (!options_.no_camera) rx_camera_.Open(rx_camera_choice_);
 }
 
 void App::StopReceiving() {
     receiver_.reset();  // joins its thread
     rx_camera_.Close();
+    rx_camera_picker_open_ = false;
+}
+
+void App::ReceiveCameraPicker(float x, float w) {
+    constexpr std::size_t kPageSize = 5;
+    const std::size_t count = rx_camera_devices_.size() + 1;
+    const std::size_t last_page = (count - 1) / kPageSize;
+    rx_camera_page_ = std::min(rx_camera_page_, last_page);
+    paint_.Text("Choose a camera", x, 88, 20, Weight::kSemiBold, th::kText);
+    const char* help = rx_camera_devices_.empty() ? "Connect a camera and it will appear here."
+        : receiver_ ? "Switching cameras restarts receiving."
+                    : "Choose a camera, then select Start receiving.";
+    paint_.Text(help, x, 120, 14, Weight::kRegular, th::kTextDim);
+    const auto start = rx_camera_page_ * kPageSize;
+    float y = 156;
+    for (std::size_t i = start; i < std::min(count, start + kPageSize); ++i) {
+        const auto id = i == 0 ? 0 : rx_camera_devices_[i - 1].id;
+        const auto name = i == 0 ? std::string("Automatic") : rx_camera_devices_[i - 1].name;
+        const bool selected = id == rx_camera_choice_;
+        const bool clicked = ui_.Row("rx-device-" + std::to_string(id), {x, y, w, 42});
+        paint_.Text(paint_.Fit(name, w - 120, 14, Weight::kSemiBold), x + 16, y + 11, 14, Weight::kSemiBold, th::kText);
+        if (selected) paint_.Text("Selected", x + w - 16, y + 11, 14, Weight::kRegular, th::kPrimary, Align::kRight);
+        if (clicked) {
+            rx_camera_picker_open_ = false;
+            if (!selected) {
+                rx_camera_choice_ = id;
+                if (receiver_) {
+                    StopReceiving();
+                    StartReceiving();
+                }
+            }
+            return;
+        }
+        y += 48;
+    }
+    if (rx_camera_page_ > 0 && ui_.Button("rx-device-prev", {x, y + 8, 100, 40}, "Previous", false)) --rx_camera_page_;
+    if (rx_camera_page_ < last_page && ui_.Button("rx-device-next", {x + w - 100, y + 8, 100, 40}, "Next", false)) ++rx_camera_page_;
 }
 
 void App::ReceiveScreen(float x0, float W, float H) {
@@ -74,7 +136,6 @@ void App::ReceiveScreen(float x0, float W, float H) {
     const float cw = std::min(W - x0 - 72, 760.0F);
     paint_.Text("Receive", L, 24, 28, Weight::kSemiBold, th::kText);
 
-    // Receiving: the camera's view, with where it's got over it.
     if (receiver_) {
         if (rx_camera_.Poll(renderer_)) {
             receiver_->Offer(rx_camera_.luma(), rx_camera_.u(), rx_camera_.v(), rx_camera_.width(), rx_camera_.height(),
@@ -86,12 +147,34 @@ void App::ReceiveScreen(float x0, float W, float H) {
             if (!rx_result_->files.empty()) received_dirty_ = true;
             return;
         }
-        const LiveStatus s = receiver_->Status();
+    }
+    const LiveStatus s = receiver_ ? receiver_->Status() : LiveStatus{};
+    const bool finishing = s.phase == LivePhase::kVerified || s.phase == LivePhase::kFailed;
+    if (!options_.no_camera && !finishing && !rx_result_ &&
+        ui_.Button("rx-camera-picker", {L + cw - 106, 20, 106, 38}, rx_camera_picker_open_ ? "Back" : "Camera", false)) {
+        rx_camera_picker_open_ = !rx_camera_picker_open_;
+        if (rx_camera_picker_open_) {
+            rx_camera_devices_ = Camera::Devices();
+            rx_camera_page_ = 0;
+        }
+    }
+    if (rx_camera_picker_open_ && !finishing) {
+        ReceiveCameraPicker(L, cw);
+        return;
+    }
+
+    // Receiving: the camera view and current tracking outline use the same fitted rectangle.
+    if (receiver_) {
         const auto diagnostics = receiver_->Diagnostics();
         const float vh = std::max(120.0F, std::min(H - (rx_diagnostics_open_ ? 430 : 210), cw * 0.62F));
         const SDL_FRect view{L, 76, cw, vh};
         paint_.RoundRect(view, 22, Hex(0x000000));
         const auto state = rx_camera_.state();
+        const auto& tracking = diagnostics.tracking;
+        const bool found = state == Camera::State::kOn && tracking && Clock::now() - tracking->offered_at <= kTrackingFreshFor &&
+            tracking->width == rx_camera_.width() && tracking->height == rx_camera_.height();
+        const bool productive = state == Camera::State::kOn && diagnostics.useful_progress_age_ms >= 0 &&
+            diagnostics.useful_progress_age_ms <= 3000;
         if (rx_camera_.preview() != nullptr) {
             const float aspect = static_cast<float>(rx_camera_.width()) / static_cast<float>(std::max(1, rx_camera_.height()));
             float w = cw;
@@ -102,8 +185,11 @@ void App::ReceiveScreen(float x0, float W, float H) {
             }
             const float k = paint_.scale();
             // Mirrored, as a camera facing you is: moving the phone left moves it left here.
-            const SDL_FRect dst{(L + (cw - w) / 2) * k, (76 + (vh - h) / 2) * k, w * k, h * k};
+            const SDL_FRect preview{view.x + (view.w - w) / 2, view.y + (view.h - h) / 2, w, h};
+            const SDL_FRect dst{preview.x * k, preview.y * k, preview.w * k, preview.h * k};
             SDL_RenderTextureRotated(renderer_, rx_camera_.preview(), nullptr, &dst, 0, nullptr, SDL_FLIP_HORIZONTAL);
+            if (found) DrawOutline(paint_, detail::MirrorCameraOutline(tracking->corners, preview),
+                                   productive ? th::kTertiary : kPatternFound);
         }
         const bool camera_problem = state == Camera::State::kNone || state == Camera::State::kDenied || state == Camera::State::kError;
         if (state != Camera::State::kOn) {
@@ -117,22 +203,20 @@ void App::ReceiveScreen(float x0, float W, float H) {
                         Weight::kRegular, th::kText, Align::kCenter);
         }
         // The status: what to do, or what's coming.
-        const bool productive = diagnostics.useful_progress_age_ms >= 0 && diagnostics.useful_progress_age_ms <= 3000;
         const std::string said = camera_problem ? "Camera needs attention"
-            : s.phase == LivePhase::kVerified ? "Verified · saving…"
+            : s.phase == LivePhase::kVerified ? "File verified · saving…"
             : s.phase == LivePhase::kFailed ? "The file did not verify"
             : s.sender_switches > 0 && s.session_id == 0 ? "Sender changed the transfer · restarting"
             : s.phase == LivePhase::kReceiving && productive ? "Receiving data"
-            : s.phase == LivePhase::kReceiving && diagnostics.useful_progress_updates > 0 ? "Transfer paused · keep the whole code steady"
-            : s.screen_in_view ? (s.hint == LiveHint::kHoldSteadier ? "Pattern found · hold steadier"
-                                  : s.hint == LiveHint::kNotReadable ? "Pattern found · adjust distance or reduce glare"
-                                  : "Pattern found · adjusting; keep the whole code in view")
-            : "Find the screen · keep the whole code in view";
+            : found ? (s.hint == LiveHint::kHoldSteadier ? "Pattern found · hold steadier"
+                        : s.hint == LiveHint::kNotReadable ? "Pattern found · adjust distance or reduce glare"
+                        : "Pattern found · keep the whole code in view")
+            : "Align the sending screen";
         const float pw = std::min(cw - 40, paint_.Measure(said, 15, Weight::kSemiBold) + 60);
         const SDL_FRect pill{L + (cw - pw) / 2, 76 + vh - 64, pw, 44};
         paint_.RoundRect(pill, 22, WithAlpha(th::kSurface, 0.92F));
         paint_.Circle(pill.x + 22, pill.y + 22, 4.5F, camera_problem ? th::kError : productive ? th::kTertiary
-                                                                   : s.screen_in_view ? Hex(0xE8B86A) : th::kTextDim);
+                                                                    : found ? kPatternFound : th::kTextDim);
         paint_.Text(paint_.Fit(said, pw - 50, 15, Weight::kSemiBold), pill.x + 36, pill.y + 12, 15, Weight::kSemiBold, th::kText);
 
         // Progress, speed and time left.
@@ -140,13 +224,16 @@ void App::ReceiveScreen(float x0, float W, float H) {
         const SDL_FRect track{L, y, cw, 8};
         paint_.RoundRect(track, 4, th::kSurfaceHigh);
         Ease& bar = ui_.Anim("rx-progress");
-        bar.To(static_cast<float>(s.progress), dt_, 0.25F);
+        const auto progress = static_cast<float>(std::clamp(s.progress, 0.0, s.phase == LivePhase::kVerified ? 1.0 : 0.99));
+        bar.value = std::min(bar.value, progress);
+        bar.To(progress, dt_, 0.25F);
         if (bar.value > 0.002F) paint_.RoundRect({L, y, std::max(8.0F, cw * bar.value), 8}, 4, th::kPrimary);
         y += 20;
-        std::string line = std::to_string(static_cast<int>(std::lround(s.progress * 100))) + "%";
-        if (s.bytes_per_second > 0) line += "  ·  " + Rate(s.bytes_per_second);
-        if (s.seconds_remaining >= 0) line += "  ·  about " + std::to_string(static_cast<int>(std::ceil(s.seconds_remaining))) + " s left";
+        std::string line = std::to_string(static_cast<int>(std::lround(progress * 100))) + "%";
+        if (productive && s.bytes_per_second > 0) line += "  ·  " + Rate(s.bytes_per_second);
+        if (productive && s.seconds_remaining >= 0) line += "  ·  about " + std::to_string(static_cast<int>(std::ceil(s.seconds_remaining))) + " s left";
         paint_.Text(paint_.Fit(line, std::max(80.0F, cw - 260), 14, Weight::kRegular), L, y, 14, Weight::kRegular, th::kTextDim);
+        if (finishing) return;
         if (camera_problem && ui_.Button("rx-camera-retry", {L + cw - 244, y - 6, 116, 42}, "Retry camera", true)) {
             StopReceiving();
             StartReceiving();
@@ -236,14 +323,14 @@ void App::ReceiveScreen(float x0, float W, float H) {
     const float top = std::max(110.0F, H / 2 - 190);
     paint_.Glow(cx, top + 70, 110, WithAlpha(th::kTertiary, 0.22F));
     // A viewfinder, its corners bracketing a beam.
-    const float s = 120;
-    const SDL_FRect box{cx - s / 2, top + 10, s, s};
+    const float side = 120;
+    const SDL_FRect box{cx - side / 2, top + 10, side, side};
     const float beam = 0.5F + 0.45F * std::sin(t_ * 1.8F);
-    paint_.Glow(cx, box.y + s * beam, s * 0.45F, WithAlpha(th::kTertiary, 0.35F));
-    paint_.RoundRect({box.x + 10, box.y + s * beam - 1, s - 20, 2.5F}, 1.2F, th::kTertiary);
+    paint_.Glow(cx, box.y + side * beam, side * 0.45F, WithAlpha(th::kTertiary, 0.35F));
+    paint_.RoundRect({box.x + 10, box.y + side * beam - 1, side - 20, 2.5F}, 1.2F, th::kTertiary);
     for (const auto& [sx, sy] : {std::pair{-1.0F, -1.0F}, std::pair{1.0F, -1.0F}, std::pair{-1.0F, 1.0F}, std::pair{1.0F, 1.0F}}) {
-        const float x = sx < 0 ? box.x : box.x + s - 26;
-        const float y = sy < 0 ? box.y : box.y + s - 26;
+        const float x = sx < 0 ? box.x : box.x + side - 26;
+        const float y = sy < 0 ? box.y : box.y + side - 26;
         paint_.RoundRect({sx < 0 ? x : x + 22, y, 4, 26}, 2, th::kText);
         paint_.RoundRect({x, sy < 0 ? y : y + 22, 26, 4}, 2, th::kText);
     }

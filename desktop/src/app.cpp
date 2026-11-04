@@ -210,6 +210,7 @@ void App::Send(std::vector<std::string> paths) {
         ImportLicense(paths.front());
         return;
     }
+    StopReceiving();  // files can also be dropped while the Receive tab is open
     // Desktop batch sending is free through every entry point: dialog, drop, CLI and Recent.
     preparing_name_ = paths.size() == 1 ? NameOf(PathOf(paths[0])) : std::to_string(paths.size()) + " files";
     transfer_.reset();
@@ -232,6 +233,8 @@ void App::SendClipboard() {
         problem_ = "The clipboard has no text to send. Copy some first.";
         return;
     }
+    StopReceiving();
+    tab_ = Tab::kSend;
     preparing_name_ = "the clipboard";
     transfer_.reset();
     phase_ = Phase::kPreparing;
@@ -255,12 +258,17 @@ void App::Event(const SDL_Event& e) {
         case SDL_EVENT_MOUSE_BUTTON_DOWN:
             Wake();
             break;
+        case SDL_EVENT_CAMERA_DEVICE_ADDED:
+        case SDL_EVENT_CAMERA_DEVICE_REMOVED:
+            if (rx_camera_picker_open_) rx_camera_devices_ = Camera::Devices();
+            break;
         case SDL_EVENT_KEY_DOWN: {
             Wake();
             if (ui_.typing()) break;  // keys are letters while a text field has them
             const bool command = (e.key.mod & (SDL_KMOD_CTRL | SDL_KMOD_GUI)) != 0;
             if (e.key.key == SDLK_ESCAPE && pair_) pair_.reset();
             else if (e.key.key == SDLK_ESCAPE && phase_ == Phase::kSending) Stop();
+            else if (e.key.key == SDLK_ESCAPE && rx_camera_picker_open_) rx_camera_picker_open_ = false;
             else if (e.key.key == SDLK_O && command && phase_ == Phase::kIdle) Choose();
             else if (e.key.key == SDLK_V && command && phase_ == Phase::kIdle) SendClipboard();
             else if (e.key.key == SDLK_1) SetSpeed(0);
@@ -471,7 +479,9 @@ void App::TakePrepared() {
 void App::Restart() {
     if (!prepared_) return;
     std::string problem;
-    transfer_ = Open(*prepared_, kSpeeds[settings_.speed], &problem, options_.diagnostic_fec_nsym);
+    auto speed = kSpeeds[settings_.speed];
+    speed.states_per_second = options_.diagnostic_state_rate.value_or(speed.states_per_second);
+    transfer_ = Open(*prepared_, speed, &problem, options_.diagnostic_fec_nsym);
     if (!transfer_) {
         problem_ = problem;
         Stop();
@@ -486,9 +496,9 @@ void App::Restart() {
     states_ = 0;
     Wake();
     const auto& e = prepared_->envelope;
-    std::printf("sending %s: %llu bytes as %zu, %s%s, FEC %zu\n", prepared_->name.c_str(),
+    std::printf("sending %s: %llu bytes as %zu, %s%s, FEC %zu, target %.2f states/s\n", prepared_->name.c_str(),
                 static_cast<unsigned long long>(e.original_size), e.bytes.size(), transfer_->speed.name,
-                presenting() ? ", presenting" : "", options_.diagnostic_fec_nsym);
+                presenting() ? ", presenting" : "", options_.diagnostic_fec_nsym, speed.states_per_second);
     std::fflush(stdout);
 }
 

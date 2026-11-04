@@ -73,6 +73,13 @@ class CaptureActivity : AppCompatActivity() {
     private var aimThread: Thread? = null
     /** Receive a file live (the Receive button) rather than record a dataset (scripts). */
     private val live: Boolean get() = intent.getBooleanExtra("live", false)
+    private var waitingForCameraSettings = false
+    private val cameraSettings = registerForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult(),
+    ) {
+        waitingForCameraSettings = false
+        if (!isFinishing && !isDestroyed) startWithCameraPermission()
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -100,17 +107,49 @@ class CaptureActivity : AppCompatActivity() {
         setTurnScreenOn(true)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA)
-            != PackageManager.PERMISSION_GRANTED
-        ) {
-            // Requested properly so the app works when driven by hand. For scripted runs the
-            // permission is pre-granted with `adb shell pm grant`, which avoids a UI tap standing
-            // between us and a measurement.
-            requestPermissions(arrayOf(Manifest.permission.CAMERA), REQ_CAMERA)
-            showReport("Waiting for camera permission…")
-            return
+        waitingForCameraSettings = savedInstanceState?.getBoolean("waitingForCameraSettings") == true
+        if (!waitingForCameraSettings) startWithCameraPermission()
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        outState.putBoolean("waitingForCameraSettings", waitingForCameraSettings)
+    }
+
+    private fun startWithCameraPermission() {
+        val permission = Manifest.permission.CAMERA
+        val history = getSharedPreferences("camera-permission", MODE_PRIVATE)
+        when {
+            ContextCompat.checkSelfPermission(this, permission) == PackageManager.PERMISSION_GRANTED -> {
+                history.edit().remove("denied").apply()
+                begin()
+            }
+            live && history.getBoolean("denied", false) &&
+                !shouldShowRequestPermissionRationale(permission) -> showCameraPermissionHelp(openSettings = true)
+            else -> {
+                showReport("Waiting for camera permission…")
+                requestPermissions(arrayOf(permission), REQ_CAMERA)
+            }
         }
-        begin()
+    }
+
+    private fun showCameraPermissionHelp(openSettings: Boolean) {
+        showReport("Allow camera access to receive a file.")
+        cameraFailurePrompt?.dismiss()
+        cameraFailurePrompt = com.google.android.material.dialog.MaterialAlertDialogBuilder(this)
+            .setTitle("Camera permission needed")
+            .setMessage("Allow camera access to read the sending screen. You can still send files without camera access.")
+            .setPositiveButton(if (openSettings) "Open Settings" else "Allow camera") { _, _ ->
+                if (openSettings) {
+                    waitingForCameraSettings = true
+                    cameraSettings.launch(android.content.Intent(
+                        android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                        android.net.Uri.fromParts("package", packageName, null),
+                    ))
+                } else startWithCameraPermission()
+            }
+            .setNegativeButton("Close") { _, _ -> finish() }
+            .show()
     }
 
     /**
@@ -376,17 +415,13 @@ class CaptureActivity : AppCompatActivity() {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         if (requestCode != REQ_CAMERA) return
         if (grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) {
-            begin()
+            startWithCameraPermission()
         } else if (live) {
-            showReport("Camera permission is needed to receive a file.")
-            cameraFailurePrompt = com.google.android.material.dialog.MaterialAlertDialogBuilder(this)
-                .setTitle("Camera permission needed")
-                .setMessage("Allow camera access to receive from the sender's screen.")
-                .setPositiveButton("Retry") { _, _ ->
-                    requestPermissions(arrayOf(Manifest.permission.CAMERA), REQ_CAMERA)
-                }
-                .setNegativeButton("Close") { _, _ -> finish() }
-                .show()
+            if (grantResults.isNotEmpty()) {
+                getSharedPreferences("camera-permission", MODE_PRIVATE).edit().putBoolean("denied", true).apply()
+            }
+            showCameraPermissionHelp(grantResults.isNotEmpty() &&
+                !shouldShowRequestPermissionRationale(Manifest.permission.CAMERA))
         } else {
             showReport("Camera permission denied — nothing can be measured without it.")
         }
@@ -1045,7 +1080,7 @@ class CaptureActivity : AppCompatActivity() {
             .setTitle(title)
             .setMessage(error)
             .setPositiveButton("Retry") { _, _ ->
-                if (!isFinishing && !isDestroyed) startLive()
+                if (!isFinishing && !isDestroyed) startWithCameraPermission()
             }
             .setNegativeButton("Close") { _, _ -> finish() }
             .setCancelable(false)
@@ -1504,7 +1539,7 @@ class CaptureActivity : AppCompatActivity() {
             cameraFailurePrompt = com.google.android.material.dialog.MaterialAlertDialogBuilder(this)
                 .setTitle("Receiving paused")
                 .setMessage("The camera stopped when you left this screen. Restart to receive the file from the beginning.")
-                .setPositiveButton("Restart receiving") { _, _ -> startLive() }
+                .setPositiveButton("Restart receiving") { _, _ -> startWithCameraPermission() }
                 .setNegativeButton("Close") { _, _ -> finish() }
                 .setCancelable(false)
                 .show()

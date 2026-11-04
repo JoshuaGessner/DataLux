@@ -76,6 +76,7 @@ class App {
         // Diagnostic only: hold one exact optical state to separate color/geometry from mixing.
         std::optional<std::uint32_t> diagnostic_frame;
         std::size_t diagnostic_fec_nsym = kFecNsym;
+        std::optional<double> diagnostic_state_rate;
     };
 
     App(SDL_Window* w, SDL_Renderer* r, Settings settings, Options options);
@@ -123,6 +124,7 @@ class App {
     void TeamDetail(float x, float W, float H, const secure::Team& team);
     void PairScreen(float W, float H);
     void ReceiveScreen(float x, float W, float H);
+    void ReceiveCameraPicker(float x, float w);
     void ReceivedScreen(float x, float W, float H);
     void StartReceiving();
     void StopReceiving();
@@ -238,6 +240,10 @@ class App {
     // Receiving.
     std::unique_ptr<Receiver> receiver_;
     Camera rx_camera_;
+    SDL_CameraID rx_camera_choice_ = 0;
+    bool rx_camera_picker_open_ = false;
+    std::size_t rx_camera_page_ = 0;
+    std::vector<Camera::Device> rx_camera_devices_;
     std::optional<ReceiveResult> rx_result_;
     bool rx_diagnostics_open_ = false;
     std::vector<SavedFile> received_;

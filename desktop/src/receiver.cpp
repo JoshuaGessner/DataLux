@@ -6,6 +6,7 @@
 
 #include <cerrno>
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <stdexcept>
 
@@ -135,6 +136,7 @@ ReceiveDiagnostics Receiver::Diagnostics() const {
 void Receiver::Run() {
     if (candidates_.empty()) throw std::runtime_error("No receiver configuration");
     detail::CameraFrame frame;
+    LiveReceiver* tracking_candidate = nullptr;
     while (frames_.Take(&frame)) {
         const auto started = std::chrono::steady_clock::now();
         const double queue_ms = std::chrono::duration<double, std::milli>(started - frame.offered_at).count();
@@ -149,8 +151,32 @@ void Receiver::Run() {
         ++decoded_;
         if (committed_ == nullptr && s.payload_frames > 0) committed_ = rx;  // the grid, proven
         const bool show = committed_ == nullptr || rx == committed_;
+        std::optional<ReceiveDiagnostics::Tracking> tracking;
+        if (show && s.screen_in_view) {
+            const auto& pipeline = rx->pipeline();  // this worker owns lane zero
+            const auto grid = pipeline.layout().geometry();
+            const double cols = grid.cols;
+            const double rows = grid.rows;
+            std::array<Point2, 4> corners{{{0, 0}, {cols, 0}, {cols, rows}, {0, rows}}};
+            for (auto& corner : corners) {
+                const auto point = pipeline.last_lens().Apply(pipeline.last_homography().Apply(corner));
+                corner = {point.x / frame.width, point.y / frame.height};
+            }
+            // Edge estimates can straddle the image by a pixel. Reject larger excursions.
+            if (std::all_of(corners.begin(), corners.end(), [](const Point2& p) {
+                    return p.x >= -0.02 && p.x <= 1.02 && p.y >= -0.02 && p.y <= 1.02;
+                })) {
+                tracking = ReceiveDiagnostics::Tracking{corners, frame.width, frame.height, frame.offered_at};
+            }
+        }
         {
             std::lock_guard g(mu_);
+            // A failed search in an alternate grid doesn't invalidate the last good candidate.
+            // The view still expires its geometry by frame age, even if no frames arrive.
+            if (tracking || committed_ != nullptr || tracking_candidate == rx) {
+                diagnostics_.tracking = tracking;
+                tracking_candidate = tracking ? rx : nullptr;
+            }
             // While searching, the furthest-along candidate speaks, so the status doesn't flicker.
             if (show && (committed_ != nullptr || static_cast<int>(s.phase) >= static_cast<int>(status_.phase))) {
                 const bool new_session = s.session_id != status_.session_id || s.sender_switches != status_.sender_switches;
