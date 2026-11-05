@@ -1,8 +1,8 @@
 # Isolated Pro purchase test setup
 
 Status: staging infrastructure and billing configured November 4, 2026; one test purchase,
-on-device Pro activation and one two-file batch passed. Fresh-device restore, refund and additional
-batch acceptance remain outstanding. The Play internal track now offers the staging-connected
+on-device Pro activation, two-file batches and a refund/revocation check passed. Fresh-device
+restore and additional batch acceptance remain outstanding. The Play internal track offers the staging-connected
 0.4.3/code 7 build. Production billing is separately configured with test receipts disabled.
 See [upload readiness](UPLOAD-READINESS.md)
 for the current Play candidate and [test cases](TESTING.md) for expected results.
@@ -47,8 +47,17 @@ flow successfully. The owner reported completing a test purchase. The billing ca
 with one purchase, and the isolated test-only backend recorded one granted, acknowledged purchase.
 The owner confirmed the phone displayed “Pro is active.” The owner then signed out on that phone,
 signed back into the same staging account and saw Pro active automatically. This confirms account
-recovery on the same phone; a fresh-device restore and Google Play restore/refund still need tests.
+recovery on the same phone; a fresh-device restore still needs testing.
 The exact reason the earlier checkout failed is not established; propagation is plausible.
+
+The owner subsequently installed code 7 from Google Play over a fresh installation and signed in to
+the same staging account; Pro appeared again without another purchase. This verifies account-based
+recovery on the same phone, not a fresh-device restore or a separate Restore purchases flow.
+Google Play then refunded the test order with entitlement removal. The staging purchase remained
+granted until its scheduled check was advanced manually; the normal six-hour recheck then verified
+the purchase with Google and marked it revoked. The owner confirmed the app showed Free after
+refreshing. This tests the reconciliation path, not staging push delivery, notification retries,
+or the complete PAY-05 matrix. Staging does not receive the production notification subscription.
 
 The owner then sent `one.txt` and `two.txt` together from desktop to the Pro staging phone. Both
 appeared on the phone. Their phone SHA-256 hashes matched the original test fixtures exactly
@@ -88,8 +97,8 @@ physical-device scenario; it does not establish purchase, restore or all account
   `0.4.3-staging`, label `DataLux Test`, with SHA-256
   `4ce35669eb8d0c0cd5202b04ed7ba2edaa2ca0e4f8dd6d6de5b10a6eca8cf329`. Its report and downloaded
   file agree on the staging origin, test key ID and established upload certificate. On November 4,
-  Google Play showed it as available to internal testers. Actual Play installation and purchase
-  acceptance on a device remain to be checked.
+  Google Play showed it as available to internal testers. The owner installed code 7 from Google
+  Play and recovered the existing staging Pro account; a new purchase from this build remains to be tested.
 - Play-distributed and debug APKs have different signing identities. Switching may require
   uninstalling the debug app, which removes app-private state; preserve anything needed first.
   Testers must join the track and separately be enrolled as Google license testers, and must see
@@ -112,8 +121,7 @@ physical-device scenario; it does not establish purchase, restore or all account
 - Google permits enrolled license testers to use a sideloaded debug-signed build with the same
   package name. Verify its exact Play account, test payment method and test-purchase notice. The
   staging APK cannot validate production-signed grants, and its staging accounts and grants must
-  not be represented as production access. The existing Play internal AAB targets production and
-  cannot validate staging-signed grants. Validate a Play-distributed production build separately.
+  not be represented as production access. Validate a Play-distributed production build separately.
 
 ## Console and live rehearsal
 
