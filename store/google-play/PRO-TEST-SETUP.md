@@ -1,7 +1,7 @@
 # Isolated Pro purchase test setup
 
-Status: staging infrastructure and billing configured November 4, 2026; public DNS propagation,
-test purchase and paid-feature acceptance remain outstanding. See [upload readiness](UPLOAD-READINESS.md)
+Status: staging infrastructure and billing configured November 4, 2026; one test purchase and
+on-device Pro activation passed. Batch, restore and refund acceptance remain outstanding. See [upload readiness](UPLOAD-READINESS.md)
 for the current Play candidate and [test cases](TESTING.md) for expected results.
 
 The NUC staging service uses `https://staging.datalux.anomalousinteractive.com`, loopback port
@@ -26,8 +26,8 @@ debug app on the owner's connected Android phone.
 The Google Cloud project `datalux-play-billing` has the Google Play Android Developer API enabled.
 The `datalux-play-purchase-verifier` service identity has DataLux-scoped Play billing permissions;
 its private key was created on the NUC, and only its public certificate was registered with Google.
-OAuth authentication succeeded and an invalid-token Publisher request returned HTTP 404; an actual
-purchase is still needed to prove the full flow. Its Google public key expires November 4, 2027.
+OAuth authentication succeeded, an invalid-token Publisher request returned HTTP 404, and a later
+test purchase was verified. Its Google public key expires November 4, 2027.
 The owner Google account is on a saved license-tester list. The `permanent` purchase option is
 active; code 5 is active on the internal test track for the owner list, unreviewed. Its Play build
 uses production origin/trust and must not replace the staging APK during the staging purchase test.
@@ -42,8 +42,9 @@ confirmed configuration or client defect. See [Google's billing error guidance](
 Later the same evening, the debug staging build queried the product and launched the Play billing
 flow successfully. The owner reported completing a test purchase. The billing callback reported OK
 with one purchase, and the isolated test-only backend recorded one granted, acknowledged purchase.
-The exact reason the earlier checkout failed is not established; test-track/product propagation is
-plausible. Confirmation of the on-device Pro screen, batch operation, restore and refund remain separate.
+The owner confirmed the phone displayed “Pro is active.” The exact reason the earlier checkout failed
+is not established; test-track/product propagation is plausible. Batch operation, restore and refund
+remain separate tests.
 
 The owner also encountered a misleading unverified screen after a restart while the phone could
 not resolve the staging hostname. Server-side aggregate checks showed the account remained verified;
@@ -54,8 +55,8 @@ physical-device scenario; it does not establish purchase, restore or all account
 
 ## Isolation and build identity
 
-- Complete the dedicated HTTPS staging origin; the distinct Docker project, network, data volume and
-  account database. Do not clone production accounts or purchase records into staging. Make the
+- Verify DNS resolution from each test network for the dedicated HTTPS staging origin. The distinct
+  Docker project, network, data volume and account database are established. Do not clone production accounts or purchase records into staging. Make the
   staging service and Caddy route identifiable and keep the production route and volume intact.
 - Generate a separate P-256 test signer and retain its private key only on the staging server.
   Record the public key ID and origin; configure the staging service to allow test purchases.
@@ -71,7 +72,7 @@ physical-device scenario; it does not establish purchase, restore or all account
 - Google permits enrolled license testers to use a sideloaded debug-signed build with the same
   package name. Verify its exact Play account, test payment method and test-purchase notice. The
   staging APK cannot validate production-signed grants, and its staging accounts and grants must
-  not be represented as production access. The existing Play draft AAB targets production and
+  not be represented as production access. The existing Play internal AAB targets production and
   cannot validate staging-signed grants. Validate a Play-distributed production build separately.
 
 ## Console and live rehearsal
