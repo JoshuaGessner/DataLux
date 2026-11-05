@@ -20,7 +20,7 @@ acknowledgement retry fix and rejects non-test receipts. This does not prevent G
 a real payment method; confirm the test notice and test payment method before any purchase.
 The debug-signed staging APK is stored at
 `build/artifacts/staging-pro-test/datalux-staging-debug.apk` (SHA-256
-`fdfcaafbd10ed3e9d1650da21a411002c630c40c8d802a6c9235bea29a31dc38`), built from the local
+`1816550edec41f8c65846c901d5873278d8b0fd16cd3a2f5358561cf204ad82b`), built from the local
 working tree with staging origin and test public key. It was installed in place over the same-signed
 debug app on the owner's connected Android phone.
 The Google Cloud project `datalux-play-billing` has the Google Play Android Developer API enabled.
@@ -42,9 +42,18 @@ confirmed configuration or client defect. See [Google's billing error guidance](
 Later the same evening, the debug staging build queried the product and launched the Play billing
 flow successfully. The owner reported completing a test purchase. The billing callback reported OK
 with one purchase, and the isolated test-only backend recorded one granted, acknowledged purchase.
-The owner confirmed the phone displayed “Pro is active.” The exact reason the earlier checkout failed
-is not established; test-track/product propagation is plausible. Batch operation, restore and refund
-remain separate tests.
+The owner confirmed the phone displayed “Pro is active.” The owner then signed out on that phone,
+signed back into the same staging account and saw Pro active automatically. This confirms account
+recovery on the same phone; a fresh-device restore and Google Play restore/refund still need tests.
+The exact reason the earlier checkout failed is not established; propagation is plausible.
+
+The owner then sent `one.txt` and `two.txt` together from desktop to the Pro staging phone. Both
+appeared on the phone. Their phone SHA-256 hashes matched the original test fixtures exactly
+(`a4daf1949fc1df68…` and `7c07e7c8d1811b8a…` respectively). This proves one two-file batch
+reached this device intact; the encryption mode was not recorded, and other batch cases remain open.
+After updating the staging APK to use Downloads/DataLux, the owner confirmed the older files
+remained visible and sent the same batch again. Both newly received files were in Downloads/DataLux,
+and their phone SHA-256 hashes matched the originals. The legacy files remain in Downloads/FileFlow.
 
 The owner also encountered a misleading unverified screen after a restart while the phone could
 not resolve the staging hostname. Server-side aggregate checks showed the account remained verified;

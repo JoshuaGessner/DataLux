@@ -596,7 +596,7 @@ class MainActivity : AppCompatActivity() {
         override fun handleOnBackPressed() = clearSelection()
     }
 
-    /** Files this app saved to Downloads/FileFlow, newest first. */
+    /** Current and legacy received files, newest first. */
     private fun refreshReceived() {
         val list = receivedList ?: return
         list.removeAllViews()
@@ -609,8 +609,8 @@ class MainActivity : AppCompatActivity() {
                 arrayOf(MediaStore.MediaColumns._ID, MediaStore.MediaColumns.DISPLAY_NAME,
                         MediaStore.MediaColumns.SIZE, MediaStore.MediaColumns.MIME_TYPE,
                         MediaStore.MediaColumns.DATE_ADDED),
-                "${MediaStore.MediaColumns.RELATIVE_PATH} LIKE ?",
-                arrayOf("%/${LiveDecoder.DOWNLOADS_SUBDIR}/%"),
+                "(${MediaStore.MediaColumns.RELATIVE_PATH} LIKE ? OR ${MediaStore.MediaColumns.RELATIVE_PATH} LIKE ?)",
+                arrayOf("%/${LiveDecoder.DOWNLOADS_SUBDIR}/%", "%/${LiveDecoder.LEGACY_DOWNLOADS_SUBDIR}/%"),
                 "${MediaStore.MediaColumns.DATE_ADDED} DESC",
             )?.use { c ->
                 while (c.moveToNext() && items.size < MAX_LISTED) {
@@ -662,8 +662,8 @@ class MainActivity : AppCompatActivity() {
             list.addView(card, matchWidth(dp(8)))
         }
         if (items.size == MAX_LISTED) {
-            list.addView(centred(text("Showing the newest $MAX_LISTED. The rest are in your Files app, " +
-                "in Downloads › ${LiveDecoder.DOWNLOADS_SUBDIR}.", 13f)).apply { setPadding(0, dp(12), 0, 0) },
+            list.addView(centred(text("Showing the newest $MAX_LISTED. The rest are in your Files app under Downloads.", 13f))
+                .apply { setPadding(0, dp(12), 0, 0) },
                 matchWidth())
         }
         list.addView(centred(text("Press and hold for file actions. Pro adds selecting, sharing, resending and deleting several at once.", 13f))
@@ -713,7 +713,7 @@ class MainActivity : AppCompatActivity() {
         if (uris.isEmpty()) return
         com.google.android.material.dialog.MaterialAlertDialogBuilder(this)
             .setTitle(if (uris.size == 1) "Delete this file?" else "Delete ${uris.size} files?")
-            .setMessage("They will be removed from Downloads › ${LiveDecoder.DOWNLOADS_SUBDIR}.")
+            .setMessage("The selected files will be removed from Downloads.")
             .setNegativeButton("Cancel", null)
             .setPositiveButton("Delete") { _, _ ->
                 if (!Entitlements.check(this, Entitlements.Feature.BulkManage)) return@setPositiveButton
@@ -1054,7 +1054,7 @@ class MainActivity : AppCompatActivity() {
                 "camera reads it.\n\n" +
                 "Nothing goes over Wi-Fi, Bluetooth, NFC or a cable. Every file is checked " +
                 "(SHA-256) before it is saved, so a received file is exactly the one sent.\n\n" +
-                "Received files go to Downloads › FileFlow."
+                "Received files go to Downloads › ${LiveDecoder.DOWNLOADS_SUBDIR}."
 
         private const val RECEIVE_HELP =
             "• Fill the picture with the sending screen: its pattern just inside the corner " +

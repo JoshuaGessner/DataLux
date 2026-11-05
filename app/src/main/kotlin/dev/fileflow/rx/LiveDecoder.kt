@@ -458,7 +458,7 @@ class LiveDecoder(
     }
 
     /**
-     * Write the VERIFIED file to Downloads/FileFlow (or, failing that, the app's own "received"
+     * Write the VERIFIED file to Downloads/DataLux (or, failing that, the app's own "received"
      * folder) and say where, or null if there is no verified file. Call once [finished].
      *
      * Never visible half-written, either way: pending in MediaStore until complete, or a temporary
@@ -509,7 +509,7 @@ class LiveDecoder(
                            compressMs = opened.compressMs, decompressMs = opened.decompressMs)
     }
 
-    /** One file into Downloads/FileFlow, or the app's own folder failing that; null if neither. */
+    /** One file into Downloads/DataLux, or the app's own folder failing that; null if neither. */
     private fun saveOne(context: Context, name: String, bytes: ByteArray): SavedFile? {
         val safe = name.replace(Regex("[/\\\\\\u0000-\\u001f]"), "_")
             .trimStart('.').ifBlank { "received.bin" }
@@ -544,7 +544,7 @@ class LiveDecoder(
     }
 
     /**
-     * Into the public Downloads/FileFlow folder, through MediaStore.
+     * Into the public Downloads/DataLux folder, through MediaStore.
      *
      * The app-private folder it used to go to is under `Android/data`, which the Files app hides on
      * current Android -- so a file that had been received and verified could not then be found by
@@ -633,7 +633,9 @@ class LiveDecoder(
 
     companion object {
         const val RECEIVED_DIR = "received"
-        const val DOWNLOADS_SUBDIR = "FileFlow"
+        const val DOWNLOADS_SUBDIR = "DataLux"
+        // Keep older received files discoverable without moving or rewriting user data.
+        const val LEGACY_DOWNLOADS_SUBDIR = "FileFlow"
         private const val TAG = "FileFlow.Live"
         private const val TELEMETRY_EVERY = 60L
         private const val MAX_LANES = 8  // LiveReceiver::kMaxLanes
