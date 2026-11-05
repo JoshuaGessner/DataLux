@@ -13,6 +13,8 @@ installation and does not inherit private state from historical `dev.fileflow` b
 
 ## Current evidence
 
+On November 4, the owner-approved [0.4.2/code 6 build](https://github.com/JoshuaGessner/DataLux/actions/runs/41963741276) succeeded from `fa0c1f7`. The downloaded bundle SHA-256 was `54fb5cdf924b746f090c7a39ce0a3fdaa74afde1a1b52e97b955cf8b861bdf74`, matching its verification report. Google Play shows this version available on the internal tester track. It uses the production origin and signer; production billing is not configured and staging accounts and grants are separate. The code 5 entries below are historical.
+
 | Item | Recorded state |
 | --- | --- |
 | Developer account | Verified Personal account; owner reports the DataLux app entry is created |

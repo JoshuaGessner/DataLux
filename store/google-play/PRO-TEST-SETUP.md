@@ -1,7 +1,9 @@
 # Isolated Pro purchase test setup
 
-Status: staging infrastructure and billing configured November 4, 2026; one test purchase and
-on-device Pro activation passed. Batch, restore and refund acceptance remain outstanding. See [upload readiness](UPLOAD-READINESS.md)
+Status: staging infrastructure and billing configured November 4, 2026; one test purchase,
+on-device Pro activation and one two-file batch passed. Fresh-device restore, refund and additional
+batch acceptance remain outstanding. The production-origin Play internal track was updated to
+0.4.2/code 6 after these staging tests; production billing is not configured. See [upload readiness](UPLOAD-READINESS.md)
 for the current Play candidate and [test cases](TESTING.md) for expected results.
 
 The NUC staging service uses `https://staging.datalux.anomalousinteractive.com`, loopback port
@@ -29,7 +31,7 @@ its private key was created on the NUC, and only its public certificate was regi
 OAuth authentication succeeded, an invalid-token Publisher request returned HTTP 404, and a later
 test purchase was verified. Its Google public key expires November 4, 2027.
 The owner Google account is on a saved license-tester list. The `permanent` purchase option is
-active; code 5 is active on the internal test track for the owner list, unreviewed. Its Play build
+active; code 5 was active on the internal test track for the owner list at the time, unreviewed. Its Play build
 uses production origin/trust and must not replace the staging APK during the staging purchase test.
 
 On November 4, the owner verified a staging account and opted into the internal track. Google Play
