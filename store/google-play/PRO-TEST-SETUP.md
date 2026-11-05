@@ -41,8 +41,10 @@ confirmed configuration or client defect. See [Google's billing error guidance](
 
 The owner also encountered a misleading unverified screen after a restart while the phone could
 not resolve the staging hostname. Server-side aggregate checks showed the account remained verified;
-switching to cellular restored verified status. The updated staging APK distinguishes unknown or
-failed checks from an unverified email. Physical verification of that update remains pending.
+switching to cellular restored verified status. On the updated staging APK, the owner confirmed
+the account displayed “Email verified” online, “Account status unavailable” in Airplane mode,
+and recovered the verified display when connectivity returned. This validates that specific
+physical-device scenario; it does not establish purchase, restore or all account edge cases.
 
 ## Isolation and build identity
 
