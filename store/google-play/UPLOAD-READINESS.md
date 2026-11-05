@@ -1,6 +1,6 @@
 # DataLux Play upload readiness
 
-> **Status:** Internal release and Pro purchase option saved as drafts; testing not yet available
+> **Status:** Internal release is a draft; Pro purchase option is active for testing
 > **Owner:** Release engineering
 > **Last reviewed:** 2026-11-04
 > **Related:** [Product policy](../../PRODUCT.md), [US listing materials](en-US/README.md), [Data Safety draft](DATA-SAFETY.md)
@@ -25,7 +25,7 @@ installation and does not inherit private state from historical `dev.fileflow` b
 | License trust | On November 4, production config had no billing signer and the purchase table was empty. A new P-256 signer was created privately on the NUC; matching public/private key ID `4b72019e9420f53f` was verified and its public key set in `play-internal`. The private key remains on the NUC. An encrypted off-device recovery backup remains outstanding; do not rotate or lose this key after distributing builds |
 | Server access | NUC was inspected November 4; live service was healthy on `v0.3.5-preview.5`. A new verified account snapshot was restored to a separate temporary volume and checked at schema 4. The temporary volume was removed. The snapshot does not include the separate license signer; off-device recovery and retention remain outstanding |
 | Play-managed signing | Console shows the app-signing key in use. It is separate from the locally created upload key |
-| Payments and testers | The app is Free. Google Play saved `fileflow_pro` / `permanent` as a draft buy option, United States only, at $9.99. The option is not active; the internal track remains a draft and the closed-test dashboard showed 0 testers |
+| Payments and testers | The app is Free. Google Play shows `fileflow_pro` / `permanent` active, United States only, at $9.99. The internal track remains a draft and the closed-test dashboard showed 0 testers. The owner's Google account is configured as a license tester |
 | Content rating | IARC completed October 29; North America ESRB Teen, Users Interact and In-App Purchases. [Answer record](CONTENT-RATING.md) explains the actual file-sharing behavior; Google app review/release remain pending |
 | Remaining Console declarations | Sign-in/reviewer access, target audience and Data Safety remain incomplete. Dashboard shows 8 of 11 setup tasks complete. Audience is blocked until legitimate reviewer access exists; do not submit placeholder credentials. Nothing sent for Google app review |
 | Artwork and listing | US text, icon, feature graphic and four genuine 1080 × 1920 phone screenshots saved; Console says Ready to send for review. AI labels applied to prepared icon/feature artwork, not direct screenshots. No Google app-review submission or publication |
@@ -36,8 +36,8 @@ installation and does not inherit private state from historical `dev.fileflow` b
 ## Product setup after the first upload
 
 The payments-profile step is complete. The signed billing-enabled bundle is uploaded to an
-internal draft and the product and purchase option below are saved as a draft. Recheck the live
-Console state and finish the isolated test setup before activating the option:
+internal draft and the purchase option below is active. Recheck the live Console state and finish
+the isolated test setup before asking anyone to make a test purchase:
 
 - Product ID: `fileflow_pro` (retained permanent identifier; do not rename it).
 - Default title: **DataLux Pro**.

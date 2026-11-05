@@ -1,6 +1,6 @@
 # Isolated Pro purchase test setup
 
-Status: staging infrastructure started November 4, 2026; Caddy/TLS, Google credentials, billing,
+Status: staging infrastructure and billing configured November 4, 2026; public DNS propagation,
 test purchase and paid-feature acceptance remain outstanding. See [upload readiness](UPLOAD-READINESS.md)
 for the current Play candidate and [test cases](TESTING.md) for expected results.
 
@@ -9,17 +9,27 @@ The NUC staging service uses `https://staging.datalux.anomalousinteractive.com`,
 gateway `172.30.93.1`) and separate `datalux-staging-data` volume. Health and readiness passed
 locally. Its test signer is private under the NUC's DataLux staging secrets directory; its public
 SPKI SHA-256 begins `d1ed41f71b4b4156`, distinct from the production signer. It mounts the existing
-SMTP configuration read-only; no test email was sent. Billing is disabled.
+SMTP configuration read-only. Staging alone allows only test receipts and has
+the test signer and Publisher credentials mounted read-only. The non-secret compose environment
+is at `~/.local/share/datalux/staging/compose.env`; it contains private file paths, not key bytes.
 
-The staging image is `datalux-staging:39b8f46`, built on the NUC from web revision
-`39b8f469a01a80462d5023663369c7dff494074c`. Its health endpoint reported that revision and
-schema 4. It includes the acknowledgement retry fix. The debug-signed staging APK is stored at
+The staging image is `datalux-staging:6bad4cd`, built on the NUC from web revision
+`6bad4cd55abc824cd65340b4829605fac3e337b6`. Its health endpoint reported that revision and
+schema 4, both locally and through Caddy with a valid TLS certificate. It includes the
+acknowledgement retry fix and rejects non-test receipts. This does not prevent Google from charging
+a real payment method; confirm the test notice and test payment method before any purchase.
+The debug-signed staging APK is stored at
 `build/artifacts/staging-pro-test/datalux-staging-debug.apk` (SHA-256
 `babd238318ceeb36941d318b00d17fbffce66b6091668167888de8c95230192b`), built from the local
-working tree with staging origin and test public key. It has not been installed or purchase-tested.
-The Google Cloud project `datalux-play-billing` has been created and the Google Play Android
-Developer API is enabled. The `datalux-play-purchase-verifier` service identity was created;
-service-account credentials and Play Console permissions are pending.
+working tree with staging origin and test public key. It was installed in place over the same-signed
+debug app on the owner's connected Android phone; no purchase has been tested.
+The Google Cloud project `datalux-play-billing` has the Google Play Android Developer API enabled.
+The `datalux-play-purchase-verifier` service identity has DataLux-scoped Play billing permissions;
+its private key was created on the NUC, and only its public certificate was registered with Google.
+OAuth authentication succeeded and an invalid-token Publisher request returned HTTP 404; an actual
+purchase is still needed to prove the full flow. Its Google public key expires November 4, 2027.
+The owner Google account is on a saved license-tester list. The `permanent` purchase option is
+active; the app and internal test release remain drafts, with no general tester rollout.
 
 ## Isolation and build identity
 
@@ -46,8 +56,7 @@ service-account credentials and Play Console permissions are pending.
 ## Console and live rehearsal
 
 1. Add consenting participants' Google Play accounts to the account-level license testers list;
-   test-track membership is separate. Activate the existing draft buy option only when staging,
-   verification and the intended test access are ready. An active option and a published app
+   test-track membership is separate. The buy option is active. An active option and a published app
    release are separate controls; confirm the actual Console state before distributing anything.
 2. Verify a disposable staging DataLux account and use Google's approved test payment method.
    Stop if the sheet does not explicitly show a test purchase. Do not ask testers to use real cards.
