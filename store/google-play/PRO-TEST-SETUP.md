@@ -2,9 +2,9 @@
 
 Status: staging infrastructure and billing configured November 4, 2026; one test purchase,
 on-device Pro activation and one two-file batch passed. Fresh-device restore, refund and additional
-batch acceptance remain outstanding. The production-origin Play internal track was updated to
-0.4.2/code 6 after these staging tests. Production billing was subsequently configured with test
-receipts disabled; the Play build still cannot use staging accounts or grants. See [upload readiness](UPLOAD-READINESS.md)
+batch acceptance remain outstanding. The Play internal track now offers the staging-connected
+0.4.3/code 7 build. Production billing is separately configured with test receipts disabled.
+See [upload readiness](UPLOAD-READINESS.md)
 for the current Play candidate and [test cases](TESTING.md) for expected results.
 
 The NUC staging service uses `https://staging.datalux.anomalousinteractive.com`, loopback port
@@ -81,14 +81,15 @@ physical-device scenario; it does not establish purchase, restore or all account
   staging license public key and a fixed staging origin. Its app label is **DataLux Test** and
   its version name ends in `-staging`. It produces an artifact for review; it does not upload or
   publish. Never promote a staging bundle to production. A later production build must use a higher
-  version code, the production origin and the production license key. The current internal build
-  remains production-connected until the staging artifact is actually uploaded and rolled out.
+  version code, the production origin and the production license key. The internal track now uses
+  the staging build; the previous 0.4.2 internal build used production.
 - Owner-reviewed staging build [run 41969264446](https://github.com/JoshuaGessner/DataLux/actions/runs/41969264446)
   succeeded from `592335176772669e6140dc65cd95bf6e191101d6`. The signed bundle is version code 7,
   `0.4.3-staging`, label `DataLux Test`, with SHA-256
   `4ce35669eb8d0c0cd5202b04ed7ba2edaa2ca0e4f8dd6d6de5b10a6eca8cf329`. Its report and downloaded
-  file agree on the staging origin, test key ID and established upload certificate. Google Play
-  accepted it as an internal release draft; rollout confirmation is pending.
+  file agree on the staging origin, test key ID and established upload certificate. On November 4,
+  Google Play showed it as available to internal testers. Actual Play installation and purchase
+  acceptance on a device remain to be checked.
 - Play-distributed and debug APKs have different signing identities. Switching may require
   uninstalling the debug app, which removes app-private state; preserve anything needed first.
   Testers must join the track and separately be enrolled as Google license testers, and must see
