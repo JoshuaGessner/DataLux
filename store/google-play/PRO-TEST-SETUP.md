@@ -32,6 +32,13 @@ The owner Google account is on a saved license-tester list. The `permanent` purc
 active; code 5 is active on the internal test track for the owner list, unreviewed. Its Play build
 uses production origin/trust and must not replace the staging APK during the staging purchase test.
 
+On November 4, the owner verified a staging account and opted into the internal track. Google Play
+then displayed “The item you were attempting to purchase could not be found.” No purchase or Pro
+grant was confirmed. The phone has only the owner Google account. The US-only buy option is active;
+the production track's country controls were inaccessible because production access is not yet
+granted. Retry after propagation with freshly queried product details before treating this as a
+confirmed configuration or client defect. See [Google's billing error guidance](https://developer.android.com/google/play/billing/errors).
+
 ## Isolation and build identity
 
 - Complete the dedicated HTTPS staging origin; the distinct Docker project, network, data volume and
