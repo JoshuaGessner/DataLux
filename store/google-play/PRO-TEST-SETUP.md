@@ -20,9 +20,9 @@ acknowledgement retry fix and rejects non-test receipts. This does not prevent G
 a real payment method; confirm the test notice and test payment method before any purchase.
 The debug-signed staging APK is stored at
 `build/artifacts/staging-pro-test/datalux-staging-debug.apk` (SHA-256
-`c40d73b492a3352d9de85f1b14144678127a5ad23275e8a1e8982e017dba4cca`), built from the local
+`fdfcaafbd10ed3e9d1650da21a411002c630c40c8d802a6c9235bea29a31dc38`), built from the local
 working tree with staging origin and test public key. It was installed in place over the same-signed
-debug app on the owner's connected Android phone; no purchase has been tested.
+debug app on the owner's connected Android phone.
 The Google Cloud project `datalux-play-billing` has the Google Play Android Developer API enabled.
 The `datalux-play-purchase-verifier` service identity has DataLux-scoped Play billing permissions;
 its private key was created on the NUC, and only its public certificate was registered with Google.
@@ -34,10 +34,16 @@ uses production origin/trust and must not replace the staging APK during the sta
 
 On November 4, the owner verified a staging account and opted into the internal track. Google Play
 then displayed “The item you were attempting to purchase could not be found.” No purchase or Pro
-grant was confirmed. The phone has only the owner Google account. The US-only buy option is active;
+grant was confirmed at that time. The phone has only the owner Google account. The US-only buy option is active;
 the production track's country controls were inaccessible because production access is not yet
 granted. Retry after propagation with freshly queried product details before treating this as a
 confirmed configuration or client defect. See [Google's billing error guidance](https://developer.android.com/google/play/billing/errors).
+
+Later the same evening, the debug staging build queried the product and launched the Play billing
+flow successfully. The owner reported completing a test purchase. The billing callback reported OK
+with one purchase, and the isolated test-only backend recorded one granted, acknowledged purchase.
+The exact reason the earlier checkout failed is not established; test-track/product propagation is
+plausible. Confirmation of the on-device Pro screen, batch operation, restore and refund remain separate.
 
 The owner also encountered a misleading unverified screen after a restart while the phone could
 not resolve the staging hostname. Server-side aggregate checks showed the account remained verified;

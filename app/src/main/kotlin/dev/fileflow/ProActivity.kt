@@ -6,6 +6,7 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.text.InputType
+import android.util.Log
 import android.view.View
 import android.widget.Button
 import android.widget.EditText
@@ -52,6 +53,11 @@ internal fun loginSavedSessionBeforeFailure(previous: ProSession?, current: ProS
 
 /** Optional account and Play purchase screen. No file or camera data is read here. */
 class ProActivity : AppCompatActivity() {
+    // Debug builds log only response codes and availability flags, never account data or tokens.
+    private fun billingDiagnostic(message: String) {
+        if (BuildConfig.DEBUG) Log.i("DataLuxBilling", message)
+    }
+
     private val worker = Executors.newSingleThreadExecutor()
     private lateinit var body: LinearLayout
     private var busy = false
@@ -381,6 +387,7 @@ class ProActivity : AppCompatActivity() {
         billingAccountId = accountId
         billing = BillingClient.newBuilder(this)
             .setListener { result, purchases ->
+                billingDiagnostic("purchase_callback code=${result.responseCode} count=${purchases?.size ?: 0}")
                 runOnUiThread {
                     if (ProAccount.session?.userId != accountId) {
                         showNotice("Sign in to the DataLux account used to buy Pro, then restore purchases.")
@@ -418,6 +425,7 @@ class ProActivity : AppCompatActivity() {
                 if (isDestroyed || billing !== client || ProAccount.session?.userId != accountId) return@runOnUiThread
                 product = if (result.responseCode == BillingClient.BillingResponseCode.OK)
                     details.productDetailsList.singleOrNull { it.productId == productId } else null
+                billingDiagnostic("product_query code=${result.responseCode} matched=${product != null} permanent_offer=${permanentOffer(product) != null} offer_token_present=${permanentOffer(product)?.offerToken != null}")
                 if (permanentOffer(product) == null)
                     notice = "Google Play hasn’t made a permanent Pro purchase available for this account yet. Try restoring an existing purchase."
                 render()
@@ -446,6 +454,7 @@ class ProActivity : AppCompatActivity() {
             .setProductDetailsParamsList(listOf(item.build()))
             .build()
         val result = client.launchBillingFlow(this, params)
+        billingDiagnostic("launch_billing code=${result.responseCode}")
         if (result.responseCode == BillingClient.BillingResponseCode.ITEM_ALREADY_OWNED) restore()
         else if (result.responseCode != BillingClient.BillingResponseCode.OK)
             showNotice("Google Play could not open the purchase screen. Please try again.")
