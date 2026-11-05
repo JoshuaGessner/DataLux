@@ -243,12 +243,9 @@ class PairActivity : AppCompatActivity() {
         }
         val k = flow.key
         if (k != null && code.visibility != View.VISIBLE) {
-            // A pairing made to pass on a team is not the phone's pairing: that is left as it was.
-            if (!forTeam) PairingStore.set(k)
             code.text = k.code
             code.visibility = View.VISIBLE
-            done.visibility = View.VISIBLE
-            dev.fileflow.ui.Motion.staggerIn(listOf(code, done), risePx = dp(16).toFloat())
+            dev.fileflow.ui.Motion.staggerIn(listOf(code), risePx = dp(16).toFloat())
             buzz()
         }
         if (flow.foreignInvite && !saidForeign && flow.stage != PairingFlow.Stage.Done) {
@@ -289,12 +286,17 @@ class PairActivity : AppCompatActivity() {
                 SessionLog.i(TAG, "joined ${joined.name}, ${joined.members.size} members")
                 "Joined ${joined.name}. Hold a moment longer so the leader's phone sees it."
             }
-            else -> "Paired. Check both phones show the same code."
+            else -> {
+                // Do not store a partial handshake as an established pairing.
+                flow.key?.let { PairingStore.set(it) }
+                done.visibility = View.VISIBLE
+                "Paired. Keep both screens open until the other device also says paired. Check the codes match, then tap Done."
+            }
         }
         buzz()
         // A moment longer on screen, so the other phone sees this code's acknowledgement too --
         // longest for a new member, whose acknowledgement is how the leader learns their name.
-        qr.postDelayed({ complete() }, if (joined != null) AUTO_CLOSE_MS * 3 else AUTO_CLOSE_MS)
+        if (forTeam) qr.postDelayed({ complete() }, if (joined != null) AUTO_CLOSE_MS * 3 else AUTO_CLOSE_MS)
         return message
     }
 
@@ -304,7 +306,7 @@ class PairActivity : AppCompatActivity() {
 
     private fun complete() {
         if (finishing) return
-        if (!forTeam && PairingStore.current() == null) return
+        if (flow.stage != PairingFlow.Stage.Done || (!forTeam && PairingStore.current() == null)) return
         finishing = true
         if (!forTeam || flow.stage == PairingFlow.Stage.Done) setResult(RESULT_OK)
         finish()

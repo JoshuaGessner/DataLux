@@ -1,15 +1,27 @@
 # NUC work to resume before paid Play testing
 
-> **Status:** Inspection resumed November 4; billing and off-device backups remain pending
+> **Status:** Production billing configured; purchase acceptance and off-device backups remain pending
 > **Owner:** Accounts / release engineering
 > **Last reviewed:** 2026-10-29
 > **Related:** [Upload readiness](UPLOAD-READINESS.md), [Data Safety](DATA-SAFETY.md)
 
-On November 4 the live config had no billing settings or license signer, and the purchase table
+Initially on November 4 the live config had no billing settings or license signer, and the purchase table
 contained zero purchases. A new P-256 signer was created under the private DataLux secrets directory;
 its public/private key ID `4b72019e9420f53f` matched and its public key was configured in the
-GitHub `play-internal` environment. Production billing is still not configured. Preserve this signer;
+GitHub `play-internal` environment. Production billing was later configured as recorded below. Preserve this signer;
 an encrypted off-device backup of it and the separate Play upload key remains outstanding.
+
+Later November 4, production ran approved web `v0.3.5-preview.6` (`304ddef`), with the matching
+production signer and Play verifier mounted read-only. Test receipts remain disabled. The server was
+healthy and publicly ready, and an invalid purchase was rejected via the Publisher API. A fresh
+account snapshot restored to a separate volume and passed schema 4/integrity checks; its temporary
+volume was removed. The owner authorized a dedicated keyless push identity and topic-scoped Google
+Play Publisher permission. The Pub/Sub subscription uses authenticated push, a fixed audience, retries,
+and no expiration; Play Console saved one-time and voided notifications and reported a test sent.
+Pub/Sub metrics showed a push acknowledgement at the test time, supporting successful delivery of
+the test message to the configured endpoint. An unauthenticated request received HTTP 401. An actual
+refund/revocation has not been tested. The service also polls for purchase changes. Off-device signer
+and upload-key backups remain outstanding.
 
 The managed backup command created a verified account snapshot at
 `/home/josh/.local/share/datalux/backups/20261105T015751Z-2b476e`. It restored successfully to

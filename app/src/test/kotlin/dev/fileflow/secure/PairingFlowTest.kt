@@ -34,6 +34,21 @@ class PairingFlowTest {
         }
     }
 
+    @Test fun completedPeerKeepsItsAcknowledgementForASlowCamera() {
+        val desktop = PairingFlow(PairingFlow.Mode.Pair)
+        val phone = PairingFlow(PairingFlow.Mode.Pair)
+        desktop.read(phone.qr)
+        phone.read(desktop.qr)
+        assertEquals(PairingFlow.Stage.Done, phone.stage)
+        assertEquals(PairingFlow.Stage.GotKey, desktop.stage)
+        val acknowledgement = phone.qr
+        repeat(100) { phone.read(desktop.qr) }
+        assertEquals(acknowledgement, phone.qr)
+        desktop.read(phone.qr)
+        assertEquals(PairingFlow.Stage.Done, desktop.stage)
+        assertArrayEquals(phone.key!!.secret.encoded, desktop.key!!.secret.encoded)
+    }
+
     @Test fun aTeamChangesHandsInAnyOrder() {
         repeat(200) { seed ->
             val team = Team.create("Test crew", myName = "Josh")

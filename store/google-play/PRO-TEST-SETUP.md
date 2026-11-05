@@ -3,7 +3,8 @@
 Status: staging infrastructure and billing configured November 4, 2026; one test purchase,
 on-device Pro activation and one two-file batch passed. Fresh-device restore, refund and additional
 batch acceptance remain outstanding. The production-origin Play internal track was updated to
-0.4.2/code 6 after these staging tests; production billing is not configured. See [upload readiness](UPLOAD-READINESS.md)
+0.4.2/code 6 after these staging tests. Production billing was subsequently configured with test
+receipts disabled; the Play build still cannot use staging accounts or grants. See [upload readiness](UPLOAD-READINESS.md)
 for the current Play candidate and [test cases](TESTING.md) for expected results.
 
 The NUC staging service uses `https://staging.datalux.anomalousinteractive.com`, loopback port
@@ -56,6 +57,12 @@ reached this device intact; the encryption mode was not recorded, and other batc
 After updating the staging APK to use Downloads/DataLux, the owner confirmed the older files
 remained visible and sent the same batch again. Both newly received files were in Downloads/DataLux,
 and their phone SHA-256 hashes matched the originals. The legacy files remain in Downloads/FileFlow.
+
+On November 4, the owner also paired the desktop with the staging phone, enabled encrypted mode,
+and sent `encrypted-one.txt` and `encrypted-two.txt` together. Both arrived and the phone's file
+hashes matched the originals above. This is one encrypted desktop-to-Pro-phone batch, not a broad
+camera or device compatibility result. An initial pairing attempt stalled on desktop after Android
+closed its confirmation quickly; a later attempt succeeded. A pairing-screen fix is being tested.
 
 The owner also encountered a misleading unverified screen after a restart while the phone could
 not resolve the staging hostname. Server-side aggregate checks showed the account remained verified;

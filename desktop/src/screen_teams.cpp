@@ -106,7 +106,7 @@ void App::PairFinished() {
         settings_.encrypted = true;
         settings_.seal_to.clear();
         settings_.Save();
-        pair_->outcome = "Paired. Check both screens show the same code.";
+        pair_->outcome = "Paired. Check both codes match, then select Done.";
     } else if (pair_->mode == Mode::kJoin && f.joined()) {
         teams_.Add(*f.joined());
         pair_->outcome = "Joined " + f.joined()->name + ".";
@@ -386,7 +386,7 @@ void App::PairScreen(float W, float H) {
             if (f.Read(*text) && f.stage() == Stage::kDone) PairFinished();
         }
     }
-    if (p.done_at && now - *p.done_at > std::chrono::milliseconds(p.mode == Mode::kJoin ? 5000 : 2500)) {
+    if (p.mode != Mode::kPair && p.done_at && now - *p.done_at > std::chrono::milliseconds(p.mode == Mode::kJoin ? 5000 : 2500)) {
         pair_.reset();
         return;
     }
