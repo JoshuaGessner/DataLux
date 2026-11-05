@@ -1095,7 +1095,7 @@ class CaptureActivity : AppCompatActivity() {
         batchPrompt = com.google.android.material.dialog.MaterialAlertDialogBuilder(this)
             .setTitle("Receiving a batch needs Pro")
             .setMessage("The sender indicates several files. Pro is needed on this receiving phone, " +
-                "even when the sending computer is free. The US launch price is $10 one time; Google Play " +
+                "even when the sending computer is free. The US launch price is $9.99 one time; Google Play " +
                 "shows the final price. You can restore an existing purchase, or ask the sender to send " +
                 "one file at a time for free.")
             .setPositiveButton("View Pro / restore") { _, _ ->

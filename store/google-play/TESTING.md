@@ -5,11 +5,15 @@
 > **Last reviewed:** 2026-10-29
 > **Related:** [Product policy](../../PRODUCT.md), [upload readiness](UPLOAD-READINESS.md), [deferred NUC work](NUC-HANDOFF.md)
 
+For invitations and everyday testing use the draft [tester quick start](TESTER-QUICK-START.md).
+For building and delivering successive Play releases, use the [coordinator runbook](PLAY-TEST-UPDATES.md).
+
 The candidate is **0.4.1 / version code 5**, package **`dev.datalux`**, Pro product
 **`fileflow_pro`**. Recheck the uploaded version before testing. A debug install, CI pass or
 static alignment report does not establish Play billing, optical transfer or device acceptance.
-The release AAB still requires the verified production license public key. NUC deployment,
-private signer inspection and server acceptance remain deferred until the owner is home.
+The signed release AAB was uploaded to an internal draft with the production account origin and
+license public key. The internal track is not rolled out. The Pro option is saved as a draft;
+server billing and real purchase/restore acceptance remain incomplete.
 
 ## Test groups and sequence
 
@@ -20,9 +24,13 @@ private signer inspection and server acceptance remain deferred until the owner 
 2. Add billing participants separately as **license testers**. Track membership alone does not
    prevent real charges. Check the purchasing Google account and the explicit test-payment notice
    on Google's checkout sheet; stop if it is absent. Use approved test methods only.
-3. Test billing against the isolated staging setup described in the NUC handoff. Record its origin
-   and trust-key ID privately. Production must reject test receipts; never enable a production
-   test-purchase bypass or substitute a disposable signer for the production trust anchor.
+3. Test billing against the isolated staging setup described in the NUC handoff. The uploaded
+   production-origin AAB cannot use staging licenses: prepare a separately identified build
+   configured with the staging origin and public key. A same-package sideloaded debug-signed build
+   can exercise license-test billing with an enrolled Google account; separately validate the
+   eventual Play-distributed production build. Record origin, build and trust-key ID privately.
+   Production must reject test receipts; never enable a production test-purchase bypass or
+   substitute a disposable signer for the production trust anchor.
 4. After app setup and initial acceptance, start the qualifying **closed test**. The Personal
    account needs at least **12 testers continuously opted in for 14 days** before applying for
    production access. Internal testing does not count. A tester moving from internal to closed

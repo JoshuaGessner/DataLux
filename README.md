@@ -20,7 +20,7 @@ The desktop app includes **every feature for free**, including batch sending, te
 controls. Android Free sends and receives one file at a time at full available speed, with
 compression, encryption, pairing and teams. Individual file actions remain free.
 
-**Android Pro is a planned $10 USD one-time US launch upgrade** for batch sending **and receiving**
+**Android Pro is a planned $9.99 USD one-time US launch upgrade** for batch sending **and receiving**
 and bulk share/resend/delete actions. A receiving phone needs its own restored account entitlement
 for a batch, including one sent by the free desktop. It offers upgrade/restore on that phone; the
 sender can always send one file at a time for free. Google Play supplies the final checkout price.

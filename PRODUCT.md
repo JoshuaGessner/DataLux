@@ -14,7 +14,7 @@ desktop features. Google Play production approval and public sales are still pen
   required for transfers, batch workflows, teams, multiple displays or presenter controls.
 - **Android Free:** unlimited one-file-at-a-time sending and receiving at the available link speed.
   Compression, encryption, pairing, teams and individual file open/share/resend/delete remain free.
-- **Android Pro:** one non-consumable Google Play purchase, product `fileflow_pro`, with a **$10 USD
+- **Android Pro:** one non-consumable Google Play purchase, product `fileflow_pro`, with a **$9.99 USD
   US launch price**. It adds multi-file batch sending, multi-file batch receiving, and bulk actions
   on received files. Google Play's localized product price and checkout are authoritative.
 - **Ownership:** Pro belongs to a verified DataLux account. Sign into that account on another phone
@@ -84,11 +84,12 @@ license change. Website checkout is not implemented and is not required for this
    resumed Play preparation, then reported creating the app and confirmed application ID
    **`dev.datalux`**. Kotlin/JNI names and the Pro product `fileflow_pro` remain unchanged.
    This package installs separately from historical `dev.fileflow` builds; sign in and re-pair
-   rather than assuming private data migrates. No Play bundle upload or public release is recorded.
+   rather than assuming private data migrates. A Play bundle is saved in an internal draft; no
+   test-track rollout or public release is recorded.
    Track verified outcomes in [upload readiness](store/google-play/UPLOAD-READINESS.md).
 2. Establish stable upload signing, Play App Signing and a backed-up production license-signing key.
    Configure the protected `play-internal` environment; never put private keys into Git or bundles.
-3. Create `fileflow_pro` with exactly one permanent buy option, US availability and $10 USD pricing.
+3. `fileflow_pro` is saved as a draft with one permanent buy option, US availability and $9.99 USD pricing.
    Configure least-privilege Publisher credentials and authenticated real-time purchase notifications.
 4. Test a signed store AAB on a separate staging service with test purchases. Production must reject
    test receipts. Keep the same stable production license public key in all production Android builds.

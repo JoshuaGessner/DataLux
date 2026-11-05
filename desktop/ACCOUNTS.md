@@ -7,7 +7,7 @@
 
 All DataLux desktop features are free, including batch sending, bulk received-file actions,
 compression, pairing, encryption, and teams. No sign-in, license, purchase, or network connection is
-required to use them. Android Pro is a separate $10 one-time upgrade for phone batch sending and
+required to use them. Android Pro is a separate $9.99 one-time upgrade for phone batch sending and
 receiving and bulk received-file actions. A Free Android phone receiving a desktop batch must
 upgrade or ask the sender to send individual files; the desktop sender itself is never paywalled.
 

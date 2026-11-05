@@ -44,7 +44,7 @@ object Entitlements {
         if (has(f)) return true
         MaterialAlertDialogBuilder(context)
             .setTitle("DataLux Pro")
-            .setMessage("${f.label} needs Pro on this phone. The US launch price is $10, one time, " +
+            .setMessage("${f.label} needs Pro on this phone. The US launch price is $9.99, one time, " +
                 "with the final price shown by Google Play. Already bought it? Sign in and restore. " +
                 "You can keep sending and receiving one file at a time for free, at full speed, with encryption.")
             .setPositiveButton("View Pro / restore") { _, _ -> openPro(context, f) }

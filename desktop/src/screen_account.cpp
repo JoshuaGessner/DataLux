@@ -41,7 +41,7 @@ void App::AccountScreen(float x, float W, float /*H*/) {
             const auto url = account::Origin() + "/account.html";
             if (!SDL_OpenURL(url.c_str())) account_message_ = "Could not open your browser. Visit the DataLux website.";
         }
-        paint_.Text(paint_.Fit("Android Pro: $10 one-time in the US. Restore it on your phones.", width, 14, Weight::kRegular),
+        paint_.Text(paint_.Fit("Android Pro: $9.99 one-time in the US. Restore it on your phones.", width, 14, Weight::kRegular),
                     left, 398, 14, Weight::kRegular, th::kTextDim);
     }
     if (!account_message_.empty()) {

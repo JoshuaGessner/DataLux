@@ -90,7 +90,7 @@ class ProActivity : AppCompatActivity() {
         add(button("Back", style = Ui.Style.Text) { finish() })
         add(title("DataLux Pro", 30f))
         add(space(8))
-        add(text("Pro is a one-time Android upgrade for your DataLux account. US launch price: $10. " +
+        add(text("Pro is a one-time Android upgrade for your DataLux account. US launch price: $9.99. " +
             "Google Play shows the final checkout price. Restore on your other phones with the same account. " +
             "The desktop app includes every feature for free."))
         add(space(12))

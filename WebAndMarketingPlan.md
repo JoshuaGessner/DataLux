@@ -17,7 +17,7 @@ work. It is not a release status report. For current distribution and account be
 still proposed in [DESKTOP_UPDATES_PLAN.md](DESKTOP_UPDATES_PLAN.md); paid sales remain disabled.
 
 **October 28 decision:** [PRODUCT.md](PRODUCT.md) is the current commercial policy: every desktop
-feature is free; Android Free retains single-file transfers and security; $10 USD one-time Android
+feature is free; Android Free retains single-file transfers and security; $9.99 USD one-time Android
 Pro adds batch sending/receiving and bulk file actions, with an initial US Play launch. Older paid
 desktop proposals below are superseded. Google Play production approval and real purchase tests
 remain release gates.
@@ -627,7 +627,7 @@ The launch feature list is:
 
 Folder recursion, scheduling and automation are future ideas, not included launch promises.
 
-The approved US launch price is $10 USD one time through Google Play product `fileflow_pro`.
+The approved US launch price is $9.99 USD one time through Google Play product `fileflow_pro`.
 The final checkout price comes from Google Play. See [PRODUCT.md](PRODUCT.md) for account restoration,
 receiving-device enforcement, offline limits and the US-first rollout.
 

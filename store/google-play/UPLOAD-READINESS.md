@@ -1,8 +1,8 @@
 # DataLux Play upload readiness
 
-> **Status:** In progress; no Play upload or production launch recorded
+> **Status:** Internal release and Pro purchase option saved as drafts; testing not yet available
 > **Owner:** Release engineering
-> **Last reviewed:** 2026-10-29
+> **Last reviewed:** 2026-11-04
 > **Related:** [Product policy](../../PRODUCT.md), [US listing materials](en-US/README.md), [Data Safety draft](DATA-SAFETY.md)
 
 The owner chose **DataLux** and resumed Play preparation on October 29, 2026. The Android
@@ -17,15 +17,15 @@ installation and does not inherit private state from historical `dev.fileflow` b
 | --- | --- |
 | Developer account | Verified Personal account; owner reports the DataLux app entry is created |
 | Console app | Independently checked: DataLux / `dev.datalux`, draft; dashboard app ID `4975860505031813621`. Privacy URL, no-ads, non-government, no-financial-features, no-health-features and no-Advertising-ID answers saved as pending review changes; Tools category selected |
-| Current CI | Native main `edccb3c` passed all CI, including sanitizers; desktop CI and all four review packages passed. Web main `3e8374b` CI passed |
+| Current CI | Native main `914f175` passed CI including sanitizers and desktop CI. Its owner-dispatched [0.4.1 review build](https://github.com/JoshuaGessner/DataLux/actions/runs/41881278200) passed Android, Linux, Windows and macOS jobs. Web main `518b372` passed CI and the [web review-image build](https://github.com/JoshuaGessner/DataLux-Web/actions/runs/41882637955). These candidates were not published or deployed |
 | Candidate version | 0.4.1 / Android version code 5; recheck unused Play version code before upload |
-| Local candidate checks | Android debug APK, unit tests, debug/release lint, release manifest with `dev.datalux` and existing JNI classes, 16 release-helper tests and relative documentation links passed. Backend tests cover DataLux Publisher URLs and rejection of old-package notifications |
-| Signed Play bundle | Not built: the production license public key is still required; release guard correctly refuses missing trust. Upload signing is now configured |
+| Earlier local checks | October 29 Android debug APK, unit tests, debug/release lint, release manifest with `dev.datalux` and existing JNI classes, 16 release-helper tests and relative documentation links passed. Backend tests cover DataLux Publisher URLs and rejection of old-package notifications. These checks do not validate the final signed artifact |
+| Signed Play bundle | Owner approved [0.4.1/code 5 review run](https://github.com/JoshuaGessner/DataLux/actions/runs/41951982131), which succeeded on November 4 from `914f175`. Downloaded AAB SHA-256 `77817a40269c7d40fa05a65faaac14eb6f7f328e8752c654aa50f5ecbd0f746c` matches the report; package, upload certificate and license key ID also match. Uploaded to Google Play and saved in an internal-testing draft on November 4; Console recognizes code 5 (0.4.1), arm64, API 33+. The track has not been published and has no testers configured |
 | Play upload identity | Permanent RSA-3072 encrypted upload keystore created in private local storage; re-open/sign/verify challenge passed. Four upload secrets configured in owner-reviewed, main-only `play-internal` environment. Off-device recovery backup not yet verified |
-| License trust | Production signer's public key and backup not yet verified; never substitute an ephemeral test key |
-| Server access | Owner is off the NUC network and explicitly deferred server work; [NUC handoff](NUC-HANDOFF.md) records all pending checks |
+| License trust | On November 4, production config had no billing signer and the purchase table was empty. A new P-256 signer was created privately on the NUC; matching public/private key ID `4b72019e9420f53f` was verified and its public key set in `play-internal`. The private key remains on the NUC. An encrypted off-device recovery backup remains outstanding; do not rotate or lose this key after distributing builds |
+| Server access | NUC was inspected November 4; live service was healthy on `v0.3.5-preview.5`. A new verified account snapshot was restored to a separate temporary volume and checked at schema 4. The temporary volume was removed. The snapshot does not include the separate license signer; off-device recovery and retention remain outstanding |
 | Play-managed signing | Console shows the app-signing key in use. It is separate from the locally created upload key |
-| Payments and testers | Owner completed the payments profile October 29; the merchant-creation gate has cleared. App pricing independently verified Free. One-time products now requires the first uploaded artifact with BILLING permission; the merged release manifest already includes it. No product or Play bundle uploaded; closed-test dashboard shows 0 testers |
+| Payments and testers | The app is Free. Google Play saved `fileflow_pro` / `permanent` as a draft buy option, United States only, at $9.99. The option is not active; the internal track remains a draft and the closed-test dashboard showed 0 testers |
 | Content rating | IARC completed October 29; North America ESRB Teen, Users Interact and In-App Purchases. [Answer record](CONTENT-RATING.md) explains the actual file-sharing behavior; Google app review/release remain pending |
 | Remaining Console declarations | Sign-in/reviewer access, target audience and Data Safety remain incomplete. Dashboard shows 8 of 11 setup tasks complete. Audience is blocked until legitimate reviewer access exists; do not submit placeholder credentials. Nothing sent for Google app review |
 | Artwork and listing | US text, icon, feature graphic and four genuine 1080 × 1920 phone screenshots saved; Console says Ready to send for review. AI labels applied to prepared icon/feature artwork, not direct screenshots. No Google app-review submission or publication |
@@ -35,17 +35,15 @@ installation and does not inherit private state from historical `dev.fileflow` b
 
 ## Product setup after the first upload
 
-The payments-profile step is complete, but Console still requires an uploaded billing-enabled
-artifact before allowing one-time product creation. The existing merged release manifest declares
-`com.android.vending.BILLING`; no permission fix or temporary debug upload is needed. After the
-NUC signer is verified, prepare/review the real signed candidate, upload it to the internal track,
-then create the product:
+The payments-profile step is complete. The signed billing-enabled bundle is uploaded to an
+internal draft and the product and purchase option below are saved as a draft. Recheck the live
+Console state and finish the isolated test setup before activating the option:
 
 - Product ID: `fileflow_pro` (retained permanent identifier; do not rename it).
 - Default title: **DataLux Pro**.
 - Description: **Unlock multi-file batch transfers and bulk actions on received files.**
 - Exactly one permanent buy option, non-consumable, quantity one; no rental or subscription.
-- US availability only, **$10.00 USD** base price. Verify the actual Google checkout sheet later.
+- US availability only, **$9.99 USD** base price. Verify the actual Google checkout sheet later.
 
 The Console also displayed a **15% service-fee enrollment** notice. Enrollment/eligibility is not
 verified. Before sales, the owner should review associated-account declarations and the program
@@ -72,7 +70,7 @@ See [Google's enrollment guidance](https://support.google.com/googleplay/android
    review report records source/certificate/bundle hashes. Runtime 16 KB testing is separate.
 6. Review the exact bundle and upload it to internal testing. Preserve device files before
    replacing debug builds, since signing identities may differ. Do not enable public sales.
-7. Provision the one-time US $10 buy option, Publisher credentials and authenticated purchase
+7. Configure Publisher credentials and authenticated purchase
    notifications. Test with Google's license testers on a separate staging backend/database;
    production must reject test receipts. Use the same production trust for production releases.
 8. Rehearse free transfers, paid receive/send/bulk, restoration, pending/cancelled/refunded

@@ -16,7 +16,7 @@ The proposed in-app desktop update experience and rollout gates are documented i
 do not auto-update. Mobile updates will be managed through their app stores.
 
 The current policy is [PRODUCT.md](PRODUCT.md): all desktop features are free; Android Free has
-single-file workflows and security, and the $10 USD one-time US Pro plan adds batch send/receive
+single-file workflows and security, and the $9.99 USD one-time US Pro plan adds batch send/receive
 and bulk actions. Normal Android builds enforce Free/Pro. Only an explicit `-Pstore=false` produces
 an unlocked Android community build. Historical community APKs remain unchanged. Production Play
 purchases still require pinned public trust, stable signing, real Google setup/tests and approval;

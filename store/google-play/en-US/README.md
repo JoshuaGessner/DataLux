@@ -7,7 +7,7 @@
 
 These English (United States) text files are prepared for owner review. They do not establish a
 Play app entry, enable checkout or attest that production approval has been granted. The working
-release policy is a free Android download and a planned $10 USD one-time US Pro upgrade. Keep
+release policy is a free Android download and a planned $9.99 USD one-time US Pro upgrade. Keep
 the price qualified until Console configuration and real purchase acceptance are complete.
 
 On October 29 the text, icon, feature graphic and four genuine Android screenshots were saved

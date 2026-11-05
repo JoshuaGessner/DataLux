@@ -19,7 +19,7 @@ Every PNG is 1080 × 1920 pixels (9:16).
 | --- | --- | --- |
 | `01-send.png` | Send home, free single-file and Pro batch explanation | Suitable candidate. |
 | `02-settings.png` | Sending speed, compression, Teams and Pro settings | Scrollable screen; the Pro card continues below the bottom navigation. |
-| `03-pro.png` | Free/Pro comparison and US $10 one-time Android upgrade explanation | Suitable candidate. No credentials entered and no purchase attempted. |
+| `03-pro.png` | Free/Pro comparison and the former US $10 price | Stale: recapture before publication to match the $9.99 Play draft. No credentials were entered and no purchase was attempted. |
 | `04-received.png` | Empty Received library | Shows the real legacy `Downloads › FileFlow` folder. Review rebrand presentation before using this image. |
 | `05-teams.png` | Empty Teams view | Uses the generic default phone model name. The Join button continues below the visible scroll area. |
 | `06-receive.png` | Receive home before camera permission or capture | Suitable candidate. No camera permission granted and no transfer result implied. |
