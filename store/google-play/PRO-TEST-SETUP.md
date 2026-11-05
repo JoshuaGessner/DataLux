@@ -29,7 +29,8 @@ its private key was created on the NUC, and only its public certificate was regi
 OAuth authentication succeeded and an invalid-token Publisher request returned HTTP 404; an actual
 purchase is still needed to prove the full flow. Its Google public key expires November 4, 2027.
 The owner Google account is on a saved license-tester list. The `permanent` purchase option is
-active; the app and internal test release remain drafts, with no general tester rollout.
+active; code 5 is active on the internal test track for the owner list, unreviewed. Its Play build
+uses production origin/trust and must not replace the staging APK during the staging purchase test.
 
 ## Isolation and build identity
 

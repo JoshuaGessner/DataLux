@@ -11,8 +11,8 @@ For building and delivering successive Play releases, use the [coordinator runbo
 The candidate is **0.4.1 / version code 5**, package **`dev.datalux`**, Pro product
 **`fileflow_pro`**. Recheck the uploaded version before testing. A debug install, CI pass or
 static alignment report does not establish Play billing, optical transfer or device acceptance.
-The signed release AAB was uploaded to an internal draft with the production account origin and
-license public key. The internal track is not rolled out. The Pro option is active; isolated
+The signed release AAB was rolled out to the internal track with the production account origin and
+license public key. The owner list is selected; confirm actual opt-in. The Pro option is active; isolated
 staging billing is configured, but real purchase/restore acceptance remains incomplete.
 
 ## Test groups and sequence

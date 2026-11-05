@@ -84,8 +84,8 @@ license change. Website checkout is not implemented and is not required for this
    resumed Play preparation, then reported creating the app and confirmed application ID
    **`dev.datalux`**. Kotlin/JNI names and the Pro product `fileflow_pro` remain unchanged.
    This package installs separately from historical `dev.fileflow` builds; sign in and re-pair
-   rather than assuming private data migrates. A Play bundle is saved in an internal draft; no
-   test-track rollout or public release is recorded.
+   rather than assuming private data migrates. A Play bundle is active on the owner-only internal
+   test track; no public release is recorded.
    Track verified outcomes in [upload readiness](store/google-play/UPLOAD-READINESS.md).
 2. Establish stable upload signing, Play App Signing and a backed-up production license-signing key.
    Configure the protected `play-internal` environment; never put private keys into Git or bundles.
