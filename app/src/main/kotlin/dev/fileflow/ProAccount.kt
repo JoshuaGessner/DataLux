@@ -39,6 +39,10 @@ data class ProStatus(
     val verificationResendAt: Long = 0,
 )
 
+/** JSON booleans must be actual booleans, not missing values or coerced strings. */
+internal fun requireAccountBoolean(value: Any?): Boolean =
+    value as? Boolean ?: throw AccountError("The account response could not be verified. Please try again.")
+
 /** Small HTTPS account client. Called on a worker thread, never by the optical transfer path. */
 object ProAccount {
     private lateinit var storage: AtomicFile
@@ -116,7 +120,7 @@ object ProAccount {
         // A lost response may still have queued mail. Pace retries without claiming delivery.
         updateVerification(account.copy(verificationResendAt = System.currentTimeMillis() + VerificationCooldown.REQUEST_MILLIS))
         val response = request("/api/native/account/verification/request", JSONObject(), account.token)
-        val verified = response.optBoolean("emailVerified", false)
+        val verified = requireAccountBoolean(response.opt("emailVerified"))
         val resendAt = if (verified) 0 else if (response.has("verificationResendAt"))
             VerificationCooldown.serverDeadline(response.optLong("verificationResendAt", 0))
             else System.currentTimeMillis() + VerificationCooldown.REQUEST_MILLIS
@@ -162,15 +166,18 @@ object ProAccount {
 
     private fun applyStatus(body: JSONObject): ProStatus {
         val previous = requireSession()
-        val pro = body.getBoolean("pro")
+        // Validate the entire response before changing persisted credentials or entitlement state.
+        val pro = requireAccountBoolean(body.opt("pro"))
         val license = if (pro) body.getString("license") else null
         if (pro && !ProLicense.verify(license!!, BuildConfig.LICENSE_PUBLIC_KEY, previous.userId))
             throw AccountError("Pro access could not be verified. Please try again later.")
         val billing = body.getJSONObject("billing")
         if (billing.getString("productId") != "fileflow_pro") throw AccountError("This Pro product is not supported by this version.")
+        val billingEnabled = requireAccountBoolean(billing.opt("enabled"))
         val accountId = body.getString("purchaseAccountId")
         if (accountId != expectedPurchaseAccountId()) throw AccountError("The account response could not be verified.")
-        val emailVerified = body.optBoolean("emailVerified", false)
+        val emailVerified = requireAccountBoolean(body.opt("emailVerified"))
+        val verificationAvailable = requireAccountBoolean(body.opt("verificationAvailable"))
         val serverRequested = body.optLong("verificationResendAt", 0) > 0
         val serverResendAt = VerificationCooldown.serverDeadline(body.optLong("verificationResendAt", 0))
         val resendAt = if (emailVerified) 0 else maxOf(previous.verificationResendAt, serverResendAt)
@@ -179,8 +186,8 @@ object ProAccount {
         persist(next)
         session = next
         Entitlements.useVerifiedLicense(license, next.userId)
-        return ProStatus(pro, billing.getBoolean("enabled") && emailVerified, billing.getString("productId"), accountId,
-            emailVerified, body.optBoolean("verificationAvailable", false), resendAt).also { status = it }
+        return ProStatus(pro, billingEnabled && emailVerified, billing.getString("productId"), accountId,
+            emailVerified, verificationAvailable, resendAt).also { status = it }
     }
 
     private fun requireSession() = session ?: throw AccountError("Sign in to your DataLux account first.")

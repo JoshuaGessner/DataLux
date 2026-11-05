@@ -12,6 +12,7 @@ import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.widget.doAfterTextChanged
 import androidx.core.view.WindowCompat
 import com.android.billingclient.api.BillingClient
 import com.android.billingclient.api.BillingClientStateListener
@@ -33,12 +34,31 @@ import dev.fileflow.ui.Ui.text
 import dev.fileflow.ui.Ui.title
 import java.util.concurrent.Executors
 
+internal enum class VerificationUiState { CHECKING, UNKNOWN, UNVERIFIED, VERIFIED }
+
+/** An absent or failed account check cannot establish that email is unverified. */
+internal fun verificationUiState(emailVerified: Boolean?, refreshing: Boolean, failed: Boolean): VerificationUiState = when {
+    emailVerified == true && !failed -> VerificationUiState.VERIFIED
+    refreshing -> VerificationUiState.CHECKING
+    emailVerified == null || failed -> VerificationUiState.UNKNOWN
+    else -> VerificationUiState.UNVERIFIED
+}
+
+internal fun checkoutAccountReady(status: ProStatus?, refreshFailed: Boolean): Boolean =
+    !refreshFailed && status?.emailVerified == true && status.billingEnabled
+
+internal fun loginSavedSessionBeforeFailure(previous: ProSession?, current: ProSession?, requiresSignIn: Boolean): Boolean =
+    current != null && current !== previous && !requiresSignIn
+
 /** Optional account and Play purchase screen. No file or camera data is read here. */
 class ProActivity : AppCompatActivity() {
     private val worker = Executors.newSingleThreadExecutor()
     private lateinit var body: LinearLayout
     private var busy = false
     private var notice = ""
+    private var refreshingAccount = false
+    private var accountRefreshError: String? = null
+    private var signInEmail: String? = null
     private var verificationRequestInFlight = false
     private val verificationTimer = Handler(Looper.getMainLooper())
     private var verificationButton: Button? = null
@@ -65,15 +85,15 @@ class ProActivity : AppCompatActivity() {
         }
         setContentView(ScrollView(this).apply { addView(capped(body)) }.padForSystemBars())
         render()
-        if (ProAccount.session != null) refresh()
+        if (ProAccount.session != null && !ProAccount.requiresSignIn) refresh()
     }
 
     override fun onResume() {
         super.onResume()
         verificationTimer.removeCallbacks(verificationTick)
         verificationTimer.post(verificationTick)
-        if (!busy && ProAccount.session != null) {
-            if (billing?.isReady == true) restore() else refresh()
+        if (!busy && ProAccount.session != null && !ProAccount.requiresSignIn) {
+            refresh()
         }
     }
 
@@ -119,12 +139,13 @@ class ProActivity : AppCompatActivity() {
                 else "Sign in again to sync your account. Your saved offline Pro access remains available."))
             val email = EditText(this).apply {
                 hint = "Email"
-                setText(session?.email.orEmpty())
+                setText(signInEmail ?: session?.email.orEmpty())
                 inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS
                 setSingleLine()
                 isEnabled = !busy
                 importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_YES
                 setAutofillHints(View.AUTOFILL_HINT_EMAIL_ADDRESS)
+                doAfterTextChanged { signInEmail = it?.toString() }
             }
             val password = EditText(this).apply {
                 hint = "Password"
@@ -138,8 +159,18 @@ class ProActivity : AppCompatActivity() {
             add(button(if (busy) "Signing in…" else "Sign in") {
                 val address = email.text.toString().trim()
                 val secret = password.text.toString()
+                signInEmail = address
                 password.text.clear()
-                work("Sign in failed") { ProAccount.login(address, secret) }
+                val previous = ProAccount.session
+                work("Sign in failed") {
+                    try {
+                        ProAccount.login(address, secret)
+                    } catch (error: Exception) {
+                        if (loginSavedSessionBeforeFailure(previous, ProAccount.session, ProAccount.requiresSignIn))
+                            throw AccountError("Signed in, but account status could not be checked. Check your connection and try again.")
+                        throw error
+                    }
+                }
             }.apply { isEnabled = !busy })
             add(button("Create a free account", style = Ui.Style.Text) {
                 openAccountPage("/app.html#account")
@@ -160,14 +191,14 @@ class ProActivity : AppCompatActivity() {
             add(space(12))
             val offer = permanentOffer(product)
             if (BuildConfig.STORE && !pro) {
-                val ready = status?.emailVerified == true && status.billingEnabled && BuildConfig.LICENSE_PUBLIC_KEY.isNotEmpty() && offer != null && billing?.isReady == true
+                val ready = checkoutAccountReady(status, accountRefreshError != null) && BuildConfig.LICENSE_PUBLIC_KEY.isNotEmpty() && offer != null && billing?.isReady == true
                 add(button(if (offer != null) "Get Pro · ${offer.formattedPrice}" else "Get Pro") { buy() }
                     .apply { isEnabled = ready && !busy })
                 if (BuildConfig.LICENSE_PUBLIC_KEY.isEmpty() || status?.billingEnabled == false)
                     add(text("Pro purchases aren’t available in this build yet. Free transfers continue to work."))
             }
             add(button("Restore purchases", style = Ui.Style.Tonal) {
-                if (billing?.isReady == true) restore() else refresh()
+                if (accountRefreshError == null && billing?.isReady == true) restore() else refresh()
             }.apply { isEnabled = !busy })
             add(button("Refresh account", style = Ui.Style.Text) { refresh() }.apply { isEnabled = !busy })
             add(button("Sign out on this device", style = Ui.Style.Text) { work("Sign out failed") { ProAccount.logout() } }
@@ -181,9 +212,25 @@ class ProActivity : AppCompatActivity() {
     }
 
     private fun addVerification(session: ProSession, status: ProStatus?) {
-        if (status?.emailVerified == true) {
+        val verificationState = verificationUiState(status?.emailVerified, refreshingAccount, accountRefreshError != null)
+        if (verificationState == VerificationUiState.VERIFIED) {
             add(card(title("Email verified", 20f), space(6),
                 text("${session.email} is verified. Your account is ready to connect devices and share Pro access.")))
+            return
+        }
+        // Status is not persisted across process restarts. Until a successful refresh, its
+        // absence says nothing about whether this account's email has been verified.
+        if (verificationState == VerificationUiState.CHECKING || verificationState == VerificationUiState.UNKNOWN) {
+            val checking = verificationState == VerificationUiState.CHECKING
+            val detail = when {
+                checking -> "Checking the verification status for ${session.email}. This can take a moment."
+                accountRefreshError != null -> accountRefreshError!!
+                else -> "We couldn't check the verification status for ${session.email}. Check your connection and try again."
+            }
+            add(card(title(if (checking) "Checking account" else "Account status unavailable", 20f),
+                space(6), text(detail), space(8),
+                button(if (checking) "Checking account…" else "Check account", style = Ui.Style.Text) { refresh() }
+                    .apply { isEnabled = !busy }))
             return
         }
         val requested = session.verificationRequested
@@ -195,7 +242,7 @@ class ProActivity : AppCompatActivity() {
             work("Verification request failed", "Verification request complete. Check the email status above.") { ProAccount.requestVerification() }
         }
         verificationButton = resend
-        val check = button("I’ve verified — check account", style = Ui.Style.Text) { refresh() }.apply { isEnabled = !busy }
+        val check = button(if (refreshingAccount) "Checking account…" else "I’ve verified — check account", style = Ui.Style.Text) { refresh() }.apply { isEnabled = !busy }
         add(card(title(if (requested) "Check your inbox" else "Verify your email", 20f), space(8), text(instructions), space(8),
             text("1. Open the DataLux verification email.\n2. Follow its link and confirm your DataLux password.\n3. Return here and check your account. Verification signs you out, so you may need to sign in again."),
             space(8), resend, check))
@@ -286,6 +333,8 @@ class ProActivity : AppCompatActivity() {
             val result = runCatching(action)
             runOnUiThread {
                 busy = false
+                val wasRefreshingAccount = refreshingAccount
+                refreshingAccount = false
                 verificationRequestInFlight = false
                 notice = result.exceptionOrNull()?.let {
                     if (it is AccountError && it.invalidatesAuthentication && ProAccount.session?.verificationRequested == true)
@@ -293,6 +342,10 @@ class ProActivity : AppCompatActivity() {
                     else if (it is AccountError) it.message.orEmpty() else "$failure. Check your connection and try again."
                 }
                     ?: success
+                if (wasRefreshingAccount) accountRefreshError = if (result.isFailure) notice else null
+                else if (result.isSuccess && ProAccount.status != null) accountRefreshError = null
+                else if (result.isFailure && ProAccount.session != null && !ProAccount.requiresSignIn && ProAccount.status == null)
+                    accountRefreshError = notice
                 render()
                 if (ProAccount.session == null) {
                     billing?.endConnection()
@@ -300,17 +353,26 @@ class ProActivity : AppCompatActivity() {
                     billingAccountId = null
                     product = null
                 }
-                if (result.isSuccess) connectBilling()
+                if (result.isSuccess) {
+                    if (wasRefreshingAccount && billing?.isReady == true) {
+                        queryProduct()
+                        restore()
+                    } else connectBilling()
+                }
                 deferredPurchases?.let { (accountId, purchases) -> deferredPurchases = null; processPurchases(purchases, accountId) }
             }
         }
     }
 
-    private fun refresh() = work("Account refresh failed") { ProAccount.refresh() }
+    private fun refresh() {
+        if (busy || worker.isShutdown) return
+        refreshingAccount = true
+        work("Account refresh failed") { ProAccount.refresh() }
+    }
 
     private fun connectBilling() {
         val accountId = ProAccount.session?.userId ?: return
-        if (!BuildConfig.STORE || BuildConfig.LICENSE_PUBLIC_KEY.isEmpty() || ProAccount.session == null ||
+        if (!BuildConfig.STORE || accountRefreshError != null || BuildConfig.LICENSE_PUBLIC_KEY.isEmpty() || ProAccount.session == null ||
             ProAccount.requiresSignIn || ProAccount.status?.billingEnabled != true || ProAccount.status?.emailVerified != true ||
             (billing?.isReady == true && billingAccountId == accountId) || connecting || isDestroyed) return
         connecting = true
@@ -375,7 +437,7 @@ class ProActivity : AppCompatActivity() {
         val client = billing ?: return
         val detail = product ?: return
         val offer = permanentOffer(detail) ?: return
-        if (busy || !client.isReady || ProAccount.status?.billingEnabled != true || ProAccount.status?.emailVerified != true || BuildConfig.LICENSE_PUBLIC_KEY.isEmpty() ||
+        if (busy || !checkoutAccountReady(ProAccount.status, accountRefreshError != null) || !client.isReady || BuildConfig.LICENSE_PUBLIC_KEY.isEmpty() ||
             ProAccount.requiresSignIn || billingAccountId != ProAccount.session?.userId) return
         val item = BillingFlowParams.ProductDetailsParams.newBuilder().setProductDetails(detail)
         offer.offerToken?.let { item.setOfferToken(it) }
@@ -390,7 +452,7 @@ class ProActivity : AppCompatActivity() {
     }
 
     private fun restore() {
-        if (busy) return
+        if (busy || accountRefreshError != null) return
         val accountId = ProAccount.session?.userId ?: return
         billing?.queryPurchasesAsync(QueryPurchasesParams.newBuilder().setProductType(BillingClient.ProductType.INAPP).build()) { result, purchases ->
             if (result.responseCode == BillingClient.BillingResponseCode.OK) processPurchases(purchases, accountId)

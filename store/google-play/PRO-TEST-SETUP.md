@@ -20,7 +20,7 @@ acknowledgement retry fix and rejects non-test receipts. This does not prevent G
 a real payment method; confirm the test notice and test payment method before any purchase.
 The debug-signed staging APK is stored at
 `build/artifacts/staging-pro-test/datalux-staging-debug.apk` (SHA-256
-`babd238318ceeb36941d318b00d17fbffce66b6091668167888de8c95230192b`), built from the local
+`c40d73b492a3352d9de85f1b14144678127a5ad23275e8a1e8982e017dba4cca`), built from the local
 working tree with staging origin and test public key. It was installed in place over the same-signed
 debug app on the owner's connected Android phone; no purchase has been tested.
 The Google Cloud project `datalux-play-billing` has the Google Play Android Developer API enabled.
@@ -38,6 +38,11 @@ grant was confirmed. The phone has only the owner Google account. The US-only bu
 the production track's country controls were inaccessible because production access is not yet
 granted. Retry after propagation with freshly queried product details before treating this as a
 confirmed configuration or client defect. See [Google's billing error guidance](https://developer.android.com/google/play/billing/errors).
+
+The owner also encountered a misleading unverified screen after a restart while the phone could
+not resolve the staging hostname. Server-side aggregate checks showed the account remained verified;
+switching to cellular restored verified status. The updated staging APK distinguishes unknown or
+failed checks from an unverified email. Physical verification of that update remains pending.
 
 ## Isolation and build identity
 
