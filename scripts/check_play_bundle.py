@@ -68,11 +68,11 @@ def run(command, message, allowed=(0,)):
     return result.stdout
 
 
-def check_manifest(manifest, expected_code=None, expected_name=None):
+def check_manifest(manifest, expected_code=None, expected_name=None, expected_label="DataLux"):
     require(manifest.get("package") == "dev.datalux", "Unexpected Play application ID")
     application = manifest.find("application")
     require(application is not None, "Missing application")
-    require(application.get(ANDROID + "label") == "DataLux", "Unexpected Play app label")
+    require(application.get(ANDROID + "label") == expected_label, "Unexpected Play app label")
     require(application.get(ANDROID + "debuggable", "false") == "false", "Play AAB must not be debuggable")
     require(application.get(ANDROID + "allowBackup") == "false" and
             application.get(ANDROID + "fullBackupContent") == "false" and
@@ -84,12 +84,12 @@ def check_manifest(manifest, expected_code=None, expected_name=None):
     name = manifest.get(ANDROID + "versionName")
     require(code > 0 and (expected_code is None or code == expected_code), "Unexpected AAB version code")
     require(name and (expected_name is None or name == expected_name), "Unexpected AAB version name")
-    return {"package": "dev.datalux", "appLabel": "DataLux", "versionCode": code, "versionName": name,
+    return {"package": "dev.datalux", "appLabel": expected_label, "versionCode": code, "versionName": name,
             "targetSdk": int(sdk.get(ANDROID + "targetSdkVersion")), "appDataBackup": False,
             "cleartextTraffic": False}
 
 
-def check_bundle(bundle, bundletool, certificate, expected_code=None, expected_name=None, jdk_bin=None):
+def check_bundle(bundle, bundletool, certificate, expected_code=None, expected_name=None, jdk_bin=None, expected_label="DataLux"):
     check_native(bundle, "base/")
     java_tool = lambda name: str(jdk_bin / name) if jdk_bin else name
     # AAB signatures use the JAR format. Strict code 4 covers the self-signed upload
@@ -105,9 +105,22 @@ def check_bundle(bundle, bundletool, certificate, expected_code=None, expected_n
     config = run(command + ["config", f"--bundle={bundle}"], "Bundle configuration could not be read")
     require("PAGE_ALIGNMENT_16K" in config and "PAGE_ALIGNMENT_4K" not in config, "The AAB must request 16 KB ZIP alignment")
     manifest = ET.fromstring(run(command + ["manifest", f"--bundle={bundle}"], "Bundle manifest could not be read"))
-    return {**check_manifest(manifest, expected_code, expected_name),
+    return {**check_manifest(manifest, expected_code, expected_name, expected_label),
             "uploadCertificateSha256": hashlib.sha256(certificate.read_bytes()).hexdigest(),
             "bundleSha256": hashlib.sha256(bundle.read_bytes()).hexdigest()}
+
+
+def check_embedded_config(archive, origin, license_key, prefix=""):
+    """Confirm each packaged artifact contains the requested origin and public trust key."""
+    with zipfile.ZipFile(archive) as package:
+        dex_files = [name for name in package.namelist()
+                     if re.fullmatch(re.escape(prefix) + r"classes(?:[0-9]+)?\.dex", name)]
+        require(dex_files, "No Android DEX files found")
+        dex = [package.read(name) for name in dex_files]
+        expected_key = base64.b64encode(license_key).decode("ascii")
+        for value, message in ((origin, "account origin"), (expected_key, "license public key")):
+            require(any(value.encode("ascii") + b"\0" in contents for contents in dex),
+                    f"The artifact does not contain the expected {message}")
 
 
 def main():
@@ -122,6 +135,7 @@ def main():
     parser.add_argument("--jdk-bin", type=Path, help="Optional JDK bin directory; otherwise use tools on PATH")
     parser.add_argument("--expected-version-code", type=int)
     parser.add_argument("--expected-version-name")
+    parser.add_argument("--expected-label", choices=("DataLux", "DataLux Test"), default="DataLux")
     parser.add_argument("--revision", default="local")
     parser.add_argument("--report", type=Path)
     args = parser.parse_args()
@@ -132,7 +146,10 @@ def main():
         report = {"native16Kb": True, "apkSha256": hashlib.sha256(args.apk.read_bytes()).hexdigest(), "revision": args.revision}
         if args.bundle:
             require(args.bundletool and args.certificate and args.license_public_key, "Bundle verification requires bundletool and both public identities")
-            report.update(check_bundle(args.bundle, args.bundletool, args.certificate, args.expected_version_code, args.expected_version_name, args.jdk_bin))
+            key = args.license_public_key.read_bytes()
+            check_embedded_config(args.apk, args.account_origin, key)
+            check_embedded_config(args.bundle, args.account_origin, key, "base/dex/")
+            report.update(check_bundle(args.bundle, args.bundletool, args.certificate, args.expected_version_code, args.expected_version_name, args.jdk_bin, args.expected_label))
             report.update({"licenseKeyId": hashlib.sha256(args.license_public_key.read_bytes()).hexdigest()[:16], "accountOrigin": args.account_origin, "storeProfile": True})
         if args.report:
             args.report.parent.mkdir(parents=True, exist_ok=True)

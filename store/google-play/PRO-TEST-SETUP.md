@@ -76,6 +76,18 @@ physical-device scenario; it does not establish purchase, restore or all account
 
 ## Isolation and build identity
 
+- The owner selected a staging-connected Play test build for Pro testing. The dedicated
+  `prepare Play STAGING test bundle` workflow uses the same Play upload identity but a separate
+  staging license public key and a fixed staging origin. Its app label is **DataLux Test** and
+  its version name ends in `-staging`. It produces an artifact for review; it does not upload or
+  publish. Never promote a staging bundle to production. A later production build must use a higher
+  version code, the production origin and the production license key. The current internal build
+  remains production-connected until the staging artifact is actually uploaded and rolled out.
+- Play-distributed and debug APKs have different signing identities. Switching may require
+  uninstalling the debug app, which removes app-private state; preserve anything needed first.
+  Testers must join the track and separately be enrolled as Google license testers, and must see
+  Google's test-payment notice before confirming checkout. Use unique staging credentials, not a
+  production password. Staging and production accounts and grants are independent.
 - Verify DNS resolution from each test network for the dedicated HTTPS staging origin. The distinct
   Docker project, network, data volume and account database are established. Do not clone production accounts or purchase records into staging. Make the
   staging service and Caddy route identifiable and keep the production route and volume intact.

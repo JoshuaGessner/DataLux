@@ -34,6 +34,9 @@ val releaseVersionCode = providers.gradleProperty("fileflowVersionCode").orElse(
 require(releaseVersionCode != null && releaseVersionCode in 1..2_100_000_000) { "fileflowVersionCode must be a positive Play-compatible integer" }
 val releaseVersionName = providers.gradleProperty("fileflowVersionName").orElse("0.4.1").get()
 require(releaseVersionName.matches(Regex("[0-9]+\\.[0-9]+\\.[0-9]+(?:-[0-9A-Za-z.-]+)?"))) { "fileflowVersionName must be a release version" }
+val stagingSetting = providers.gradleProperty("fileflowStaging").orElse("false").get()
+require(stagingSetting in listOf("true", "false")) { "fileflowStaging must be true or false" }
+val stagingBuild = stagingSetting == "true"
 
 // Upload signing and offline-Pro signing are separate identities. Only the public Pro key
 // enters the app. Upload passwords come from the environment, never command-line properties.
@@ -49,6 +52,18 @@ val validatePlayRelease = tasks.register("validatePlayRelease") {
     doLast {
         require(storeBuild) { "Play bundles require -Pstore=true; community/source builds remain available as APKs." }
         require(licensePublicKey.isNotEmpty()) { "Play releases require a configured DataLux license public key." }
+        val keyDigest = MessageDigest.getInstance("SHA-256").digest(Base64.getDecoder().decode(licensePublicKey)).joinToString("") { "%02x".format(it) }
+        if (stagingBuild) {
+            require(accountOrigin == "https://staging.datalux.anomalousinteractive.com" && releaseVersionName.endsWith("-staging")) {
+                "Staging Play bundles require the staging origin and a -staging version suffix."
+            }
+            require(keyDigest == "d1ed41f71b4b4156d3307be0b0d09e32d81050777c603d0969481fb0d450c8d2") { "Staging Play bundles require the approved staging license key." }
+        } else {
+            require(accountOrigin == "https://datalux.anomalousinteractive.com" && !releaseVersionName.endsWith("-staging")) {
+                "Production Play bundles require the production origin and must not use a staging version."
+            }
+            require(keyDigest == "4b72019e9420f53fdb2c2981dc0fb940bcec55751844db3abd5366344de46b28") { "Production Play bundles require the approved production license key." }
+        }
         require(uploadConfigured) { "Play releases require all four FILEFLOW_UPLOAD_* environment settings. Keep the keystore outside the checkout." }
         val keyFile = file(uploadStorePath!!).canonicalFile
         require(keyFile.isFile && !keyFile.toPath().startsWith(rootDir.canonicalFile.toPath())) { "The upload keystore must be an existing private file outside the checkout." }
@@ -86,6 +101,7 @@ android {
     defaultConfig {
         // Play registration chosen by the owner. Kotlin/JNI namespace remains dev.fileflow.
         applicationId = "dev.datalux"
+        manifestPlaceholders["appLabel"] = if (stagingBuild) "DataLux Test" else "DataLux"
         // ADR-0013 / ADR-0004: FrameTimeline and AChoreographer_postVsyncCallback are API 33.
         minSdk = 33
         targetSdk = 37

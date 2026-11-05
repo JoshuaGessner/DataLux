@@ -1,7 +1,10 @@
 import importlib.util
+import base64
 from pathlib import Path
 import struct
+import tempfile
 import unittest
+import zipfile
 import xml.etree.ElementTree as ET
 
 SPEC = importlib.util.spec_from_file_location("play_bundle", Path(__file__).parents[1] / "check_play_bundle.py")
@@ -70,6 +73,26 @@ class ReleaseManifestTests(unittest.TestCase):
         result = MODULE.check_manifest(self.manifest(), 5, "0.4.1")
         self.assertEqual(result["appLabel"], "DataLux")
         self.assertFalse(result["appDataBackup"])
+
+    def test_staging_label_is_required_when_expected(self):
+        manifest = self.manifest()
+        manifest.find("application").set(MODULE.ANDROID + "label", "DataLux Test")
+        self.assertEqual(MODULE.check_manifest(manifest, expected_label="DataLux Test")["appLabel"], "DataLux Test")
+        with self.assertRaisesRegex(ValueError, "app label"):
+            MODULE.check_manifest(manifest)
+
+    def test_embedded_origin_and_trust_key_must_match(self):
+        key = b"public test key"
+        origin = "https://staging.example"
+        with tempfile.TemporaryDirectory() as directory:
+            artifact = Path(directory) / "candidate.zip"
+            with zipfile.ZipFile(artifact, "w") as package:
+                package.writestr("base/dex/classes.dex", origin.encode() + b"\0" + base64.b64encode(key) + b"\0")
+            MODULE.check_embedded_config(artifact, origin, key, "base/dex/")
+            with self.assertRaisesRegex(ValueError, "account origin"):
+                MODULE.check_embedded_config(artifact, "https://wrong.example", key, "base/dex/")
+            with self.assertRaisesRegex(ValueError, "license public key"):
+                MODULE.check_embedded_config(artifact, origin, b"other key", "base/dex/")
 
     def test_refuses_stale_or_unsafe_release_configuration(self):
         for attribute, value in (("label", "FileFlow"), ("debuggable", "true"),
