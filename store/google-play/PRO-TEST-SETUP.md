@@ -58,6 +58,9 @@ granted until its scheduled check was advanced manually; the normal six-hour rec
 the purchase with Google and marked it revoked. The owner confirmed the app showed Free after
 refreshing. This tests the reconciliation path, not staging push delivery, notification retries,
 or the complete PAY-05 matrix. Staging does not receive the production notification subscription.
+Afterward the owner purchased Pro again in the Play-installed code 7 app and reported Pro active.
+The test-only staging backend recorded a new granted, acknowledged purchase, while the refunded
+purchase remained revoked.
 
 The owner then sent `one.txt` and `two.txt` together from desktop to the Pro staging phone. Both
 appeared on the phone. Their phone SHA-256 hashes matched the original test fixtures exactly
@@ -98,7 +101,7 @@ physical-device scenario; it does not establish purchase, restore or all account
   `4ce35669eb8d0c0cd5202b04ed7ba2edaa2ca0e4f8dd6d6de5b10a6eca8cf329`. Its report and downloaded
   file agree on the staging origin, test key ID and established upload certificate. On November 4,
   Google Play showed it as available to internal testers. The owner installed code 7 from Google
-  Play and recovered the existing staging Pro account; a new purchase from this build remains to be tested.
+  Play, recovered the existing staging Pro account, and completed a new test purchase after refund.
 - Play-distributed and debug APKs have different signing identities. Switching may require
   uninstalling the debug app, which removes app-private state; preserve anything needed first.
   Testers must join the track and separately be enrolled as Google license testers, and must see
