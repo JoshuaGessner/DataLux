@@ -83,6 +83,12 @@ physical-device scenario; it does not establish purchase, restore or all account
   publish. Never promote a staging bundle to production. A later production build must use a higher
   version code, the production origin and the production license key. The current internal build
   remains production-connected until the staging artifact is actually uploaded and rolled out.
+- Owner-reviewed staging build [run 41969264446](https://github.com/JoshuaGessner/DataLux/actions/runs/41969264446)
+  succeeded from `592335176772669e6140dc65cd95bf6e191101d6`. The signed bundle is version code 7,
+  `0.4.3-staging`, label `DataLux Test`, with SHA-256
+  `4ce35669eb8d0c0cd5202b04ed7ba2edaa2ca0e4f8dd6d6de5b10a6eca8cf329`. Its report and downloaded
+  file agree on the staging origin, test key ID and established upload certificate. Google Play
+  accepted it as an internal release draft; rollout confirmation is pending.
 - Play-distributed and debug APKs have different signing identities. Switching may require
   uninstalling the debug app, which removes app-private state; preserve anything needed first.
   Testers must join the track and separately be enrolled as Google license testers, and must see
