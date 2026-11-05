@@ -105,8 +105,9 @@ void App::PairFinished() {
         paired_ = *f.key();
         settings_.encrypted = true;
         settings_.seal_to.clear();
+        problem_.clear();
         settings_.Save();
-        pair_->outcome = "Paired. Check both codes match, then select Done.";
+        pair_->outcome = "Paired here. Keep this code visible until the phone is paired.";
     } else if (pair_->mode == Mode::kJoin && f.joined()) {
         teams_.Add(*f.joined());
         pair_->outcome = "Joined " + f.joined()->name + ".";
@@ -171,6 +172,10 @@ float App::EncryptedRow(float x, float y, float w) {
     const bool now_on = ui_.Switch("encrypted", {x + w - 76, y, 64, 60}, on);
     if (now_on != on) {
         settings_.encrypted = now_on;
+        if (!now_on) {
+            paired_.reset();
+            problem_.clear();
+        }
         settings_.Save();
     }
     if (!settings_.encrypted) return 60;
@@ -394,7 +399,8 @@ void App::PairScreen(float W, float H) {
     const std::string title = p.mode == Mode::kPair ? "Pair with a phone"
                               : p.mode == Mode::kJoin ? "Join a team"
                                                       : "Invite to " + (p.team ? p.team->name : std::string("the team"));
-    const char* how = p.mode == Mode::kPair  ? "On the phone, tap Encrypted to pair. Hold it up in front of this screen, close to the code, its screen facing this computer's camera."
+    const char* how = p.mode == Mode::kPair  ? (p.finished ? "Compare the numbers. Continue only after both devices say Paired."
+                                                : "Pair on the phone. Both devices must scan each other's updated codes.")
                       : p.mode == Mode::kJoin ? "On the leader's phone: Teams › the team › Invite someone. Hold it up in front of this screen, close to the code."
                                               : "On the new member's phone: Settings › Teams › Join a team. Hold it up in front of this screen, close to the code.";
     paint_.Text(title, 48, 26, 26, Weight::kSemiBold, th::kText);
@@ -438,7 +444,7 @@ void App::PairScreen(float W, float H) {
     const char* stage = "Hold the phone's screen up to this computer's camera.";
     switch (f.stage()) {
         case Stage::kScanning: break;
-        case Stage::kGotKey: stage = "Got it. Keep holding until both screens show this code."; break;
+        case Stage::kGotKey: stage = "Let the phone scan this code, then scan its updated code."; break;
         case Stage::kHandingOver: stage = "Paired. Now handing over the team: keep holding…"; break;
         case Stage::kWaitingForTeam: stage = "Paired. Now receiving the team: keep holding…"; break;
         case Stage::kDone: stage = ""; break;
@@ -452,7 +458,8 @@ void App::PairScreen(float W, float H) {
     paint_.Text(paint_.Fit(said, rw, 15, Weight::kRegular), rx, y, 15, Weight::kRegular, p.finished ? th::kTertiary : th::kTextDim);
     y += 40;
     if (p.finished) {
-        if (ui_.Button("pair-done", {rx, y, 140, 46}, "Done", true)) pair_.reset();
+        const bool pairing = p.mode == Mode::kPair;
+        if (ui_.Button("pair-done", {rx, y, pairing ? 220.0F : 140.0F, 46}, pairing ? "Both devices paired" : "Done", true)) pair_.reset();
     } else if (ui_.Button("pair-cancel", {rx, y, 140, 46}, "Cancel", false)) {
         pair_.reset();
     }

@@ -152,7 +152,7 @@ codes match, you're paired.
 - Each file is encrypted with **AES-256-GCM** under a key that only the two paired phones hold.
   The file's name travels inside the encryption too.
 - The key comes from a fresh **ECDH (P-256)** exchange made just for that pairing and is never
-  stored: it lasts until DataLux closes, or 30 minutes.
+  stored: it lasts until Encrypted is turned off, DataLux closes, or 30 minutes pass.
 - In encrypted mode the receiver refuses anything that isn't sealed to its pairing, including
   unencrypted files, so encryption can't be quietly switched off by the sender.
 

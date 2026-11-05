@@ -62,7 +62,10 @@ On November 4, the owner also paired the desktop with the staging phone, enabled
 and sent `encrypted-one.txt` and `encrypted-two.txt` together. Both arrived and the phone's file
 hashes matched the originals above. This is one encrypted desktop-to-Pro-phone batch, not a broad
 camera or device compatibility result. An initial pairing attempt stalled on desktop after Android
-closed its confirmation quickly; a later attempt succeeded. A pairing-screen fix is being tested.
+closed its confirmation quickly; a later attempt succeeded. With updated builds, the owner confirmed
+that the first device could finish while the other was still waiting, and that scanning the first
+device's updated code again completed pairing. Clearer instructions and confirmation controls are
+being prepared; verify them on devices before treating the revised flow as accepted.
 
 The owner also encountered a misleading unverified screen after a restart while the phone could
 not resolve the staging hostname. Server-side aggregate checks showed the account remained verified;

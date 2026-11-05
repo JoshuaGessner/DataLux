@@ -123,7 +123,7 @@ class PairActivity : AppCompatActivity() {
             gravity = Gravity.CENTER
             visibility = View.GONE
         }
-        done = button("Done", R.drawable.ic_check_circle) { complete() }.apply {
+        done = button("Both devices paired", R.drawable.ic_check_circle) { complete() }.apply {
             visibility = View.GONE
         }
 
@@ -260,7 +260,7 @@ class PairActivity : AppCompatActivity() {
         val team = inviting
         status.text = when (flow.stage) {
             PairingFlow.Stage.Scanning -> status.text
-            PairingFlow.Stage.GotKey -> "Got it. Keep holding until both phones show this code."
+            PairingFlow.Stage.GotKey -> "Let the other device scan this code. When it says Paired, scan its updated code again."
             PairingFlow.Stage.HandingOver -> "Paired. Now handing over ${team?.name}: keep holding…"
             PairingFlow.Stage.WaitingForTeam -> "Paired. Now receiving the team: keep holding…"
             PairingFlow.Stage.Done -> finished()
@@ -290,7 +290,7 @@ class PairActivity : AppCompatActivity() {
                 // Do not store a partial handshake as an established pairing.
                 flow.key?.let { PairingStore.set(it) }
                 done.visibility = View.VISIBLE
-                "Paired. Keep both screens open until the other device also says paired. Check the codes match, then tap Done."
+                "Paired on this device. Keep this code visible until the other device also says Paired. Compare the numbers, then tap Both devices paired."
             }
         }
         buzz()

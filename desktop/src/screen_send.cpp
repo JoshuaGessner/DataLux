@@ -153,13 +153,14 @@ void App::SendScreen(float x0, float W, float H) {
         bottom = ry - 6;
     }
 
-    // A problem with the last files, until something else happens.
+    // Keep errors readable and let the user dismiss them.
     if (!problem_.empty()) {
-        const float tw = paint_.Measure(problem_, 14, Weight::kRegular) + 56;
+        const float tw = std::min(SW - 2 * margin, paint_.Measure(problem_, 14, Weight::kRegular) + 130);
         const SDL_FRect toast{L + (SW - tw) / 2, H - 104, tw, 40};
         paint_.RoundRect(toast, 20, th::kSurfaceHigh);
         paint_.Circle(toast.x + 22, toast.y + 20, 4, th::kError);
-        paint_.Text(problem_, toast.x + 36, toast.y + 11, 14, Weight::kRegular, th::kText);
+        paint_.Text(paint_.Fit(problem_, tw - 120, 14, Weight::kRegular), toast.x + 36, toast.y + 11, 14, Weight::kRegular, th::kText);
+        if (ui_.Button("dismiss-problem", {toast.x + tw - 78, toast.y + 4, 72, 32}, "Dismiss", false)) problem_.clear();
     }
 
     // The one line of instruction, where there's room for it.
