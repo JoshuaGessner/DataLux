@@ -30,6 +30,8 @@ import com.android.billingclient.api.Purchase
 import com.android.billingclient.api.QueryProductDetailsParams
 import com.android.billingclient.api.QueryPurchasesParams
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
+import com.google.android.material.textfield.TextInputEditText
+import com.google.android.material.textfield.TextInputLayout
 import dev.fileflow.ui.Ui
 import dev.fileflow.ui.Ui.button
 import dev.fileflow.ui.Ui.card
@@ -162,11 +164,12 @@ class ProActivity : AppCompatActivity() {
                 add(card(title("Return from verification?", 20f), space(6),
                     text("Verifying your email signs you out for security. Sign in again below to confirm it is complete. Your saved offline Pro access remains available.")))
                 add(space(12))
-            } else add(text(if (session == null) "Sign in to link Pro across your devices. An account is optional for free transfers."
-                else "Sign in again to sync your account. Your saved offline Pro access remains available."))
-            val email = EditText(this).apply {
+            }
+            val emailField = loginField().apply {
+                hint = "Email address"
+            }
+            val email = TextInputEditText(emailField.context).apply {
                 id = View.generateViewId()
-                hint = "Email"
                 inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS
                 setText(signInEmail ?: session?.email.orEmpty())
                 setSingleLine()
@@ -174,11 +177,15 @@ class ProActivity : AppCompatActivity() {
                 isEnabled = !busy
                 importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_YES
                 setAutofillHints(View.AUTOFILL_HINT_USERNAME, View.AUTOFILL_HINT_EMAIL_ADDRESS)
-                doAfterTextChanged { signInEmail = it?.toString() }
+                doAfterTextChanged { signInEmail = it?.toString(); emailField.error = null }
             }
-            val password = EditText(this).apply {
-                id = View.generateViewId()
+            emailField.addView(email)
+            val passwordField = loginField().apply {
                 hint = "Password"
+                endIconMode = TextInputLayout.END_ICON_PASSWORD_TOGGLE
+            }
+            val password = TextInputEditText(passwordField.context).apply {
+                id = View.generateViewId()
                 inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
                 setSingleLine()
                 imeOptions = EditorInfo.IME_ACTION_DONE
@@ -186,21 +193,19 @@ class ProActivity : AppCompatActivity() {
                 isSaveEnabled = false
                 importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_YES
                 setAutofillHints(View.AUTOFILL_HINT_PASSWORD)
+                doAfterTextChanged { passwordField.error = null }
             }
-            add(space(12))
-            add(text("Email").apply { labelFor = email.id })
-            add(email)
-            add(space(8))
-            add(text("Password").apply { labelFor = password.id })
-            add(password)
-            add(space(12))
+            passwordField.addView(password)
+            email.nextFocusForwardId = password.id
             lateinit var signIn: Button
             fun submitLogin() {
                 if (busy) return
-                val address = email.text.toString().trim()
-                val secret = password.text.toString()
-                if (address.isEmpty()) { email.error = "Enter your email."; email.requestFocus(); return }
-                if (secret.isEmpty()) { password.error = "Enter your password."; password.requestFocus(); return }
+                val address = email.text?.toString().orEmpty().trim()
+                val secret = password.text?.toString().orEmpty()
+                emailField.error = if (address.isEmpty()) "Enter your email." else null
+                passwordField.error = if (secret.isEmpty()) "Enter your password." else null
+                if (address.isEmpty()) { email.requestFocus(); return }
+                if (secret.isEmpty()) { password.requestFocus(); return }
                 signInEmail = address
                 val previous = ProAccount.session
                 loginInProgress = true
@@ -212,15 +217,15 @@ class ProActivity : AppCompatActivity() {
                 work("Sign in failed", beforeRender = { succeeded ->
                     val authenticated = succeeded || loginSavedSessionBeforeFailure(previous, ProAccount.session, ProAccount.requiresSignIn)
                     val autofill = getSystemService(AutofillManager::class.java)
-                    val matchesSubmitted = email.text.toString().trim() == address && password.text.toString() == secret
+                    val matchesSubmitted = email.text?.toString().orEmpty().trim() == address && password.text?.toString().orEmpty() == secret
                     if (authenticated && matchesSubmitted && !isFinishing && !isDestroyed) {
                         autofill?.commit()
                         // Let the autofill service observe the submitted value, then erase the
                         // detached field on the next main-thread turn.
-                        Handler(Looper.getMainLooper()).post { password.text.clear() }
+                        Handler(Looper.getMainLooper()).post { password.text?.clear() }
                     } else {
                         autofill?.cancel()
-                        password.text.clear()
+                        password.text?.clear()
                     }
                     loginInProgress = false
                 }) {
@@ -237,11 +242,15 @@ class ProActivity : AppCompatActivity() {
             password.setOnEditorActionListener { _, actionId, _ ->
                 if (actionId == EditorInfo.IME_ACTION_DONE) { submitLogin(); true } else false
             }
-            add(signIn)
-            add(button("Create a free account", style = Ui.Style.Text) {
-                openAccountPage("/app.html#account")
-            })
-            add(button("Forgot password?", style = Ui.Style.Text) { openAccountPage("/account.html#forgot") })
+            add(card(
+                title("Sign in", 20f), space(6),
+                text(if (session == null) "Link Pro to your account and use it on your other phones. Free transfers don’t require an account."
+                    else "Sign in again to sync your account. Your saved offline Pro access remains available."),
+                space(20), emailField, space(16), passwordField, space(16), signIn, space(4),
+                button("Forgot password?", style = Ui.Style.Text) { openAccountPage("/account.html#forgot") },
+                space(8), text("New to DataLux?"),
+                button("Create a free account", style = Ui.Style.Tonal) { openAccountPage("/app.html#account") },
+            ))
             if (session != null) add(button("Sign out on this device", style = Ui.Style.Text) { work("Sign out failed") { ProAccount.logout() } }
                 .apply { isEnabled = !busy })
         } else {
@@ -350,6 +359,12 @@ class ProActivity : AppCompatActivity() {
 
     private fun sectionHeading(label: String): View = title(label, 20f).apply {
         ViewCompat.setAccessibilityHeading(this, true)
+    }
+
+    private fun loginField() = TextInputLayout(this).apply {
+        boxBackgroundMode = TextInputLayout.BOX_BACKGROUND_OUTLINE
+        val radius = dp(16).toFloat()
+        setBoxCornerRadii(radius, radius, radius, radius)
     }
 
     private fun openAccountPage(path: String) {
