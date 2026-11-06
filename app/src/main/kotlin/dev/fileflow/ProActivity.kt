@@ -136,22 +136,22 @@ class ProActivity : AppCompatActivity() {
         body.removeAllViews()
         add(button("Back", style = Ui.Style.Text) { finish() })
         add(title("DataLux Pro", 30f))
+        if (notice.isNotEmpty()) {
+            add(space(12))
+            add(card(title("Account update", 18f), space(6), text(notice)))
+        }
         add(space(8))
         add(text("Pro is a one-time Android upgrade for your DataLux account. US launch price: $9.99. " +
             "Google Play shows the final checkout price. Restore on your other phones with the same account. " +
             "The desktop app includes every feature for free."))
-        add(space(12))
-        add(card(title("Free", 20f), text("Send and receive one file at a time, without daily caps or speed throttling. " +
-            "Compression, encryption, pairing, teams, and individual file actions stay free.")))
-        add(space(12))
-        add(card(title("Pro", 20f), text("Send and receive multi-file batches. Select, share, resend, or delete " +
-            "several received files together. Each receiving phone needs Pro for a batch, including one sent by a free desktop.")))
         intent.getStringExtra("feature")?.let { requested ->
             Entitlements.Feature.entries.firstOrNull { it.name == requested }?.let {
                 add(space(8)); add(text("${it.label} needs Pro on this phone. You can also transfer files one at a time for free."))
             }
         }
-        add(space(16))
+        add(space(24))
+        add(sectionHeading("Your account"))
+        add(space(8))
         val session = ProAccount.session
         if (!BuildConfig.STORE) {
             add(card(title("Source build", 20f), space(6), text("All features are included in this build. No purchase is needed.")))
@@ -245,12 +245,12 @@ class ProActivity : AppCompatActivity() {
             if (session != null) add(button("Sign out on this device", style = Ui.Style.Text) { work("Sign out failed") { ProAccount.logout() } }
                 .apply { isEnabled = !busy })
         } else {
-            add(text(session.email))
-            add(space(8))
             val pro = session.license?.let { ProLicense.verify(it, BuildConfig.LICENSE_PUBLIC_KEY, session.userId) } == true
             val status = ProAccount.status
             addVerification(session, status)
-            add(space(12))
+            add(space(24))
+            add(sectionHeading("Your access"))
+            add(space(8))
             add(card(title(if (pro) "Pro is active" else "Free", 20f), space(6), text(if (pro)
                 "Your verified Pro access is saved on this phone and works offline. Sign in to the same DataLux account on your other phones."
             else "This phone has Free access. Restore a previous Android Pro purchase or upgrade below.")))
@@ -262,19 +262,31 @@ class ProActivity : AppCompatActivity() {
                     .apply { isEnabled = ready && !busy })
                 if (BuildConfig.LICENSE_PUBLIC_KEY.isEmpty() || status?.billingEnabled == false)
                     add(text("Pro purchases aren’t available in this build yet. Free transfers continue to work."))
+                add(space(8))
             }
             add(button("Restore purchases", style = Ui.Style.Tonal) {
                 if (accountRefreshError == null && billing?.isReady == true) restore() else refresh()
             }.apply { isEnabled = !busy })
+            add(space(24))
+            add(sectionHeading("Account actions"))
+            add(space(8))
             add(button("Refresh account", style = Ui.Style.Text) { refresh() }.apply { isEnabled = !busy })
             add(button("Sign out on this device", style = Ui.Style.Text) { work("Sign out failed") { ProAccount.logout() } }
                 .apply { isEnabled = !busy })
-            add(space(16))
+            add(space(8))
             add(button("Delete DataLux account", style = Ui.Style.Text) { confirmDeletion(session.userId) }
                 .apply { isEnabled = !busy })
         }
+        add(space(20))
+        add(sectionHeading("What’s included"))
+        add(space(8))
+        add(card(title("Free", 20f), space(6), text("Send and receive one file at a time, without daily caps or speed throttling. " +
+            "Compression, encryption, pairing, teams, and individual file actions stay free.")))
+        add(space(12))
+        add(card(title("Pro", 20f), space(6), text("Send and receive multi-file batches. Select, share, resend, or delete " +
+            "several received files together. Each receiving phone needs Pro for a batch, including one sent by a free desktop.")))
+        add(space(16))
         add(button("Privacy & data", style = Ui.Style.Text) { openAccountPage("/privacy.html") })
-        if (notice.isNotEmpty()) { add(space(12)); add(text(notice)) }
     }
 
     private fun addVerification(session: ProSession, status: ProStatus?) {
@@ -335,6 +347,10 @@ class ProActivity : AppCompatActivity() {
     }
 
     private fun add(view: View) = body.addView(view, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
+
+    private fun sectionHeading(label: String): View = title(label, 20f).apply {
+        ViewCompat.setAccessibilityHeading(this, true)
+    }
 
     private fun openAccountPage(path: String) {
         runCatching { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(BuildConfig.ACCOUNT_ORIGIN + path))) }
