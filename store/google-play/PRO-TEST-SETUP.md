@@ -97,8 +97,10 @@ physical-device scenario; it does not establish purchase, restore or all account
 - The signed internal staging bundle [run 42144852409](https://github.com/JoshuaGessner/DataLux/actions/runs/42144852409)
   used native revision `05f6dfed569bef4c93f6ed84b49e2586c322f610`, code 8,
   `0.4.4-staging`, and SHA-256 `1d5d3013d0d0746546e39396c7104c3a700c34567687c29a55a042f0770d7adc`.
-  Google Play listed it as available to the existing internal track. New-product purchase and
-  device upgrade acceptance must be recorded only after they actually run.
+  Google Play listed it as available to the existing internal track. The owner reported updating
+  the existing installation and completing the Pro purchase. Staging recorded one granted,
+  acknowledged `datalux_pro` transaction and two revoked `fileflow_pro` transactions. Checkout
+  display details, restart/restore and the remaining device acceptance cases are still being checked.
 
 - The owner selected a staging-connected Play test build for Pro testing. The dedicated
   `prepare Play STAGING test bundle` workflow uses the same Play upload identity but a separate
