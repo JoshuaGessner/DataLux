@@ -26,7 +26,7 @@ were visually checked, while signed-build, optical and billing acceptance remain
 | `full-description.txt` | Full description | At most 4,000 characters; must match the uploaded build |
 | `release-notes.txt` | Internal-test release notes | Test coordinator must confirm the purchase-testing instructions |
 
-The owner-confirmed Play package is `dev.datalux`; `datalux_pro` is the draft replacement for
+The owner-confirmed Play package is `dev.datalux`; `datalux_pro` is the active replacement for
 the currently active `fileflow_pro` product, which remains supported during migration.
 Kotlin/JNI classes stay `dev.fileflow`. Historical APKs with the old package install separately;
 preserve files and sign in/re-pair rather than assuming private state moves to the new app.

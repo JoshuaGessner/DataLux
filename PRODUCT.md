@@ -90,8 +90,8 @@ license change. Website checkout is not implemented and is not required for this
    Track verified outcomes in [upload readiness](store/google-play/UPLOAD-READINESS.md).
 2. Establish stable upload signing, Play App Signing and a backed-up production license-signing key.
    Configure the protected `play-internal` environment; never put private keys into Git or bundles.
-3. `fileflow_pro` is active; its replacement `datalux_pro` is a draft with a permanent buy option,
-   US availability and $9.99 USD pricing. Activate and verify the replacement before retiring the old option.
+3. `fileflow_pro` and its replacement `datalux_pro` are active. The replacement has a permanent buy option,
+   US availability and $9.99 USD pricing. Verify it before retiring the old option.
    Configure least-privilege Publisher credentials and authenticated real-time purchase notifications.
 4. Test a signed store AAB on a separate staging service with test purchases. Production must reject
    test receipts. Keep the same stable production license public key in all production Android builds.

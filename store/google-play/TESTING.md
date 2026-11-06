@@ -10,7 +10,7 @@ For building and delivering successive Play releases, use the [coordinator runbo
 
 The current internal track is **0.4.3-staging / version code 7**, package **`dev.datalux`**, using
 the staging server and active legacy product **`fileflow_pro`**. The replacement `datalux_pro`
-is in draft and needs a compatible backend and newer Play build before testing. Recheck the uploaded
+is active and needs a compatible backend and newer Play build before testing. Recheck the uploaded
 version before each test. A debug install, CI pass or static alignment report does not establish
 Play billing, optical transfer or device acceptance. The owner completed purchase, same-phone account
 recovery and refund reconciliation; see [the staging record](PRO-TEST-SETUP.md) for the exact limits.
