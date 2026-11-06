@@ -61,21 +61,35 @@ std::vector<std::uint8_t> Text(std::size_t n) {
     return v;
 }
 
+// A modest optical blur; real camera focus, exposure and rolling shutter still need hardware tests.
+void Blur(std::vector<std::uint8_t>& image, int w, int h) {
+    const auto source = image;
+    for (int y = 1; y < h - 1; ++y) {
+        for (int x = 1; x < w - 1; ++x) {
+            int sum = 0;
+            for (int dy = -1; dy <= 1; ++dy)
+                for (int dx = -1; dx <= 1; ++dx) sum += source[static_cast<std::size_t>((y + dy) * w + x + dx)];
+            image[static_cast<std::size_t>(y * w + x)] = static_cast<std::uint8_t>(sum / 9);
+        }
+    }
+}
+
 // Runs a whole transfer of [envelope] into a Receiver; returns its result.
 std::optional<ReceiveResult> Transfer(const std::vector<std::uint8_t>& envelope, const std::string& link_name,
                                       std::vector<secure::SealKey> keys, bool require_encrypted, const std::filesystem::path& dir,
-                                      bool full_rgb = false) {
-    auto layout = FrameLayout::Create({120, 260}, LayoutConfig{});
+                                      bool full_rgb = false, GridGeometry grid = {120, 260}, bool soft_camera = false) {
+    auto layout = FrameLayout::Create(grid, LayoutForGrid(grid));
     EXPECT_TRUE(layout.ok());
     TransmitConfig tc;
     tc.profile = full_rgb ? ModulationProfile::kM5EightColor : ModulationProfile::kM0BinaryLuminance;
     auto tx = TransmitSession::Create(layout.value(), envelope, link_name, SessionIdFor(envelope, link_name), tc);
     EXPECT_TRUE(tx.ok());
     Receiver rx(std::move(keys), require_encrypted, dir);
-    CellMatrix cells(120, 260);
+    CellMatrix cells(grid.cols, grid.rows);
     std::uint64_t ts = 0;
     for (int i = 0; i < 2000 && !rx.Result(); ++i) {
-        ASSERT_TRUE(tx.value().Next(&cells).ok()) << i, std::nullopt;
+        // A 30 fps camera sees a 20 state/s sender with occasional repeated states.
+        if (!soft_camera || i % 3 != 1) ASSERT_TRUE(tx.value().Next(&cells).ok()) << i, std::nullopt;
         int w = 0;
         int h = 0;
         const auto before = rx.decoded();
@@ -88,7 +102,8 @@ std::optional<ReceiveResult> Transfer(const std::vector<std::uint8_t>& envelope,
             EXPECT_EQ(v.size(), luma.size());
             rx.Offer(luma, u, v, w, h, ts += 33'000'000, true);
         } else {
-            const auto luma = Draw(cells, &w, &h);
+            auto luma = Draw(cells, &w, &h);
+            if (soft_camera) Blur(luma, w, h);
             const std::vector<std::uint8_t> chroma(static_cast<std::size_t>(w / 2) * static_cast<std::size_t>(h / 2), 128);
             rx.Offer(luma, chroma, chroma, w, h, ts += 33'000'000);
         }
@@ -299,6 +314,18 @@ TEST_F(ReceiveTest, AFileArrivesWholeAndIsSaved) {
     ASSERT_TRUE(r->ok) << r->problem;
     ASSERT_EQ(r->files.size(), 1U);
     EXPECT_EQ(r->files[0].name, "notes.txt");
+    std::ifstream in(r->files[0].path, std::ios::binary);
+    const std::vector<std::uint8_t> got((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    EXPECT_EQ(got, data);
+}
+
+TEST_F(ReceiveTest, WebcamGridIsFoundAndSavesTheExactFile) {
+    const auto data = Text(1'000);
+    const auto env = PackEnvelope(data, "webcam.txt", CompressionMode::kOff).value().bytes;
+    const auto r = Transfer(env, "webcam.txt", {}, false, dir_, false, {84, 182}, true);
+    ASSERT_TRUE(r.has_value());
+    ASSERT_TRUE(r->ok) << r->problem;
+    ASSERT_EQ(r->files.size(), 1U);
     std::ifstream in(r->files[0].path, std::ios::binary);
     const std::vector<std::uint8_t> got((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
     EXPECT_EQ(got, data);

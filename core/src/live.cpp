@@ -78,7 +78,7 @@ Result<LiveReceiver> LiveReceiver::Create(GridGeometry grid, LiveConfig cfg) {
         !(cfg.eta_smoothing_s > 0.0)) {
         return Error::kValueOutOfRange;
     }
-    FF_ASSIGN_OR_RETURN(auto layout, FrameLayout::Create(grid, LayoutConfig{}));
+    FF_ASSIGN_OR_RETURN(auto layout, FrameLayout::Create(grid, LayoutForGrid(grid)));
     auto owned = std::make_unique<FrameLayout>(std::move(layout));
     std::vector<std::unique_ptr<FramePipeline>> pipelines;
     std::vector<std::unique_ptr<FrameDecoder>> decoders;

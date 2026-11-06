@@ -15,7 +15,7 @@ namespace fileflow::desktop {
 namespace {
 
 // The grids a sender might be using (the app's Grids.ALL), most likely first.
-constexpr GridGeometry kGrids[] = {{120, 260}, {144, 240}, {180, 390}};
+constexpr GridGeometry kGrids[] = {{120, 260}, {144, 240}, {180, 390}, {84, 182}};
 
 std::string SafeReceivedName(const std::string& name) {
     std::string safe = SanitiseFileName(name);

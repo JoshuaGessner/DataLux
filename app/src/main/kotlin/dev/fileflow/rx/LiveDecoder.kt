@@ -110,7 +110,7 @@ data class LiveStatus(
  * tries each of them, so nobody has to set the same grid on two phones.
  */
 object Grids {
-    val ALL: List<Pair<Int, Int>> = listOf(120 to 260, 144 to 240, 180 to 390)
+    val ALL: List<Pair<Int, Int>> = listOf(120 to 260, 144 to 240, 180 to 390, 84 to 182)
 }
 
 /**

@@ -492,7 +492,7 @@ TEST(LiveReceiver, OnlyTheSendersGridDecodesAPayloadSoTheGridCanBeDetected) {
     Rig rig(20000);
     rig.motion.shake = 1.0;
     std::vector<LiveReceiver> wrong;
-    for (GridGeometry g : {GridGeometry{120, 260}, GridGeometry{144, 240}, GridGeometry{180, 390},
+    for (GridGeometry g : {GridGeometry{120, 260}, GridGeometry{144, 240}, GridGeometry{180, 390}, GridGeometry{84, 182},
                            GridGeometry{120, 208}}) {
         auto rx = LiveReceiver::Create(g);
         ASSERT_TRUE(rx.ok());

@@ -61,6 +61,15 @@ struct LayoutConfig {
     std::uint32_t boundary_width = 1;
 };
 
+// The 84x182 webcam profile keeps the standard protected header in a wider band.
+// This geometry-specific choice is part of the optical format: transmitters and
+// receivers must construct the same layout, including on different platforms.
+[[nodiscard]] inline LayoutConfig LayoutForGrid(GridGeometry grid) noexcept {
+    LayoutConfig cfg;
+    if (grid.cols == 84 && grid.rows == 182) cfg.header_rows = 9;
+    return cfg;
+}
+
 // Precomputed role for every cell, plus the payload cell index list.
 // Built once per session, not per frame -- this is pure geometry.
 class FrameLayout {

@@ -86,7 +86,7 @@ std::optional<Prepared> Prepare(JNIEnv* env, jint cols, jint rows, jint nsym, ji
 
     const fileflow::GridGeometry geom{static_cast<std::uint32_t>(cols),
                                       static_cast<std::uint32_t>(rows)};
-    auto layout_r = fileflow::FrameLayout::Create(geom, fileflow::LayoutConfig{});
+    auto layout_r = fileflow::FrameLayout::Create(geom, fileflow::LayoutForGrid(geom));
     if (!layout_r.ok()) {
         ThrowIllegalState(env, std::string("layout: ") +
                                    std::string(fileflow::ErrorName(layout_r.error())));

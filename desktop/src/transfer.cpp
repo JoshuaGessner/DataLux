@@ -114,7 +114,8 @@ std::uint64_t Transfer::PassFrames() const {
 }
 
 std::unique_ptr<Transfer> Open(const Prepared& p, const Speed& speed, std::string* problem, std::size_t fec_nsym) {
-    auto layout = FrameLayout::Create({speed.cols, speed.rows}, LayoutConfig{});
+    const GridGeometry grid{speed.cols, speed.rows};
+    auto layout = FrameLayout::Create(grid, LayoutForGrid(grid));
     if (!layout.ok()) {
         *problem = "Layout: " + std::string(ErrorName(layout.error()));
         return nullptr;

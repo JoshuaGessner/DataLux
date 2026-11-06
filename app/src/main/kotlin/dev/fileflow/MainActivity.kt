@@ -817,6 +817,8 @@ class MainActivity : AppCompatActivity() {
                 },
                 space(8),
                 toggle.apply { layoutParams = matchWidth() },
+                space(8),
+                text("Webcam mode requires an up-to-date DataLux receiver.", 13f),
             ), matchWidth())
             addView(card(
                 LinearLayout(context).apply {
@@ -887,7 +889,8 @@ class MainActivity : AppCompatActivity() {
     ): MaterialButtonToggleGroup =
         object : MaterialButtonToggleGroup(this) {
             override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
-                val narrow = MeasureSpec.getSize(widthMeasureSpec) < dp(340) || resources.configuration.fontScale >= 1.3f
+                val narrowWidth = if (entries.size > 3) 440 else 340
+                val narrow = MeasureSpec.getSize(widthMeasureSpec) < dp(narrowWidth) || resources.configuration.fontScale >= 1.3f
                 val desired = if (narrow) LinearLayout.VERTICAL else LinearLayout.HORIZONTAL
                 if (orientation != desired) {
                     orientation = desired
@@ -1131,6 +1134,8 @@ class MainActivity : AppCompatActivity() {
                 "colours.\n\n" +
                 "Steady — black and white. Slower, but for a camera or lighting colour doesn't " +
                 "survive.\n\n" +
-                "Only the sending phone needs this setting; the receiver works it out."
+                "Webcam — a larger black-and-white pattern for a computer camera. The receiving " +
+                "device must have a version of DataLux that supports Webcam mode.\n\n" +
+                "Only the sending phone needs this setting; a compatible receiver works it out."
     }
 }

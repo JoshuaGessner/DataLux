@@ -24,6 +24,7 @@ enum class Speed(
     /** Colours per cell: 8 (three bits), 4 (two bits, F66), or 0 for black and white (one). */
     val colours: Int,
 ) {
+    Webcam("Webcam", 84, 182, 20.0, colours = 0),
     Steady("Steady", 120, 260, 20.0, colours = 0),
     Fast("Fast", 120, 260, 30.0, colours = 4),
     Fastest("Fastest", 120, 260, 30.0, colours = 8);
