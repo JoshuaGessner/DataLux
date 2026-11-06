@@ -797,6 +797,10 @@ class MainActivity : AppCompatActivity() {
             compression = it
             prefs.edit { putString(PREF_COMPRESSION, compression.name) }
         }
+        val brightnessToggle = segmented(SendBrightness.entries,
+            SendBrightness.named(prefs.getString(SendBrightness.PREFERENCE, null)), { it.label }) {
+            prefs.edit { putString(SendBrightness.PREFERENCE, it.name) }
+        }
         val body = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(16), dp(4), dp(16), dp(16))
@@ -823,6 +827,13 @@ class MainActivity : AppCompatActivity() {
                 },
                 space(8),
                 compressionToggle.apply { layoutParams = matchWidth() },
+            ), matchWidth(dp(12)))
+            addView(card(
+                title("Sending screen brightness", 18f),
+                space(6),
+                text("If the receiving camera sees a washed-out screen, try Medium or Low. This stays fixed during a transfer."),
+                space(8),
+                brightnessToggle.apply { layoutParams = matchWidth() },
             ), matchWidth(dp(12)))
             addView(row(R.drawable.ic_group, "Teams", "Encrypted sending to a whole group at once") {
                 if (Entitlements.check(this@MainActivity, Entitlements.Feature.Teams)) {

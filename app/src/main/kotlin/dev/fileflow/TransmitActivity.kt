@@ -80,12 +80,13 @@ class TransmitActivity : AppCompatActivity() {
         setShowWhenLocked(true)
         setTurnScreenOn(true)
 
-        // The screen must stay on and at a fixed brightness for the whole run. A dimming screen
-        // changes the transmitted luminance mid-transfer, which the receiver would see as the
-        // channel degrading (C01's responsibility, exercised here).
+        // Keep the chosen brightness fixed for the entire run; automatic dimming can otherwise
+        // change the optical channel mid-transfer. The setting also applies to share-sheet sends.
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        val prefs = getSharedPreferences(MainActivity::class.java.simpleName, MODE_PRIVATE)
+        val sendBrightness = SendBrightness.named(prefs.getString(SendBrightness.PREFERENCE, null))
         window.attributes = window.attributes.apply {
-            screenBrightness = WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_FULL
+            screenBrightness = sendBrightness.level
         }
 
         // Defaults are the forgiving grid: a launch from the share sheet carries no grid at all.
