@@ -14,6 +14,9 @@ installation and does not inherit private state from historical `dev.fileflow` b
 
 ## Current evidence
 
+The 0.4.5-staging/code 9 bundle is available on the same internal track. It adds settings and
+native autofill improvements; real-device acceptance of those changes is pending.
+
 On November 5, the staging-connected 0.4.4/code 8 bundle replaced code 7 on the existing internal
 track. It targets the new `datalux_pro` option and the schema-5 staging service. The owner reported
 updating and completing a $9.99 test purchase; staging recorded it as granted and acknowledged.

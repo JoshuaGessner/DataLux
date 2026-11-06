@@ -3,7 +3,7 @@
 Status: staging infrastructure and billing configured November 4, 2026; one test purchase,
 on-device Pro activation, two-file batches and a refund/revocation check passed. Fresh-device
 restore and additional batch acceptance remain outstanding. The Play internal track offers the staging-connected
-0.4.4/code 8 build. Production billing is separately configured with test receipts disabled.
+0.4.5/code 9 build. Production billing is separately configured with test receipts disabled.
 See [upload readiness](UPLOAD-READINESS.md)
 for the current Play candidate and [test cases](TESTING.md) for expected results.
 
@@ -87,6 +87,12 @@ and recovered the verified display when connectivity returned. This validates th
 physical-device scenario; it does not establish purchase, restore or all account edge cases.
 
 ## Isolation and build identity
+
+- The owner-reviewed [0.4.5-staging/code 9 build](https://github.com/JoshuaGessner/DataLux/actions/runs/42147831164)
+  was published to the existing internal track with settings and native autofill changes. Its source
+  revision is `f42ab2ea8126591dcc9b407e8ea897bd49bb105b` and bundle SHA-256 is
+  `28e05d7783f7c5660b34b6d55f133b32b2953d6ddde4f25616fc24a7fbaf9b4e`. Google Play reports it
+  available to internal testers; physical settings and password-manager acceptance is pending.
 
 - On November 5, the `datalux_pro` permanent buy option was activated in Play, US-only at $9.99.
   After the new purchase and sign-in recovery passed, the old `fileflow_pro` purchase option was
