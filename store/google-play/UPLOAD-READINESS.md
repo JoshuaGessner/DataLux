@@ -14,6 +14,10 @@ installation and does not inherit private state from historical `dev.fileflow` b
 
 ## Current evidence
 
+On November 5, the staging-connected 0.4.4/code 8 bundle replaced code 7 on the existing internal
+track. It targets the new `datalux_pro` option and the schema-5 staging service. Its signed artifact
+and previous-client compatibility were verified; the new-product purchase test is still pending.
+
 On November 4, the owner-approved [0.4.2/code 6 build](https://github.com/JoshuaGessner/DataLux/actions/runs/41963741276) succeeded from `fa0c1f7`. The downloaded bundle SHA-256 was `54fb5cdf924b746f090c7a39ce0a3fdaa74afde1a1b52e97b955cf8b861bdf74`, matching its verification report. Google Play shows this version available on the internal tester track. It uses the production origin and signer; production billing is configured with test purchases disabled, and staging accounts and grants are separate. Real production purchase/restore acceptance is not established. The code 5 entries below are historical.
 
 Later on November 4, the owner approved the staging-connected [0.4.3/code 7 bundle](PRO-TEST-SETUP.md),

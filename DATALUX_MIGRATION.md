@@ -1,5 +1,9 @@
 # DataLux rename and deployment
 
+> Historical migration record. The Play product is now transitioning from `fileflow_pro` to
+> `datalux_pro` with compatibility for original transactions; see
+> [the current test setup](store/google-play/PRO-TEST-SETUP.md).
+
 DataLux is the new public product name. The account origin is `https://datalux.anomalousinteractive.com`. Desktop and Android builds default to that origin; existing CMake caches and GitHub variables can override the defaults. Changing origins requires signing in again and does not transfer browser-local files.
 
 ## Compatibility

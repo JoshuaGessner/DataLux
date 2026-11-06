@@ -3,7 +3,7 @@
 Status: staging infrastructure and billing configured November 4, 2026; one test purchase,
 on-device Pro activation, two-file batches and a refund/revocation check passed. Fresh-device
 restore and additional batch acceptance remain outstanding. The Play internal track offers the staging-connected
-0.4.3/code 7 build. Production billing is separately configured with test receipts disabled.
+0.4.4/code 8 build. Production billing is separately configured with test receipts disabled.
 See [upload readiness](UPLOAD-READINESS.md)
 for the current Play candidate and [test cases](TESTING.md) for expected results.
 
@@ -87,6 +87,18 @@ and recovered the verified display when connectivity returned. This validates th
 physical-device scenario; it does not establish purchase, restore or all account edge cases.
 
 ## Isolation and build identity
+
+- On November 5, the `datalux_pro` permanent buy option was activated in Play, US-only at $9.99,
+  alongside the existing `fileflow_pro` option. Staging was backed up, restored to a separate
+  volume, and migrated to schema 5 from web revision `556be5c0f05ec71b13d02f2ce756f52e7bcecda4`;
+  the old client retained Pro after migration. The owner refunded the remaining active legacy test
+  order; the staging server independently rechecked and marked both legacy transactions revoked.
+  Production remained at schema 4 while staging acceptance was pending.
+- The signed internal staging bundle [run 42144852409](https://github.com/JoshuaGessner/DataLux/actions/runs/42144852409)
+  used native revision `05f6dfed569bef4c93f6ed84b49e2586c322f610`, code 8,
+  `0.4.4-staging`, and SHA-256 `1d5d3013d0d0746546e39396c7104c3a700c34567687c29a55a042f0770d7adc`.
+  Google Play listed it as available to the existing internal track. New-product purchase and
+  device upgrade acceptance must be recorded only after they actually run.
 
 - The owner selected a staging-connected Play test build for Pro testing. The dedicated
   `prepare Play STAGING test bundle` workflow uses the same Play upload identity but a separate
