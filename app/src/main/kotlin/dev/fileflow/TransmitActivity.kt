@@ -377,6 +377,9 @@ class TransmitActivity : AppCompatActivity() {
             // whole point is to present one state per refresh (or per Nth refresh). RENDERMODE_
             // WHEN_DIRTY would couple the cadence to our own scheduling instead of the panel's.
             renderMode = GLSurfaceView.RENDERMODE_CONTINUOUSLY
+            contentDescription = "Sending pattern. Tap to adjust sending screen brightness."
+            isFocusable = true
+            setOnClickListener { chooseSendBrightness() }
         }
         val fileBytes = t.fileBytes
         val perFrame = t.symbolBytes
@@ -416,7 +419,7 @@ class TransmitActivity : AppCompatActivity() {
             } else {
                 android.widget.Toast.makeText(
                     this,
-                    "Sending ${displayName ?: t.fileName} (${formatBytes(fileBytes)}). Back stops.",
+                    "Sending ${displayName ?: t.fileName}. Tap screen for brightness; Back stops.",
                     android.widget.Toast.LENGTH_LONG,
                 ).show()
             }
@@ -453,7 +456,11 @@ class TransmitActivity : AppCompatActivity() {
         // ~12% linear luminance against the frame's 100%: readable on black, and captured far
         // below the threshold that separates the frame's lit cells from its dark ones.
         val dim = "#70757A".toColorInt()
-        val meta = text("", 13f).apply { setTextColor(dim) }
+        val meta = text("", 13f).apply {
+            setTextColor(dim)
+            maxLines = 1
+            ellipsize = android.text.TextUtils.TruncateAt.END
+        }
         barMeta = meta
         val p = packed
         // Compressed: how much smaller, and the file's own rate at the link's best with the time
@@ -487,6 +494,9 @@ class TransmitActivity : AppCompatActivity() {
                     offerSlowerSpeed(t, slower, marginPx)
                 }.apply { setTextColor(dim) })
             }
+            addView(button("Brightness", style = dev.fileflow.ui.Ui.Style.Text) {
+                chooseSendBrightness()
+            }.apply { setTextColor(dim); minHeight = dp(40) })
             addView(button("Stop", R.drawable.ic_close, dev.fileflow.ui.Ui.Style.Text) { finish() }
                 .apply {
                     setTextColor(dim)
@@ -494,6 +504,24 @@ class TransmitActivity : AppCompatActivity() {
                     minHeight = dp(40)
                 })
         }
+    }
+
+    /** The optical frames continue underneath; the choice is applied when the dialog closes. */
+    private fun chooseSendBrightness() {
+        if (isFinishing || isDestroyed) return
+        val prefs = getSharedPreferences(MainActivity::class.java.simpleName, MODE_PRIVATE)
+        val current = SendBrightness.named(prefs.getString(SendBrightness.PREFERENCE, null))
+        val choices = SendBrightness.entries
+        com.google.android.material.dialog.MaterialAlertDialogBuilder(this)
+            .setTitle("Sending screen brightness")
+            .setSingleChoiceItems(choices.map { it.label }.toTypedArray(), choices.indexOf(current)) { dialog, index ->
+                val selected = choices[index]
+                prefs.edit().putString(SendBrightness.PREFERENCE, selected.name).apply()
+                window.attributes = window.attributes.apply { screenBrightness = selected.level }
+                dialog.dismiss()
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
     }
 
     private fun openPacked(file: Envelope.Packed, name: String, cols: Int, rows: Int, nsym: Int, colours: Int): Transmitter =
