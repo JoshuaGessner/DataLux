@@ -14,11 +14,12 @@ installation and does not inherit private state from historical `dev.fileflow` b
 
 ## Current evidence
 
-The [0.4.7-staging/code 11 build](https://github.com/JoshuaGessner/DataLux/actions/runs/42154319429)
-is available on the internal track. It was built from `5190a2baefd9a1769eca444e78f8e36880b70249`;
-its AAB SHA-256 is `c5dc4f495ef03d2a425f58709de725ade2ea841689c94ad47a1f5930b4783268`.
-It adds adjustable sending brightness, including during a transfer. Real-device optical
-acceptance is pending.
+The [0.4.9-staging/code 13 build](https://github.com/JoshuaGessner/DataLux/actions/runs/42314171042)
+is available on the internal track. It was built from `7160d051a02b71e7de023c7689eded7b2eac59cc`;
+its AAB SHA-256 is `8bb94e201073f1b2bedde0ef9c5bbb679719c6572a75776b13fb569d1b7fa51c`.
+It includes brighter small-file padding and the experimental Webcam sending profile. The padding
+change passed a desktop-to-phone physical test on all three desktop speeds, but the Play-installed
+build and the phone-to-desktop path still require physical acceptance.
 
 The earlier [0.4.6-staging/code 10 build](https://github.com/JoshuaGessner/DataLux/actions/runs/42151916912)
 was previously available on the internal track. It was built from `ee92163e07a2ca67a2ade8d936f08bff68815570`;
@@ -40,6 +41,9 @@ On November 4, the owner-approved [0.4.2/code 6 build](https://github.com/Joshua
 Later on November 4, the owner approved the staging-connected [0.4.3/code 7 bundle](PRO-TEST-SETUP.md),
 which Google Play shows available on the internal tester track. The preceding code 6 track status is
 historical. This is a test-only build; never promote its staging trust or accounts to production.
+
+The table below preserves an earlier audit; consult the current evidence above and the Console for
+the latest build and test status.
 
 | Item | Recorded state |
 | --- | --- |
