@@ -102,11 +102,6 @@ void App::PairFinished() {
     auto& f = *pair_->flow;
     using Mode = secure::PairingFlow::Mode;
     if (pair_->mode == Mode::kPair && f.key()) {
-        paired_ = *f.key();
-        settings_.encrypted = true;
-        settings_.seal_to.clear();
-        problem_.clear();
-        settings_.Save();
         pair_->outcome = "Paired here. Keep this code visible until the phone is paired.";
     } else if (pair_->mode == Mode::kJoin && f.joined()) {
         teams_.Add(*f.joined());
@@ -459,7 +454,18 @@ void App::PairScreen(float W, float H) {
     y += 40;
     if (p.finished) {
         const bool pairing = p.mode == Mode::kPair;
-        if (ui_.Button("pair-done", {rx, y, pairing ? 220.0F : 140.0F, 46}, pairing ? "Both devices paired" : "Done", true)) pair_.reset();
+        if (ui_.Button("pair-done", {rx, y, pairing ? 220.0F : 140.0F, 46}, pairing ? "Both devices paired" : "Done", true)) {
+            if (pairing && f.key()) {
+                paired_ = *f.key();
+                settings_.encrypted = true;
+                settings_.seal_to.clear();
+                problem_.clear();
+                settings_.Save();
+            }
+            pair_.reset();
+        } else if (pairing && ui_.Button("pair-cancel", {rx, y + 54, 140, 46}, "Cancel", false)) {
+            pair_.reset();
+        }
     } else if (ui_.Button("pair-cancel", {rx, y, 140, 46}, "Cancel", false)) {
         pair_.reset();
     }

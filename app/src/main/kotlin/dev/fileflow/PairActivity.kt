@@ -23,6 +23,7 @@ import android.view.View
 import android.view.WindowManager
 import android.widget.ImageView
 import android.widget.LinearLayout
+import android.widget.ScrollView
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
@@ -44,6 +45,7 @@ import dev.fileflow.secure.Team
 import dev.fileflow.secure.Teams
 import dev.fileflow.ui.Ui.Style
 import dev.fileflow.ui.Ui.button
+import dev.fileflow.ui.Ui.capped
 import dev.fileflow.ui.Ui.dp
 import dev.fileflow.ui.Ui.helpButton
 import dev.fileflow.ui.Ui.matchWidth
@@ -56,8 +58,8 @@ import dev.fileflow.ui.Ui.title
  *
  * Both phones run this same screen, held FACE TO FACE: each shows its QR code and reads the other's
  * with its front camera, so one gesture exchanges both keys. When a phone has read its peer's key
- * it shows the six-digit code the two must agree on; when it also sees that the peer has read its
- * key, it closes by itself.
+ * it shows the six-digit code the two must agree on. Once the peer has read its key as well,
+ * ordinary pairing waits for the user to compare the codes and confirm on both devices.
  *
  * The same screen hands out a team's key (TeamInvite). The leader opens it to invite
  * ([EXTRA_INVITE]), the new member to join ([EXTRA_JOIN]); they pair exactly as above, then the
@@ -145,14 +147,14 @@ class PairActivity : AppCompatActivity() {
                 addView(if (forTeam) helpButton("Teams", TEAM_HELP) else helpButton("Pairing", PAIR_HELP))
             })
             addView(space(12))
-            addView(qr, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f))
+            addView(qr, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(240)))
             addView(space(16))
             addView(status)
             addView(code, matchWidth(dp(8)))
             addView(done, matchWidth(dp(16)))
             addView(button("Cancel", style = Style.Text) { finish() }, matchWidth(dp(4)))
         }
-        setContentView(col.padForSystemBars())
+        setContentView(ScrollView(this).apply { addView(capped(col)) }.padForSystemBars())
         if (joining) status.text = "Hold this phone face to face with the team leader's, which shows Invite."
         if (inviting == null && intent.hasExtra(EXTRA_INVITE)) {
             status.text = "That team is no longer on this phone."
@@ -287,8 +289,6 @@ class PairActivity : AppCompatActivity() {
                 "Joined ${joined.name}. Hold a moment longer so the leader's phone sees it."
             }
             else -> {
-                // Do not store a partial handshake as an established pairing.
-                flow.key?.let { PairingStore.set(it) }
                 done.visibility = View.VISIBLE
                 "Paired on this device. Keep this code visible until the other device also says Paired. Compare the numbers, then tap Both devices paired."
             }
@@ -306,7 +306,8 @@ class PairActivity : AppCompatActivity() {
 
     private fun complete() {
         if (finishing) return
-        if (flow.stage != PairingFlow.Stage.Done || (!forTeam && PairingStore.current() == null)) return
+        if (flow.stage != PairingFlow.Stage.Done) return
+        if (!forTeam) PairingStore.set(flow.key ?: return)
         finishing = true
         if (!forTeam || flow.stage == PairingFlow.Stage.Done) setResult(RESULT_OK)
         finish()

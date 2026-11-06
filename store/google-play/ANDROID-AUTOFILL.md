@@ -5,6 +5,9 @@ selected autofill service. The form stays attached during authentication and com
 autofill session only after sign-in succeeds; failed or abandoned sign-ins cancel it. This
 supports installed password managers through Android Autofill, but provider behavior must be
 tested on real devices with the user's chosen service. It does not implement Google sign-in.
+On the owner's Galaxy phone, both Samsung's provider and Google Password Manager have been
+confirmed to interact with the Play-installed staging sign-in after selecting each provider
+in the phone's autofill settings. Cross-device password sharing has not been verified.
 
 The Play staging and production builds currently share the same package and app-signing
 identity, but use separate account databases. Do not associate the app and both web origins
