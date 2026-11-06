@@ -8,6 +8,9 @@ import android.os.Looper
 import android.text.InputType
 import android.util.Log
 import android.view.View
+import android.view.WindowManager
+import android.view.autofill.AutofillManager
+import android.view.inputmethod.EditorInfo
 import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
@@ -15,6 +18,8 @@ import android.widget.ScrollView
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.widget.doAfterTextChanged
 import androidx.core.view.WindowCompat
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import com.android.billingclient.api.BillingClient
 import com.android.billingclient.api.BillingClientStateListener
 import com.android.billingclient.api.BillingFlowParams
@@ -65,6 +70,9 @@ class ProActivity : AppCompatActivity() {
     private var refreshingAccount = false
     private var accountRefreshError: String? = null
     private var signInEmail: String? = null
+    // The form must stay attached until authentication succeeds so Android's autofill
+    // service can capture the actual submitted credentials before the account screen replaces it.
+    private var loginInProgress = false
     private var verificationRequestInFlight = false
     private val verificationTimer = Handler(Looper.getMainLooper())
     private var verificationButton: Button? = null
@@ -85,11 +93,22 @@ class ProActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         WindowCompat.setDecorFitsSystemWindows(window, false)
+        @Suppress("DEPRECATION")
+        window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
         body = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(20), dp(20), dp(20), dp(24))
         }
-        setContentView(ScrollView(this).apply { addView(capped(body)) }.padForSystemBars())
+        setContentView(ScrollView(this).apply {
+            clipToPadding = false
+            addView(capped(body))
+            ViewCompat.setOnApplyWindowInsetsListener(this) { view, insets ->
+                val system = insets.getInsets(SYSTEM_INSETS)
+                val keyboard = insets.getInsets(WindowInsetsCompat.Type.ime())
+                view.setPadding(system.left, system.top, system.right, maxOf(system.bottom, keyboard.bottom))
+                insets
+            }
+        })
         render()
         if (ProAccount.session != null && !ProAccount.requiresSignIn) refresh()
     }
@@ -105,12 +124,14 @@ class ProActivity : AppCompatActivity() {
 
     override fun onPause() {
         verificationTimer.removeCallbacks(verificationTick)
+        if (loginInProgress && isFinishing) getSystemService(AutofillManager::class.java)?.cancel()
         super.onPause()
     }
 
     private fun render() {
         if (Looper.myLooper() != Looper.getMainLooper()) { runOnUiThread { render() }; return }
         if (isFinishing || isDestroyed) return
+        if (loginInProgress) return
         verificationButton = null
         body.removeAllViews()
         add(button("Back", style = Ui.Style.Text) { finish() })
@@ -144,31 +165,65 @@ class ProActivity : AppCompatActivity() {
             } else add(text(if (session == null) "Sign in to link Pro across your devices. An account is optional for free transfers."
                 else "Sign in again to sync your account. Your saved offline Pro access remains available."))
             val email = EditText(this).apply {
+                id = View.generateViewId()
                 hint = "Email"
-                setText(signInEmail ?: session?.email.orEmpty())
                 inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS
+                setText(signInEmail ?: session?.email.orEmpty())
                 setSingleLine()
+                imeOptions = EditorInfo.IME_ACTION_NEXT
                 isEnabled = !busy
                 importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_YES
-                setAutofillHints(View.AUTOFILL_HINT_EMAIL_ADDRESS)
+                setAutofillHints(View.AUTOFILL_HINT_USERNAME, View.AUTOFILL_HINT_EMAIL_ADDRESS)
                 doAfterTextChanged { signInEmail = it?.toString() }
             }
             val password = EditText(this).apply {
+                id = View.generateViewId()
                 hint = "Password"
                 inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
                 setSingleLine()
+                imeOptions = EditorInfo.IME_ACTION_DONE
                 isEnabled = !busy
+                isSaveEnabled = false
+                importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_YES
                 setAutofillHints(View.AUTOFILL_HINT_PASSWORD)
             }
+            add(space(12))
+            add(text("Email").apply { labelFor = email.id })
             add(email)
+            add(space(8))
+            add(text("Password").apply { labelFor = password.id })
             add(password)
-            add(button(if (busy) "Signing in…" else "Sign in") {
+            add(space(12))
+            lateinit var signIn: Button
+            fun submitLogin() {
+                if (busy) return
                 val address = email.text.toString().trim()
                 val secret = password.text.toString()
+                if (address.isEmpty()) { email.error = "Enter your email."; email.requestFocus(); return }
+                if (secret.isEmpty()) { password.error = "Enter your password."; password.requestFocus(); return }
                 signInEmail = address
-                password.text.clear()
                 val previous = ProAccount.session
-                work("Sign in failed") {
+                loginInProgress = true
+                signIn.isEnabled = false
+                signIn.text = "Signing in…"
+                // Keep focus and both views intact while the request finishes. The user or
+                // autofill provider can still edit the fields, so only save if they still
+                // contain the credentials actually submitted to the server.
+                work("Sign in failed", beforeRender = { succeeded ->
+                    val authenticated = succeeded || loginSavedSessionBeforeFailure(previous, ProAccount.session, ProAccount.requiresSignIn)
+                    val autofill = getSystemService(AutofillManager::class.java)
+                    val matchesSubmitted = email.text.toString().trim() == address && password.text.toString() == secret
+                    if (authenticated && matchesSubmitted && !isFinishing && !isDestroyed) {
+                        autofill?.commit()
+                        // Let the autofill service observe the submitted value, then erase the
+                        // detached field on the next main-thread turn.
+                        Handler(Looper.getMainLooper()).post { password.text.clear() }
+                    } else {
+                        autofill?.cancel()
+                        password.text.clear()
+                    }
+                    loginInProgress = false
+                }) {
                     try {
                         ProAccount.login(address, secret)
                     } catch (error: Exception) {
@@ -177,7 +232,12 @@ class ProActivity : AppCompatActivity() {
                         throw error
                     }
                 }
-            }.apply { isEnabled = !busy })
+            }
+            signIn = button(if (busy) "Signing in…" else "Sign in") { submitLogin() }.apply { isEnabled = !busy }
+            password.setOnEditorActionListener { _, actionId, _ ->
+                if (actionId == EditorInfo.IME_ACTION_DONE) { submitLogin(); true } else false
+            }
+            add(signIn)
             add(button("Create a free account", style = Ui.Style.Text) {
                 openAccountPage("/app.html#account")
             })
@@ -331,13 +391,14 @@ class ProActivity : AppCompatActivity() {
         dialog.show()
     }
 
-    private fun work(failure: String, success: String = "Account updated.", action: () -> Unit) {
+    private fun work(failure: String, success: String = "Account updated.", beforeRender: (Boolean) -> Unit = {}, action: () -> Unit) {
         if (busy || worker.isShutdown) return
         busy = true
         render()
         worker.execute {
             val result = runCatching(action)
             runOnUiThread {
+                beforeRender(result.isSuccess)
                 busy = false
                 val wasRefreshingAccount = refreshingAccount
                 refreshingAccount = false
