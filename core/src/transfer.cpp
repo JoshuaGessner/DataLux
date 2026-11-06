@@ -275,7 +275,16 @@ Result<FileTransmitter> FileTransmitter::Create(std::span<const std::uint8_t> pa
         p.symbol_size = symbol_size;
         p.session_seed = session_id ^ b;
 
-        auto enc = FountainEncoder::Create(p, payload.subspan(off, len));
+        // The unused tail of the last partial symbol is outside the file, so the receiver
+        // discards it. Fill that tail with ones to brighten small-file frames while retaining
+        // zero for whole padding symbols, which existing receivers prime without receiving.
+        const auto block = payload.subspan(off, len);
+        std::vector<std::uint8_t> padded;
+        if (len % symbol_size != 0) {
+            padded.assign(block.begin(), block.end());
+            padded.resize(len + (symbol_size - len % symbol_size), 0xFF);
+        }
+        auto enc = FountainEncoder::Create(p, padded.empty() ? block : std::span<const std::uint8_t>(padded));
         if (!enc.ok()) return enc.error();
         encoders.push_back(std::move(enc).value());
         first_padding.push_back(FirstPaddingSymbol(m, b));

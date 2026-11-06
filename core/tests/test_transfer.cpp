@@ -279,6 +279,40 @@ TEST(FileManifest, ArbitraryGarbageNeverCrashes) {
 
 // ---------------------------------------------------------------- transfer
 
+TEST(Transfer, BrightPartialSymbolPaddingPreservesFileAndZeroPriming) {
+    // A partial last symbol is transmitted; completely empty symbols are still primed as zero
+    // by existing receivers. Exercise both systematic and repair-only recovery.
+    for (const std::size_t bytes : {std::size_t{1}, std::size_t{67}, std::size_t{256},
+                                    std::size_t{513}, std::size_t{2049}}) {
+        const auto payload = Payload(bytes);
+        for (const bool repair_only : {false, true}) {
+            auto tx = FileTransmitter::Create(payload, "small.bin", 0x1234, 256, 8);
+            ASSERT_TRUE(tx.ok());
+            auto rx = FileReceiver::Create(tx.value().manifest());
+            ASSERT_TRUE(rx.ok());
+
+            for (std::size_t frame = 0; frame < 1000 && !rx.value().complete(); ++frame) {
+                auto fp = tx.value().NextFrame();
+                if (fp.header.is_manifest()) continue;
+                const auto block_offset = static_cast<std::size_t>(fp.header.block_id) * 8 * 256;
+                const auto block_bytes = std::min(bytes - block_offset, std::size_t{8 * 256});
+                if (fp.header.esi < 8 && fp.header.esi * 256 < block_bytes &&
+                    (fp.header.esi + 1) * 256 > block_bytes) {
+                    const auto tail = static_cast<std::ptrdiff_t>(block_bytes % 256);
+                    EXPECT_TRUE(std::all_of(fp.data.begin() + tail, fp.data.end(),
+                                            [](std::uint8_t b) { return b == 0xFF; }));
+                }
+                if (repair_only && fp.header.esi < 8) continue;
+                rx.value().Ingest(fp.header, fp.data);
+            }
+            ASSERT_TRUE(rx.value().complete()) << "bytes=" << bytes << " repair=" << repair_only;
+            auto out = rx.value().Finish();
+            ASSERT_TRUE(out.ok());
+            EXPECT_EQ(out.value(), payload);
+        }
+    }
+}
+
 TEST(Transfer, CleanChannelRoundTrip) {
     const auto payload = Payload(50000);
     auto tx = FileTransmitter::Create(payload, "data.bin", 0x1234, 256, 32);

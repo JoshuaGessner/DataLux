@@ -193,7 +193,7 @@ TEST(Session, NativeAndWasmShareGoldenOpticalCells) {
               "95eec4355cf3f1a59be7e192392f8d60b0a557e7de0729ef0704733f02c9e8f9");
     ASSERT_TRUE(tx.value().Next(&cells).ok());
     EXPECT_EQ(ToHex(Sha256::Of(cells.data())),
-              "88479d55572fea1fd1f0d6f0fe45c4ef4523a5e9d53a2b31598515024f61d8bd");
+              "910ce6fceec210f20c6cdceb632cb2f491fc49a67ffb670207b8092678b2fb42");
 }
 
 TEST(Session, RejectsContentHintThatWouldOverflowTheManifestFrame) {

@@ -79,6 +79,13 @@ that the first device could finish while the other was still waiting, and that s
 device's updated code again completed pairing. Clearer instructions and confirmation controls are
 being prepared; verify them on devices before treating the revised flow as accepted.
 
+On November 6, a local desktop build with bright padding in the final partial data symbol sent a
+67-byte fixture to the Play-installed 0.4.7 staging phone. The owner reported success at Steady,
+Fast and Fastest; all three saved copies matched the source SHA-256. Fast's four-colour palette
+represents the all-one padding as yellow; the other tested profiles display it as white. This
+validates desktop-to-phone for this fixture and device only. Phone-to-desktop, larger files,
+different lighting and the Play-distributed version of the changed sender remain to be tested.
+
 The owner also encountered a misleading unverified screen after a restart while the phone could
 not resolve the staging hostname. Server-side aggregate checks showed the account remained verified;
 switching to cellular restored verified status. On the updated staging APK, the owner confirmed
