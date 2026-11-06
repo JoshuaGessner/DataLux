@@ -476,8 +476,9 @@ class ProActivity : AppCompatActivity() {
             return
         }
         if (busy) { deferredPurchases = expectedAccountId to purchases; return }
-        val productId = ProAccount.status?.productId ?: return
-        val matching = purchases.filter { productId in it.products }
+        if (ProAccount.status?.billingEnabled != true) return
+        val supportedProducts = setOf(CURRENT_PRO_PRODUCT, LEGACY_PRO_PRODUCT)
+        val matching = purchases.filter { purchase -> purchase.products.count { it in supportedProducts } == 1 }
         val pending = matching.any { it.purchaseState == Purchase.PurchaseState.PENDING }
         val completed = matching.filter { it.purchaseState == Purchase.PurchaseState.PURCHASED }
         work("Purchase verification failed", if (pending && completed.isEmpty())
@@ -485,7 +486,7 @@ class ProActivity : AppCompatActivity() {
             for (purchase in completed) {
                 val identity = "$expectedAccountId:${purchase.purchaseToken}"
                 if (identity !in verifiedPurchases) {
-                    ProAccount.claim(productId, purchase.purchaseToken, expectedAccountId)
+                    ProAccount.claim(purchase.products.single { it in supportedProducts }, purchase.purchaseToken, expectedAccountId)
                     verifiedPurchases += identity
                 }
             }

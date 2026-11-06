@@ -43,6 +43,11 @@ data class ProStatus(
 internal fun requireAccountBoolean(value: Any?): Boolean =
     value as? Boolean ?: throw AccountError("The account response could not be verified. Please try again.")
 
+internal const val CURRENT_PRO_PRODUCT = "datalux_pro"
+internal const val LEGACY_PRO_PRODUCT = "fileflow_pro"
+internal fun canSellCurrentPro(enabled: Boolean, advertisedProduct: String?): Boolean =
+    enabled && advertisedProduct == CURRENT_PRO_PRODUCT
+
 /** Small HTTPS account client. Called on a worker thread, never by the optical transfer path. */
 object ProAccount {
     private lateinit var storage: AtomicFile
@@ -172,8 +177,11 @@ object ProAccount {
         if (pro && !ProLicense.verify(license!!, BuildConfig.LICENSE_PUBLIC_KEY, previous.userId))
             throw AccountError("Pro access could not be verified. Please try again later.")
         val billing = body.getJSONObject("billing")
-        if (billing.getString("productId") != "fileflow_pro") throw AccountError("This Pro product is not supported by this version.")
-        val billingEnabled = requireAccountBoolean(billing.opt("enabled"))
+        if (billing.getString("productId") != LEGACY_PRO_PRODUCT) throw AccountError("This Pro product is not supported by this version.")
+        // An older backend cannot verify new purchases. Keep account access working, but do not
+        // start checkout until the server explicitly advertises support for the new product.
+        val billingEnabled = canSellCurrentPro(requireAccountBoolean(billing.opt("enabled")),
+            billing.optString("currentProductId"))
         val accountId = body.getString("purchaseAccountId")
         if (accountId != expectedPurchaseAccountId()) throw AccountError("The account response could not be verified.")
         val emailVerified = requireAccountBoolean(body.opt("emailVerified"))
@@ -186,7 +194,7 @@ object ProAccount {
         persist(next)
         session = next
         Entitlements.useVerifiedLicense(license, next.userId)
-        return ProStatus(pro, billingEnabled && emailVerified, billing.getString("productId"), accountId,
+        return ProStatus(pro, billingEnabled && emailVerified, CURRENT_PRO_PRODUCT, accountId,
             emailVerified, verificationAvailable, resendAt).also { status = it }
     }
 

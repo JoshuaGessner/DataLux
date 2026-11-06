@@ -17,12 +17,19 @@ class ProVerificationStateTest {
     }
 
     @Test fun checkoutRequiresCurrentVerifiedAndEnabledAccountStatus() {
-        val verified = ProStatus(false, true, "fileflow_pro", "id", true, true)
+        val verified = ProStatus(false, true, CURRENT_PRO_PRODUCT, "id", true, true)
         assertFalse(checkoutAccountReady(null, refreshFailed = false))
         assertFalse(checkoutAccountReady(verified, refreshFailed = true))
         assertFalse(checkoutAccountReady(verified.copy(emailVerified = false), refreshFailed = false))
         assertFalse(checkoutAccountReady(verified.copy(billingEnabled = false), refreshFailed = false))
         assertTrue(checkoutAccountReady(verified, refreshFailed = false))
+    }
+
+    @Test fun newProductRequiresExplicitServerCapability() {
+        assertFalse(canSellCurrentPro(true, null))
+        assertFalse(canSellCurrentPro(true, LEGACY_PRO_PRODUCT))
+        assertFalse(canSellCurrentPro(false, CURRENT_PRO_PRODUCT))
+        assertTrue(canSellCurrentPro(true, CURRENT_PRO_PRODUCT))
     }
 
     @Test fun partialLoginIsDistinctFromBadCredentialsOrExpiredSession() {
