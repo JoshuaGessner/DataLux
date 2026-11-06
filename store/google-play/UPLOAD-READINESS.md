@@ -14,11 +14,17 @@ installation and does not inherit private state from historical `dev.fileflow` b
 
 ## Current evidence
 
-The [0.4.6-staging/code 10 build](https://github.com/JoshuaGessner/DataLux/actions/runs/42151916912)
-is available on the internal track. It was built from `ee92163e07a2ca67a2ade8d936f08bff68815570`;
+The [0.4.7-staging/code 11 build](https://github.com/JoshuaGessner/DataLux/actions/runs/42154319429)
+is available on the internal track. It was built from `5190a2baefd9a1769eca444e78f8e36880b70249`;
+its AAB SHA-256 is `c5dc4f495ef03d2a425f58709de725ade2ea841689c94ad47a1f5930b4783268`.
+It adds adjustable sending brightness, including during a transfer. Real-device optical
+acceptance is pending.
+
+The earlier [0.4.6-staging/code 10 build](https://github.com/JoshuaGessner/DataLux/actions/runs/42151916912)
+was previously available on the internal track. It was built from `ee92163e07a2ca67a2ade8d936f08bff68815570`;
 its AAB SHA-256 is `99449718b6d5909fffe8ec268cbf4a3bf76ba3e98139f214bb30d20b11c3979b`.
-It adds the Pro sign-in layout and ordinary pairing confirmation changes. Real-device
-acceptance of this version is pending. Team invitations still exchange the team key before
+It added the Pro sign-in layout and ordinary pairing confirmation changes. The owner confirmed
+the new sign-in layout and Google Password Manager worked. Team invitations still exchange the team key before
 human code confirmation and need a coordinated security fix before broader testing or launch.
 
 The earlier 0.4.5-staging/code 9 bundle added settings and native autofill improvements. The owner
