@@ -800,6 +800,10 @@ class MainActivity : AppCompatActivity() {
         val body = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(16), dp(4), dp(16), dp(16))
+            addView(title("Transfer preferences", 16f).apply {
+                androidx.core.view.ViewCompat.setAccessibilityHeading(this, true)
+                setPadding(dp(4), dp(8), dp(4), dp(12))
+            }, matchWidth())
             addView(card(
                 LinearLayout(context).apply {
                     orientation = LinearLayout.HORIZONTAL
@@ -825,16 +829,24 @@ class MainActivity : AppCompatActivity() {
                     startActivity(Intent(this@MainActivity, TeamsActivity::class.java))
                 }
             }, matchWidth(dp(12)))
+            addView(title("Account & Pro", 16f).apply {
+                androidx.core.view.ViewCompat.setAccessibilityHeading(this, true)
+                setPadding(dp(4), dp(24), dp(4), dp(12))
+            }, matchWidth())
             addView(row(R.drawable.ic_tune, "DataLux Pro", "Your account, purchases, and offline Pro access") {
                 startActivity(Intent(this@MainActivity, ProActivity::class.java))
-            }, matchWidth(dp(12)))
-            addView(row(R.drawable.ic_help, "How it works", null) {
-                showHelp("How it works", HOW_IT_WORKS)
-            }, matchWidth(dp(12)))
+            }, matchWidth())
             addView(row(R.drawable.ic_help, "Privacy & accounts", "Your data, verification, and account deletion") {
                 runCatching { startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse(BuildConfig.ACCOUNT_ORIGIN + "/privacy.html"))) }
                     .onFailure { android.widget.Toast.makeText(this@MainActivity, "Open ${BuildConfig.ACCOUNT_ORIGIN}/privacy.html in your browser.", android.widget.Toast.LENGTH_LONG).show() }
             }, matchWidth(dp(12)))
+            addView(title("Help & support", 16f).apply {
+                androidx.core.view.ViewCompat.setAccessibilityHeading(this, true)
+                setPadding(dp(4), dp(24), dp(4), dp(12))
+            }, matchWidth())
+            addView(row(R.drawable.ic_help, "How it works", null) {
+                showHelp("How it works", HOW_IT_WORKS)
+            }, matchWidth())
             addView(row(R.drawable.ic_tune, "Device check", "What this phone's camera and screen can do") {
                 startActivity(Intent(this@MainActivity, ProbeActivity::class.java))
             }, matchWidth(dp(8)))
@@ -862,7 +874,21 @@ class MainActivity : AppCompatActivity() {
     private fun <T> segmented(
         entries: List<T>, selected: T, label: (T) -> String, onPick: (T) -> Unit,
     ): MaterialButtonToggleGroup =
-        MaterialButtonToggleGroup(this).apply {
+        object : MaterialButtonToggleGroup(this) {
+            override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+                val narrow = MeasureSpec.getSize(widthMeasureSpec) < dp(340) || resources.configuration.fontScale >= 1.3f
+                val desired = if (narrow) LinearLayout.VERTICAL else LinearLayout.HORIZONTAL
+                if (orientation != desired) {
+                    orientation = desired
+                    for (index in 0 until childCount) {
+                        val child = getChildAt(index)
+                        child.layoutParams = if (narrow) LinearLayout.LayoutParams(MATCH, WRAP)
+                            else LinearLayout.LayoutParams(0, WRAP, 1f)
+                    }
+                }
+                super.onMeasure(widthMeasureSpec, heightMeasureSpec)
+            }
+        }.apply {
             isSingleSelection = true
             isSelectionRequired = true
             entries.forEach { s ->
