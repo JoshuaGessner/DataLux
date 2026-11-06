@@ -93,7 +93,7 @@ Recheck the final signed candidate and deployed server before completing the for
 
 Privacy URL: `https://datalux.anomalousinteractive.com/privacy.html`.
 Deletion URL: `https://datalux.anomalousinteractive.com/account.html#delete`.
-Support: `fileflowsupport@gmail.com` (existing verified contact; no new inbox is implied by the rename).
+Support: `dataluxsupport@gmail.com`.
 
 Confirm encryption in transit, optional account collection, deletion availability and each data
 purpose. Answer rating/target audience from the actual general-purpose utility experience;

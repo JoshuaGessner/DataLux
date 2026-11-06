@@ -838,9 +838,9 @@ class MainActivity : AppCompatActivity() {
             addView(row(R.drawable.ic_tune, "Device check", "What this phone's camera and screen can do") {
                 startActivity(Intent(this@MainActivity, ProbeActivity::class.java))
             }, matchWidth(dp(8)))
-            addView(row(R.drawable.ic_help, "Contact support", "fileflowsupport@gmail.com") {
-                runCatching { startActivity(Intent(Intent.ACTION_SENDTO, android.net.Uri.parse("mailto:fileflowsupport@gmail.com"))) }
-                    .onFailure { android.widget.Toast.makeText(this@MainActivity, "Email fileflowsupport@gmail.com for support.", android.widget.Toast.LENGTH_LONG).show() }
+            addView(row(R.drawable.ic_help, "Contact support", "dataluxsupport@gmail.com") {
+                runCatching { startActivity(Intent(Intent.ACTION_SENDTO, android.net.Uri.parse("mailto:dataluxsupport@gmail.com"))) }
+                    .onFailure { android.widget.Toast.makeText(this@MainActivity, "Email dataluxsupport@gmail.com for support.", android.widget.Toast.LENGTH_LONG).show() }
             }, matchWidth(dp(8)))
             addView(text("Version ${runCatching {
                 packageManager.getPackageInfo(packageName, 0).versionName
