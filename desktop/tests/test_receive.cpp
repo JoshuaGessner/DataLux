@@ -89,7 +89,9 @@ std::optional<ReceiveResult> Transfer(const std::vector<std::uint8_t>& envelope,
     std::uint64_t ts = 0;
     for (int i = 0; i < 2000 && !rx.Result(); ++i) {
         // A 30 fps camera sees a 20 state/s sender with occasional repeated states.
-        if (!soft_camera || i % 3 != 1) ASSERT_TRUE(tx.value().Next(&cells).ok()) << i, std::nullopt;
+        if (!soft_camera || i % 3 != 1) {
+            ASSERT_TRUE(tx.value().Next(&cells).ok()) << i, std::nullopt;
+        }
         int w = 0;
         int h = 0;
         const auto before = rx.decoded();
