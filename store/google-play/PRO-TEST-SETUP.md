@@ -88,19 +88,22 @@ physical-device scenario; it does not establish purchase, restore or all account
 
 ## Isolation and build identity
 
-- On November 5, the `datalux_pro` permanent buy option was activated in Play, US-only at $9.99,
-  alongside the existing `fileflow_pro` option. Staging was backed up, restored to a separate
+- On November 5, the `datalux_pro` permanent buy option was activated in Play, US-only at $9.99.
+  After the new purchase and sign-in recovery passed, the old `fileflow_pro` purchase option was
+  deactivated for new sales; its product and historical transaction records remain. Staging was backed up, restored to a separate
   volume, and migrated to schema 5 from web revision `556be5c0f05ec71b13d02f2ce756f52e7bcecda4`;
   the old client retained Pro after migration. The owner refunded the remaining active legacy test
   order; the staging server independently rechecked and marked both legacy transactions revoked.
-  Production remained at schema 4 while staging acceptance was pending.
+  Production was then backed up and upgraded to schema 5 using web release `v0.3.5-preview.7`;
+  both production and staging reported healthy, and production retained test-receipt rejection.
 - The signed internal staging bundle [run 42144852409](https://github.com/JoshuaGessner/DataLux/actions/runs/42144852409)
   used native revision `05f6dfed569bef4c93f6ed84b49e2586c322f610`, code 8,
   `0.4.4-staging`, and SHA-256 `1d5d3013d0d0746546e39396c7104c3a700c34567687c29a55a042f0770d7adc`.
   Google Play listed it as available to the existing internal track. The owner reported updating
   the existing installation and completing the Pro purchase. Staging recorded one granted,
-  acknowledged `datalux_pro` transaction and two revoked `fileflow_pro` transactions. Checkout
-  display details, restart/restore and the remaining device acceptance cases are still being checked.
+  acknowledged `datalux_pro` transaction and two revoked `fileflow_pro` transactions. The owner
+  confirmed the $9.99 test checkout, restart and automatic Pro recovery after signing out and in.
+  Fresh-device restore and other device acceptance cases remain open.
 
 - The owner selected a staging-connected Play test build for Pro testing. The dedicated
   `prepare Play STAGING test bundle` workflow uses the same Play upload identity but a separate

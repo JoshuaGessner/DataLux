@@ -7,8 +7,8 @@
 
 The owner chose **DataLux** and resumed Play preparation on October 29, 2026. The Android
 application ID is now **`dev.datalux`**, confirmed by the owner after creating the Play entry.
-The active legacy product is `fileflow_pro`; its `datalux_pro` replacement is also active during
-the coordinated backend and app migration. Kotlin/JNI remains `dev.fileflow`. See
+The active product is `datalux_pro`; the legacy `fileflow_pro` purchase option is inactive for
+new sales while historical transactions remain supported. Kotlin/JNI remains `dev.fileflow`. See
 [the migration plan](../../DATALUX_MIGRATION.md): the new package is a separate Android
 installation and does not inherit private state from historical `dev.fileflow` builds.
 
@@ -16,8 +16,8 @@ installation and does not inherit private state from historical `dev.fileflow` b
 
 On November 5, the staging-connected 0.4.4/code 8 bundle replaced code 7 on the existing internal
 track. It targets the new `datalux_pro` option and the schema-5 staging service. The owner reported
-updating and completing a purchase; staging recorded the new product as granted and acknowledged.
-Checkout display details and restart/restore remain to be confirmed.
+updating and completing a $9.99 test purchase; staging recorded it as granted and acknowledged.
+The owner confirmed Pro remains active after restarting and returns after sign-out/sign-in.
 
 On November 4, the owner-approved [0.4.2/code 6 build](https://github.com/JoshuaGessner/DataLux/actions/runs/41963741276) succeeded from `fa0c1f7`. The downloaded bundle SHA-256 was `54fb5cdf924b746f090c7a39ce0a3fdaa74afde1a1b52e97b955cf8b861bdf74`, matching its verification report. Google Play shows this version available on the internal tester track. It uses the production origin and signer; production billing is configured with test purchases disabled, and staging accounts and grants are separate. Real production purchase/restore acceptance is not established. The code 5 entries below are historical.
 
@@ -51,8 +51,8 @@ The payments-profile step is complete. The signed billing-enabled bundle is uplo
 internal track and the purchase option below is active. Recheck the live Console state and finish
 the isolated test setup before asking anyone to make a test purchase:
 
-- Product ID: `datalux_pro` (active replacement); preserve `fileflow_pro` for existing purchases
-  and installed clients until the replacement has been verified.
+- Product ID: `datalux_pro` (active replacement); `fileflow_pro` remains as an inactive legacy
+  product for historical purchase verification. Older builds cannot start a new legacy purchase.
 - Default title: **DataLux Pro**.
 - Description: **Unlock multi-file batch transfers and bulk actions on received files.**
 - Exactly one permanent buy option, non-consumable, quantity one; no rental or subscription.

@@ -9,8 +9,8 @@ For invitations and everyday testing use the draft [tester quick start](TESTER-Q
 For building and delivering successive Play releases, use the [coordinator runbook](PLAY-TEST-UPDATES.md).
 
 The current internal track is **0.4.4-staging / version code 8**, package **`dev.datalux`**, using
-the staging server and the active `datalux_pro` product. The legacy `fileflow_pro` product also
-remains active and supported during the transition. Recheck the uploaded
+the staging server and the active `datalux_pro` product. The legacy `fileflow_pro` option is
+inactive for new sales; historical transactions remain supported. Recheck the uploaded
 version before each test. A debug install, CI pass or static alignment report does not establish
 Play billing, optical transfer or device acceptance. The owner completed purchase, same-phone account
 recovery and refund reconciliation; see [the staging record](PRO-TEST-SETUP.md) for the exact limits.
