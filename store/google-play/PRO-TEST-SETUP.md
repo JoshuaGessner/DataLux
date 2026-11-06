@@ -115,7 +115,8 @@ physical-device scenario; it does not establish purchase, restore or all account
   Keep the production signer and production `FILEFLOW_PLAY_ALLOW_TEST_PURCHASES=false` unchanged.
 - Configure the Android Publisher API and a least-privilege Play service account able to verify
   and acknowledge this app's purchases. Mount its private credential file read-only, outside Git,
-  images and artifacts. Verify quotas and the deployed package `dev.datalux` and SKU `fileflow_pro`.
+  images and artifacts. Verify quotas and package `dev.datalux`; retain historical `fileflow_pro`
+  verification while the new `datalux_pro` product is prepared and tested.
 - Build a test-only Android APK with `-Pstore=true`, `-PfileflowAccountOrigin=<staging HTTPS origin>`
   and `-PfileflowLicensePublicKey=<base64 staging public SPKI>`. Record source SHA, APK hash,
   app ID, origin, public key ID and signing certificate without exposing credentials. The debug

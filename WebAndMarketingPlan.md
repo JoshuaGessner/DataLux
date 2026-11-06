@@ -627,7 +627,8 @@ The launch feature list is:
 
 Folder recursion, scheduling and automation are future ideas, not included launch promises.
 
-The approved US launch price is $9.99 USD one time through Google Play product `fileflow_pro`.
+The approved US launch price is $9.99 USD one time. The active Google Play product `fileflow_pro`
+is being replaced by `datalux_pro`; preserve compatibility until the transition is verified.
 The final checkout price comes from Google Play. See [PRODUCT.md](PRODUCT.md) for account restoration,
 receiving-device enforcement, offline limits and the US-first rollout.
 

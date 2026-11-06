@@ -8,12 +8,12 @@
 For invitations and everyday testing use the draft [tester quick start](TESTER-QUICK-START.md).
 For building and delivering successive Play releases, use the [coordinator runbook](PLAY-TEST-UPDATES.md).
 
-The candidate is **0.4.1 / version code 5**, package **`dev.datalux`**, Pro product
-**`fileflow_pro`**. Recheck the uploaded version before testing. A debug install, CI pass or
-static alignment report does not establish Play billing, optical transfer or device acceptance.
-The signed release AAB was rolled out to the internal track with the production account origin and
-license public key. The owner list is selected; confirm actual opt-in. The Pro option is active; isolated
-staging billing is configured, but real purchase/restore acceptance remains incomplete.
+The current internal track is **0.4.3-staging / version code 7**, package **`dev.datalux`**, using
+the staging server and active legacy product **`fileflow_pro`**. The replacement `datalux_pro`
+is in draft and needs a compatible backend and newer Play build before testing. Recheck the uploaded
+version before each test. A debug install, CI pass or static alignment report does not establish
+Play billing, optical transfer or device acceptance. The owner completed purchase, same-phone account
+recovery and refund reconciliation; see [the staging record](PRO-TEST-SETUP.md) for the exact limits.
 
 ## Test groups and sequence
 
@@ -24,9 +24,8 @@ staging billing is configured, but real purchase/restore acceptance remains inco
 2. Add billing participants separately as **license testers**. Track membership alone does not
    prevent real charges. Check the purchasing Google account and the explicit test-payment notice
    on Google's checkout sheet; stop if it is absent. Use approved test methods only.
-3. Test billing against the isolated staging setup described in the NUC handoff. The uploaded
-   production-origin AAB cannot use staging licenses: prepare a separately identified build
-   configured with the staging origin and public key. A same-package sideloaded debug-signed build
+3. Test billing against the isolated staging setup described in the NUC handoff. The internal track
+   currently uses a separately identified staging build. A same-package sideloaded debug-signed build
    can exercise license-test billing with an enrolled Google account; separately validate the
    eventual Play-distributed production build. Record origin, build and trust-key ID privately.
    Production must reject test receipts; never enable a production test-purchase bypass or

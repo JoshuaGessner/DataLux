@@ -7,7 +7,8 @@
 
 The owner chose **DataLux** and resumed Play preparation on October 29, 2026. The Android
 application ID is now **`dev.datalux`**, confirmed by the owner after creating the Play entry.
-The permanent Pro product stays `fileflow_pro`; Kotlin/JNI remains `dev.fileflow`. See
+The active legacy product is `fileflow_pro`; its `datalux_pro` replacement is in draft during
+the coordinated backend and app migration. Kotlin/JNI remains `dev.fileflow`. See
 [the migration plan](../../DATALUX_MIGRATION.md): the new package is a separate Android
 installation and does not inherit private state from historical `dev.fileflow` builds.
 
@@ -45,7 +46,8 @@ The payments-profile step is complete. The signed billing-enabled bundle is uplo
 internal track and the purchase option below is active. Recheck the live Console state and finish
 the isolated test setup before asking anyone to make a test purchase:
 
-- Product ID: `fileflow_pro` (retained permanent identifier; do not rename it).
+- Product ID: `datalux_pro` (draft replacement); preserve `fileflow_pro` for existing purchases
+  and installed clients until the replacement has been verified.
 - Default title: **DataLux Pro**.
 - Description: **Unlock multi-file batch transfers and bulk actions on received files.**
 - Exactly one permanent buy option, non-consumable, quantity one; no rental or subscription.

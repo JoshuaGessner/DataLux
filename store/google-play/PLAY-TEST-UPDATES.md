@@ -15,7 +15,8 @@
    upload keystore, Google's Play app-signing key and the backend license signer are distinct.
 3. Check Play Console for previously uploaded version codes and select an unused, greater code.
    Version 0.4.1/code 5 is already uploaded in an internal draft. Confirm package
-   `dev.datalux`; the existing Pro product identifier remains `fileflow_pro`.
+   `dev.datalux`; the existing `fileflow_pro` product remains supported while `datalux_pro`
+   is introduced through the coordinated migration.
 4. Complete relevant Console configuration, including a real, reusable reviewer account with
    access to restricted features; review Data Safety against the actual deployment. Do not submit
    placeholder credentials or unverified privacy assertions.
