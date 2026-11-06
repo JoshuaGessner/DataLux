@@ -14,8 +14,15 @@ installation and does not inherit private state from historical `dev.fileflow` b
 
 ## Current evidence
 
-The 0.4.5-staging/code 9 bundle is available on the same internal track. It adds settings and
-native autofill improvements; real-device acceptance of those changes is pending.
+The [0.4.6-staging/code 10 build](https://github.com/JoshuaGessner/DataLux/actions/runs/42151916912)
+is available on the internal track. It was built from `ee92163e07a2ca67a2ade8d936f08bff68815570`;
+its AAB SHA-256 is `99449718b6d5909fffe8ec268cbf4a3bf76ba3e98139f214bb30d20b11c3979b`.
+It adds the Pro sign-in layout and ordinary pairing confirmation changes. Real-device
+acceptance of this version is pending. Team invitations still exchange the team key before
+human code confirmation and need a coordinated security fix before broader testing or launch.
+
+The earlier 0.4.5-staging/code 9 bundle added settings and native autofill improvements. The owner
+confirmed Google Password Manager works after choosing it as the phone's autofill provider.
 
 On November 5, the staging-connected 0.4.4/code 8 bundle replaced code 7 on the existing internal
 track. It targets the new `datalux_pro` option and the schema-5 staging service. The owner reported

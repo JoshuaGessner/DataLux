@@ -8,7 +8,7 @@
 For invitations and everyday testing use the draft [tester quick start](TESTER-QUICK-START.md).
 For building and delivering successive Play releases, use the [coordinator runbook](PLAY-TEST-UPDATES.md).
 
-The current internal track is **0.4.5-staging / version code 9**, package **`dev.datalux`**, using
+The current internal track is **0.4.6-staging / version code 10**, package **`dev.datalux`**, using
 the staging server and the active `datalux_pro` product. The legacy `fileflow_pro` option is
 inactive for new sales; historical transactions remain supported. Recheck the uploaded
 version before each test. A debug install, CI pass or static alignment report does not establish
