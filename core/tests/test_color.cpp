@@ -170,6 +170,37 @@ TEST(ColorModulator, ThreeTimesTheBitsOfM0) {
               layout.payload_cells().size() / 8);
 }
 
+TEST(ColorModulator, FourColourOneBitsRenderWhiteAndDecodeWithLegacySeeds) {
+    const auto layout = FrameLayout::Create(kGrid, {}).value();
+    const ColorModulator mod(layout, ModulationProfile::kM3FourColor);
+    const std::vector<std::uint8_t> payload(mod.payload_capacity_bytes(), 0xFF);
+    CellMatrix cells(kGrid.cols, kGrid.rows);
+    ASSERT_TRUE(mod.Render({}, payload, &cells).ok());
+    for (std::size_t i = 0; i < payload.size() * 4; ++i) {
+        const auto idx = layout.payload_cells()[i];
+        EXPECT_EQ(cells.at(idx % kGrid.cols, idx / kGrid.cols), ColorValue(0b111));
+    }
+    std::vector<double> rgb(static_cast<std::size_t>(kGrid.cells()) * 3);
+    for (std::uint32_t idx = 0; idx < kGrid.cells(); ++idx) {
+        for (int channel = 0; channel < 3; ++channel) {
+            rgb[idx * 3 + static_cast<std::size_t>(channel)] =
+                ColorChannelOn(cells.at(idx % kGrid.cols, idx / kGrid.cols), channel) ? 255.0 : 0.0;
+        }
+    }
+    SoftSymbolBuffer soft;
+    mod.DemodulatePayload(rgb, &soft);
+    EXPECT_EQ(HardDecide(soft, payload.size()).bytes, payload);
+    for (std::size_t i = 0; i < layout.color_pilot_cells().size(); ++i) {
+        if (mod.PilotColor(i) != 3) continue;
+        const auto idx = layout.color_pilot_cells()[i];
+        for (std::size_t channel = 0; channel < 3; ++channel) {
+            rgb[idx * 3 + channel] = std::numeric_limits<double>::quiet_NaN();
+        }
+    }
+    mod.DemodulatePayload(rgb, &soft);
+    EXPECT_EQ(HardDecide(soft, payload.size()).bytes, payload);
+}
+
 TEST(ColorModulator, DiagnosticComparisonsDecodeCleanColoursAndRetainDefaultOutput) {
     const auto layout = FrameLayout::Create(kGrid, {}).value();
     for (const auto profile : {ModulationProfile::kM3FourColor, ModulationProfile::kM5EightColor}) {
@@ -190,6 +221,22 @@ TEST(ColorModulator, DiagnosticComparisonsDecodeCleanColoursAndRetainDefaultOutp
         }
         SoftSymbolBuffer reference;
         mod.DemodulatePayload(rgb, &reference);
+        if (profile == ModulationProfile::kM3FourColor) {
+            // Deployed decoders still seed the legacy palette. Losing one entire pilot class
+            // must not misidentify the new colours when the remaining pilots are readable.
+            for (unsigned missing = 0; missing < 4; ++missing) {
+                auto partial = rgb;
+                for (std::size_t i = 0; i < layout.color_pilot_cells().size(); ++i) {
+                    if (mod.PilotColor(i) != missing) continue;
+                    const auto idx = layout.color_pilot_cells()[i];
+                    for (std::size_t channel = 0; channel < 3; ++channel)
+                        partial[idx * 3 + channel] = std::numeric_limits<double>::quiet_NaN();
+                }
+                SoftSymbolBuffer old_receiver;
+                mod.DemodulatePayload(partial, &old_receiver);
+                EXPECT_EQ(HardDecide(old_receiver, payload.size()).bytes, payload) << "missing pilot " << missing;
+            }
+        }
         for (const bool local : {false, true}) for (const bool bleed : {false, true}) {
             SoftSymbolBuffer soft;
             ColorDiagnostics diag;

@@ -286,8 +286,12 @@ Status ColorModulator::Render(std::span<const std::uint8_t> header_coded,
     FF_TRY(M0Modulator(*layout_).Render(header_coded, {}, out));
 
     const auto& pilots = layout_->color_pilot_cells();
+    // M3's odd-parity palette retains the same two-channel separation as the original
+    // even-parity palette while mapping all-one padding to white. Keep palette_ itself as
+    // the legacy decoder seed: deployed decoders learn actual colours from these pilots.
+    const unsigned render_mask = bits_ == 2 ? 0b001U : 0U;
     for (std::size_t i = 0; i < pilots.size(); ++i) {
-        out->set_flat(pilots[i], ColorValue(palette_[PilotColor(i)]));
+        out->set_flat(pilots[i], ColorValue(palette_[PilotColor(i)] ^ render_mask));
     }
 
     std::vector<std::uint8_t> bits;
@@ -298,7 +302,7 @@ Status ColorModulator::Render(std::span<const std::uint8_t> header_coded,
             const std::size_t j = i * bits_ + k;  // M5: first bit red, then green, then blue
             v = (v << 1U) | (j < bits.size() ? (bits[j] & 1U) : 0U);
         }
-        out->set_flat(pay_cells[i], ColorValue(palette_[v]));
+        out->set_flat(pay_cells[i], ColorValue(palette_[v] ^ render_mask));
     }
     return Status::Ok();
 }

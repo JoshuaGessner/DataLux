@@ -138,8 +138,9 @@ struct ColorDemodulationConfig {
 };
 
 // M5: three bits a cell, one each on red, green and blue (kM5EightColor). And M3: two bits a
-// cell in four colours (kM3FourColor) -- black, cyan, magenta and yellow, any two of which differ
-// in TWO channels where the nearest of the eight differ in one. Two-thirds the data, for cameras
+// cell in four colours (kM3FourColor) -- blue, green, red and white, any two of which differ
+// in TWO channels where the nearest of the eight differ in one. Receivers also learn the legacy
+// black, cyan, magenta and yellow palette from its pilots. Two-thirds the data, for cameras
 // that cannot tell eight apart at a practical distance (F66).
 //
 // The header and every structural cell are drawn exactly as M0 draws them -- the header must be

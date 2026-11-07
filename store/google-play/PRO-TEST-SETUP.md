@@ -86,6 +86,14 @@ represents the all-one padding as yellow; the other tested profiles display it a
 validates desktop-to-phone for this fixture and device only. Phone-to-desktop, larger files,
 different lighting and the Play-distributed version of the changed sender remain to be tested.
 
+Later the same day, the owner sent the 67-byte fixture from the Play-installed 0.4.9 staging
+phone to the local desktop receiver with the experimental 84×182 Webcam profile and Low screen
+brightness. The receiver saved a byte-identical file after an initially difficult alignment.
+This is one successful transfer, not evidence of reliable acquisition across repeats or cameras.
+The owner also confirmed that a local experimental desktop Fast sender using white padding sent
+the same file to the unchanged 0.4.9 phone; the saved file hash matched. Phone-to-desktop with the
+new Fast palette and degraded-pilot interoperability remain to be verified on physical devices.
+
 The owner also encountered a misleading unverified screen after a restart while the phone could
 not resolve the staging hostname. Server-side aggregate checks showed the account remained verified;
 switching to cellular restored verified status. On the updated staging APK, the owner confirmed
