@@ -16,10 +16,12 @@ SMTP configuration read-only. Staging alone allows only test receipts and has
 the test signer and Publisher credentials mounted read-only. The non-secret compose environment
 is at `~/.local/share/datalux/staging/compose.env`; it contains private file paths, not key bytes.
 
-The staging image is `datalux-staging:6bad4cd`, built on the NUC from web revision
-`6bad4cd55abc824cd65340b4829605fac3e337b6`. Its health endpoint reported that revision and
-schema 4, both locally and through Caddy with a valid TLS certificate. It includes the
-acknowledgement retry fix and rejects non-test receipts. This does not prevent Google from charging
+Production and staging run the digest-pinned web release `v0.3.5-preview.9` from revision
+`87f1d888f0da505a3a7f755c20ab199190731c18`; both readiness endpoints passed after deployment.
+Before the staging update, its isolated schema-5 database and matching key were backed up,
+checked and restored to a temporary preflight volume; production used its deployment controller's
+verified account backup. The staging service retains its separate origin and test-only purchase
+settings, while production continues to reject test receipts. This does not prevent Google from charging
 a real payment method; confirm the test notice and test payment method before any purchase.
 The debug-signed staging APK is stored at
 `build/artifacts/staging-pro-test/datalux-staging-debug.apk` (SHA-256
