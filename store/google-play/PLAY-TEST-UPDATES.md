@@ -1,8 +1,14 @@
 # Play test release and update runbook
 
-> **Status:** Preparation guide. The existence of this runbook does not mean a signed bundle,
-> uploaded release, reviewer account, purchase configuration, or physical test pass exists.
-> Check [upload readiness](UPLOAD-READINESS.md) and the live Console for current status.
+> **Status:** Coordinator runbook. Check [upload readiness](UPLOAD-READINESS.md), the staging
+> evidence and live Console for current status; a successful signing run alone is not a release.
+
+At the last confirmed Console check, 0.4.9-staging / code 13 was available to the existing internal
+track. The reviewed 0.4.10-staging / code 14 bundle built successfully but was not confirmed as
+uploaded or published. Confirm the Console's current track, highest uploaded code, and bundle
+before acting. Its staging identity is separate from production; never promote that bundle to a
+production track. The [tester quick start](TESTER-QUICK-START.md) still needs a feedback channel
+and a confirmed companion build before distribution.
 
 ## Before the first internal release
 
@@ -14,9 +20,8 @@
    public key and account origin in the protected GitHub `play-internal` environment. The Android
    upload keystore, Google's Play app-signing key and the backend license signer are distinct.
 3. Check Play Console for previously uploaded version codes and select an unused, greater code.
-   Version 0.4.1/code 5 is already uploaded in an internal draft. Confirm package
-   `dev.datalux`; the existing `fileflow_pro` product remains supported while `datalux_pro`
-   is introduced through the coordinated migration.
+   Confirm package `dev.datalux`. The active product at the last check was `datalux_pro`;
+   historical `fileflow_pro` purchases remain supported.
 4. Complete relevant Console configuration, including a real, reusable reviewer account with
    access to restricted features; review Data Safety against the actual deployment. Do not submit
    placeholder credentials or unverified privacy assertions.
@@ -26,9 +31,11 @@
 1. Merge the intended fixes into `main`, wait for required checks, and record the **full immutable
    source SHA**. Make sure the SHA still contains the fixes to be tested.
 2. In GitHub Actions, select **prepare Play internal-test bundle**, then **Run workflow** from
-   `main`. Enter the full SHA as `source_ref`, the chosen unused integer as `version_code`, and a
-   release version such as `0.4.1` as `version_name`. Only the repository owner can dispatch it.
-3. Wait for the entire run. Download its `datalux-play-review-<version_code>` artifact and inspect
+   `main`. For staging, select **prepare Play STAGING test bundle** and use a version ending in
+   `-staging`. Enter the full SHA as `source_ref` and an unused `version_code`. Only the repository
+   owner can dispatch it; GitHub's `play-internal` environment requires owner review.
+3. Wait for the entire run. Download its `datalux-STAGING-play-review-<version_code>` artifact for
+   staging (or `datalux-play-review-<version_code>` for production) and inspect
    the AAB and `PLAY-BUNDLE-REVIEW.json`: source SHA, bundle hash, package, version and code,
    DataLux label, account origin, upload certificate, license public-key ID, and native 16 KB
    alignment. Compare signing identities with the intended existing identities. The workflow
@@ -50,8 +57,12 @@
    Do not substitute the experimental GitHub debug APK for the signed Play-distributed build.
 4. Record opt-ins, tester feedback and exact build/device results. A testing-track member is not
    automatically a billing license tester: configure license testers separately, use the isolated
-   approved billing test setup, and require Google's test-purchase notice before a test purchase.
-   Stop if the expected notice or account is missing.
+   approved billing test setup, and require Google's test-purchase notice and a test payment method
+   before a test purchase. Stop if the expected notice, payment method or account is missing.
+
+Do not ask outside testers to use team invitations until bilateral confirmation is fixed and
+verified. Phone-to-desktop acquisition, including the 0.4.10 white Fast sender, still needs
+repeatable real-device acceptance; one successful Webcam-mode transfer does not establish it.
 
 ## Fix and repeat
 

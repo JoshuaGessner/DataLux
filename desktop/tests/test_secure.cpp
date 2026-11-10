@@ -67,6 +67,12 @@ TEST(SecureVectors, PairingKeyDerivationMatchesThePhone) {
     EXPECT_EQ(Hex(Derive(kShared, kPeer, kMine, 0).key), kKey);
 }
 
+TEST(SecureVectors, TeamConfirmationMatchesThePhone) {
+    const PairingKey k = Derive(kShared, kMine, kPeer, 0);
+    EXPECT_EQ(TeamConfirmation(k, 'L'), "FFTCONF2:L:3046f9efcaf2a651cadd81a81d7358fc4c63af764a1abc8529880f3b42e8dd53");
+    EXPECT_EQ(TeamConfirmation(k, 'J'), "FFTCONF2:J:40cb2e057579570927b8646783693398b3113d974039682a55b1d0a0e544f24c");
+}
+
 TEST(SecureVectors, ASealedEnvelopeMatchesThePhoneAndOpens) {
     SealKey key{Seq(32, [](int i) { return i * 7 + 3; }), Seq(8, [](int i) { return 0xA0 + i; }), "paired phone"};
     const std::string text = "hello, team";
@@ -182,6 +188,8 @@ TEST(Secure, ATeamChangesHandsInAnyOrder) {
         PairingFlow member(PairingFlow::Mode::kJoin, "Pixel");
         int steps = 0;
         for (; steps < 400 && !(leader.stage() == PairingFlow::Stage::kDone && member.stage() == PairingFlow::Stage::kDone); ++steps) {
+            if (leader.stage() == PairingFlow::Stage::kConfirm) leader.ConfirmCodes();
+            if (member.stage() == PairingFlow::Stage::kConfirm) member.ConfirmCodes();
             if (rng() % 10 < 3) continue;
             if (rng() % 2 == 0) leader.Read(member.qr()); else member.Read(leader.qr());
         }
@@ -191,6 +199,55 @@ TEST(Secure, ATeamChangesHandsInAnyOrder) {
         EXPECT_EQ(leader.member_name().value_or(""), "Pixel");
         EXPECT_EQ(leader.key()->code, member.key()->code);
     }
+}
+
+TEST(Secure, TeamInviteRequiresBothConfirmationsAndRejectsLegacyPairing) {
+    const Team team = Team::Create("Field crew", "Laptop", 1);
+    PairingFlow leader(PairingFlow::Mode::kInvite, "Laptop", team);
+    PairingFlow member(PairingFlow::Mode::kJoin, "Phone");
+    PairingFlow old(PairingFlow::Mode::kPair, "Old");
+    EXPECT_TRUE(leader.Read(old.qr()));
+    EXPECT_TRUE(leader.legacy_peer());
+    EXPECT_FALSE(leader.key().has_value());
+    EXPECT_FALSE(old.Read(leader.qr()));
+    member.Read(leader.qr());
+    leader.Read(member.qr());
+    ASSERT_EQ(leader.stage(), PairingFlow::Stage::kConfirm);
+    EXPECT_FALSE(leader.qr().starts_with(invite::kPrefix));
+    ASSERT_TRUE(leader.ConfirmCodes());
+    EXPECT_FALSE(leader.qr().starts_with(invite::kPrefix));
+    ASSERT_TRUE(member.Read(leader.qr()));
+    ASSERT_EQ(member.stage(), PairingFlow::Stage::kConfirm);
+    EXPECT_FALSE(member.joined().has_value());
+    ASSERT_TRUE(member.ConfirmCodes());
+    ASSERT_TRUE(leader.Read(member.qr()));
+    EXPECT_TRUE(leader.qr().starts_with(invite::kPrefix));
+    ASSERT_TRUE(member.Read(leader.qr()));
+    ASSERT_TRUE(member.joined().has_value());
+    EXPECT_EQ(member.joined()->key, team.key);
+}
+
+TEST(Secure, TeamInviteRejectsForeignAndTamperedConfirmations) {
+    const Team team = Team::Create("Field crew", "Laptop", 1);
+    PairingFlow leader(PairingFlow::Mode::kInvite, "Laptop", team);
+    PairingFlow member(PairingFlow::Mode::kJoin, "Phone");
+    PairingFlow attacker(PairingFlow::Mode::kJoin, "Stranger");
+    member.Read(leader.qr());
+    leader.Read(member.qr());
+    ASSERT_TRUE(leader.ConfirmCodes());
+    attacker.Read(leader.qr());
+    EXPECT_FALSE(attacker.ConfirmCodes());
+    ASSERT_TRUE(member.Read(leader.qr()));
+    ASSERT_TRUE(member.ConfirmCodes());
+    auto altered = member.qr();
+    altered.back() = altered.back() == '0' ? '1' : '0';
+    EXPECT_FALSE(leader.Read(altered));
+    EXPECT_FALSE(leader.qr().starts_with(invite::kPrefix));
+    EXPECT_TRUE(member.Read("FFPAIR1:legacy"));
+    EXPECT_TRUE(member.legacy_peer());
+    EXPECT_FALSE(member.joined().has_value());
+    ASSERT_TRUE(leader.Read(member.qr()));
+    EXPECT_TRUE(leader.qr().starts_with(invite::kPrefix));
 }
 
 TEST(Secure, TeamsAreKeptInTheStore) {

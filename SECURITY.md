@@ -34,7 +34,10 @@ it sends or receives can leave the two phones by any other route.
   closes. Nothing about a pairing is written to storage, so a phone examined later holds nothing
   that opens past paired transfers.
 - *Teams.* A team key is a random 256-bit AES key, handed to a new member only over a fresh pairing
-  made for the purpose: sealed with AES-256-GCM under that pairing's key, the pairing's key id bound
+  made for the purpose. The team-specific v2 exchange requires both people to compare and confirm
+  the six-digit code before hand-over; authenticated, role-specific confirmations bind that choice
+  to the pairing. Older invitation clients cannot complete the new exchange and both devices must
+  be updated. The key is sealed with AES-256-GCM under that pairing's key, the pairing's key id bound
   in as associated data. The member answers, sealed the same way, with their display name and an
   HMAC under the team key, which is how the leader's phone confirms the hand-over and learns who
   joined. Team keys ARE stored, wrapped by a non-exportable Android Keystore key, so a copy of the

@@ -46,6 +46,7 @@ struct PairingKey : SealKey {
 
 // Pairing.derive: the key, id and code from an ECDH secret and both public points.
 PairingKey Derive(const Bytes& shared, const Bytes& mine, const Bytes& peer, std::int64_t now_ms);
+std::string TeamConfirmation(const PairingKey& key, char role);
 
 // One side of a pairing (Pairing.kt): a fresh P-256 key, shown as a QR code, and the peer's read.
 class Pairing {
@@ -141,10 +142,11 @@ class TeamStore {
 class PairingFlow {
   public:
     enum class Mode { kPair, kInvite, kJoin };
-    enum class Stage { kScanning, kGotKey, kHandingOver, kWaitingForTeam, kDone };
+    enum class Stage { kScanning, kGotKey, kConfirm, kWaitingConfirmation, kHandingOver, kWaitingForTeam, kDone };
 
     PairingFlow(Mode mode, std::string my_name, std::optional<Team> team = std::nullopt);
     bool Read(std::string_view text);  // true when anything changed
+    bool ConfirmCodes();  // local human confirmed the displayed codes match
 
     [[nodiscard]] Stage stage() const { return stage_; }
     [[nodiscard]] const std::string& qr() const { return qr_; }
@@ -152,6 +154,7 @@ class PairingFlow {
     [[nodiscard]] const std::optional<Team>& joined() const { return joined_; }
     [[nodiscard]] const std::optional<std::string>& member_name() const { return member_name_; }
     [[nodiscard]] bool foreign_invite() const { return foreign_invite_; }
+    [[nodiscard]] bool legacy_peer() const { return legacy_peer_; }
 
   private:
     bool GotKey(bool confirmed);
@@ -167,6 +170,9 @@ class PairingFlow {
     std::optional<Team> joined_;
     std::optional<std::string> member_name_;
     bool foreign_invite_ = false;
+    bool legacy_peer_ = false;
+    bool local_confirmed_ = false;
+    bool leader_confirmed_ = false;
 };
 
 }  // namespace fileflow::desktop::secure

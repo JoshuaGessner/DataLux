@@ -1,5 +1,8 @@
 package dev.fileflow.secure
 
+import java.security.MessageDigest
+import javax.crypto.Mac
+
 /**
  * What one phone does on the pairing screen, as codes are read: which code it shows, and how far
  * it has got. Kept apart from the screen so that two of them can be played against each other in a
@@ -27,6 +30,8 @@ class PairingFlow(
         Scanning,
         /** Has the other phone's key -- the six-digit code can be shown -- not yet confirmed both ways. */
         GotKey,
+        /** The key exchange is ready for the person to compare and confirm the code. */
+        NeedsConfirmation,
         /** Invite: both phones hold the pairing key, and the team key is on screen for the member. */
         HandingOver,
         /** Join: paired, and waiting for the leader's screen to show the team. */
@@ -43,8 +48,42 @@ class PairingFlow(
         private set
 
     /** What this phone's screen shows now. */
-    var qr: String = pairing.qrText()
+    var qr: String = pairingQr()
         private set
+
+    private var peerComplete = false
+    private var localConfirmed = false
+    private var leaderConfirmed = false
+
+    private fun keyIsFresh(k: PairingKey): Boolean {
+        val at = now()
+        return at >= k.createdMs && at - k.createdMs < PairingStore.LIFETIME_MS
+    }
+
+    private fun pairingQr(): String = if (mode is Mode.Pair) pairing.qrText()
+        else TEAM_PAIR_PREFIX + pairing.qrText().removePrefix(Pairing.PREFIX)
+
+    internal fun proof(role: String, k: PairingKey): String {
+        val keyId = k.id.joinToString("") { "%02x".format(it.toInt() and 0xff) }
+        val mac = Mac.getInstance("HmacSHA256").apply { init(k.secret) }
+        val bytes = mac.doFinal("DataLux team confirm v2:$role:$keyId".toByteArray(Charsets.UTF_8))
+        return CONFIRM_PREFIX + role + ":" + bytes.joinToString("") { "%02x".format(it.toInt() and 0xff) }
+    }
+
+    /** Called only after the user compared both visible codes and explicitly agreed. */
+    fun confirm(): Boolean {
+        val k = key ?: return false
+        if (!keyIsFresh(k)) return false
+        if (mode is Mode.Pair || localConfirmed || (mode is Mode.Invite && !peerComplete)) return false
+        localConfirmed = true
+        qr = when (mode) {
+            is Mode.Invite -> proof("L", k)
+            Mode.Join -> if (leaderConfirmed) proof("J", k) else pairingQr()
+            else -> return false
+        }
+        stage = Stage.WaitingForTeam
+        return true
+    }
 
     /** Join: the team now on this phone. */
     var joined: Team? = null
@@ -58,11 +97,25 @@ class PairingFlow(
     var foreignInvite = false
         private set
 
+    var legacyPeer = false
+        private set
+
     /** Takes one decoded code. True when anything changed -- the screen should be redrawn. */
     fun read(text: String): Boolean {
         if (stage == Stage.Done) return false
+        if (mode !is Mode.Pair && key?.let { !keyIsFresh(it) } == true) return false
+        if (mode !is Mode.Pair && text.startsWith(Pairing.PREFIX)) {
+            if (legacyPeer) return false
+            legacyPeer = true
+            return true
+        }
+        if (mode !is Mode.Pair && text.startsWith(CONFIRM_PREFIX)) return readConfirmation(text)
         if (TeamInvite.isTeamCode(text)) return readTeamCode(text)
-        return when (pairing.read(text)) {
+        val pairText = if (mode is Mode.Pair) text else {
+            if (!text.startsWith(TEAM_PAIR_PREFIX)) return false
+            Pairing.PREFIX + text.removePrefix(TEAM_PAIR_PREFIX)
+        }
+        return when (pairing.read(pairText)) {
             Pairing.Read.NotOurs, Pairing.Read.Own -> false
             Pairing.Read.PeerKey -> gotKey(confirmed = false)
             Pairing.Read.PeerComplete -> gotKey(confirmed = true)
@@ -72,33 +125,51 @@ class PairingFlow(
     private fun gotKey(confirmed: Boolean): Boolean {
         val firstKey = key == null
         if (firstKey) key = pairing.key(now())
-        val k = key ?: return false
+        if (key == null) return false
         val before = stage
-        // Our code now acknowledges theirs -- which is what completes THEIR side -- unless it has
-        // moved on to the team key, which must stay up until the member reads it.
-        if (stage != Stage.HandingOver) qr = pairing.qrText()
-        stage = when {
-            !confirmed -> if (stage == Stage.Scanning) Stage.GotKey else stage
-            mode is Mode.Pair -> Stage.Done
-            mode is Mode.Invite -> {
-                if (stage != Stage.HandingOver) qr = TeamInvite.encode(mode.team, k)
-                Stage.HandingOver
+        if (mode !is Mode.Pair) {
+            peerComplete = peerComplete || confirmed
+            if (!localConfirmed) {
+                qr = pairingQr()
+                stage = if (mode is Mode.Join || peerComplete) Stage.NeedsConfirmation else Stage.GotKey
+            } else if (mode is Mode.Join && !leaderConfirmed) {
+                qr = pairingQr()
             }
-            else -> if (stage == Stage.Scanning || stage == Stage.GotKey) Stage.WaitingForTeam else stage
+            return firstKey || stage != before
         }
+        qr = pairing.qrText()
+        stage = if (confirmed) Stage.Done else if (stage == Stage.Scanning) Stage.GotKey else stage
         return firstKey || stage != before
+    }
+
+    private fun readConfirmation(text: String): Boolean {
+        val k = key ?: return false
+        val expectedRole = if (mode is Mode.Join) "L" else if (mode is Mode.Invite) "J" else return false
+        if (!MessageDigest.isEqual(text.toByteArray(Charsets.UTF_8), proof(expectedRole, k).toByteArray(Charsets.UTF_8))) return false
+        if (mode is Mode.Join) {
+            if (leaderConfirmed) return false
+            leaderConfirmed = true
+            if (localConfirmed) qr = proof("J", k)
+        } else {
+            if (!localConfirmed || !peerComplete || stage == Stage.HandingOver) return false
+            qr = TeamInvite.encode((mode as Mode.Invite).team, k)
+            stage = Stage.HandingOver
+        }
+        return true
     }
 
     private fun readTeamCode(text: String): Boolean {
         val k = key ?: return false
         when (mode) {
             is Mode.Invite -> {
+                if (!localConfirmed || stage != Stage.HandingOver) return false
                 val name = TeamInvite.readAck(text, mode.team, k) ?: return false
                 memberName = name
                 stage = Stage.Done
                 return true
             }
             Mode.Join -> {
+                if (!localConfirmed || !leaderConfirmed) return false
                 if (!text.startsWith(TeamInvite.PREFIX)) return false
                 // The leader shows the team only once it has OUR acknowledgement of ITS key, so a
                 // joiner can see the team before it has seen the leader's acknowledgement of ours.
@@ -118,5 +189,10 @@ class PairingFlow(
             }
             Mode.Pair -> return false
         }
+    }
+
+    companion object {
+        const val TEAM_PAIR_PREFIX = "FFTPAIR2:"
+        const val CONFIRM_PREFIX = "FFTCONF2:"
     }
 }

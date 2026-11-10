@@ -18,6 +18,8 @@ class PairingFlowTest {
         val r = Random(seed)
         repeat(steps) { i ->
             if (a.stage == PairingFlow.Stage.Done && b.stage == PairingFlow.Stage.Done) return i
+            if (a.stage == PairingFlow.Stage.NeedsConfirmation) a.confirm()
+            if (b.stage == PairingFlow.Stage.NeedsConfirmation) b.confirm()
             if (r.nextDouble() < miss) return@repeat
             if (r.nextBoolean()) a.read(b.qr) else b.read(a.qr)
         }
@@ -91,11 +93,82 @@ class PairingFlowTest {
         val member = PairingFlow(PairingFlow.Mode.Join, "B")
         member.read(leader.qr)
         leader.read(member.qr)
+        member.confirm()
+        leader.confirm()
+        member.read(leader.qr)
+        leader.read(member.qr)
         assertEquals(PairingFlow.Stage.HandingOver, leader.stage)
         assertTrue(member.read(otherLeader.qr))
         assertTrue(member.foreignInvite)
         assertEquals(null, member.joined)
         member.read(leader.qr)
         assertEquals("Crew", member.joined?.name)
+    }
+
+    @Test fun teamKeysRequireBothExplicitConfirmationsAndLegacyIsRejected() {
+        val team = Team.create("Crew", myName = "A")
+        val leader = PairingFlow(PairingFlow.Mode.Invite(team), "A")
+        val member = PairingFlow(PairingFlow.Mode.Join, "B")
+        val old = Pairing.start()
+        assertTrue(leader.read(old.qrText()))
+        assertTrue(member.read(old.qrText()))
+        assertTrue(leader.legacyPeer)
+        assertTrue(member.legacyPeer)
+        assertEquals(null, leader.key)
+        assertEquals(null, member.key)
+        member.read(leader.qr)
+        leader.read(member.qr)
+        assertEquals(PairingFlow.Stage.NeedsConfirmation, leader.stage)
+        assertEquals(PairingFlow.Stage.NeedsConfirmation, member.stage)
+        assertTrue(!leader.qr.startsWith(TeamInvite.PREFIX))
+        assertTrue(leader.confirm())
+        member.read(leader.qr)
+        assertTrue(!member.qr.startsWith(PairingFlow.CONFIRM_PREFIX))
+        assertTrue(!leader.read(member.qr) || leader.stage != PairingFlow.Stage.HandingOver)
+        assertEquals(null, member.joined)
+        assertTrue(member.confirm())
+        assertTrue(leader.read(member.qr))
+        assertEquals(PairingFlow.Stage.HandingOver, leader.stage)
+        assertTrue(member.read(leader.qr))
+        assertArrayEquals(team.secret.encoded, member.joined!!.secret.encoded)
+    }
+
+    @Test fun unrelatedProofAndPrematureTeamDoNotUnlockHandover() {
+        val leader = PairingFlow(PairingFlow.Mode.Invite(Team.create("Crew", myName = "A")), "A")
+        val member = PairingFlow(PairingFlow.Mode.Join, "B")
+        member.read(leader.qr)
+        leader.read(member.qr)
+        val fabricated = TeamInvite.encode(Team.create("Fake", myName = "X"), member.key!!)
+        assertTrue(!member.read(fabricated))
+        assertEquals(null, member.joined)
+        assertTrue(leader.confirm())
+        assertTrue(!leader.read("FFTCONF2:J:" + "00".repeat(32)))
+        assertEquals(PairingFlow.Stage.WaitingForTeam, leader.stage)
+        assertTrue(member.confirm())
+        assertTrue(!member.read("FFTCONF2:L:" + "00".repeat(32)))
+        assertTrue(!member.read(fabricated))
+        assertEquals(null, member.joined)
+    }
+
+    @Test fun staleOrReplayedConfirmationCannotReleaseTeam() {
+        var clock = 1_000L
+        val team = Team.create("Crew", myName = "A")
+        val leader = PairingFlow(PairingFlow.Mode.Invite(team), "A", now = { clock })
+        val member = PairingFlow(PairingFlow.Mode.Join, "B", now = { clock })
+        member.read(leader.qr)
+        leader.read(member.qr)
+        assertTrue(leader.confirm())
+        assertTrue(member.confirm())
+        assertTrue(member.read(leader.qr))
+        val proof = member.qr
+        val otherLeader = PairingFlow(PairingFlow.Mode.Invite(team), "A", now = { clock })
+        val otherMember = PairingFlow(PairingFlow.Mode.Join, "C", now = { clock })
+        otherMember.read(otherLeader.qr)
+        otherLeader.read(otherMember.qr)
+        assertTrue(otherLeader.confirm())
+        assertTrue(!otherLeader.read(proof))
+        clock += PairingStore.LIFETIME_MS
+        assertTrue(!leader.read(proof))
+        assertTrue(!leader.qr.startsWith(TeamInvite.PREFIX))
     }
 }

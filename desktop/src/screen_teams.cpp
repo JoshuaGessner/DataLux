@@ -436,15 +436,19 @@ void App::PairScreen(float W, float H) {
     }
 
     float y = qy + ph + 28;
-    const char* stage = "Hold the phone's screen up to this computer's camera.";
+    const char* stage = p.mode == Mode::kPair ? "Hold the phone's screen up to this computer's camera."
+                                             : "Both devices need the latest version. Scan each other's codes.";
     switch (f.stage()) {
         case Stage::kScanning: break;
         case Stage::kGotKey: stage = "Let the phone scan this code, then scan its updated code."; break;
+        case Stage::kConfirm: stage = "Compare the numbers on both devices. If they match, confirm below on each device."; break;
+        case Stage::kWaitingConfirmation: stage = "Codes confirmed here. Keep scanning until the other device confirms."; break;
         case Stage::kHandingOver: stage = "Paired. Now handing over the team: keep holding…"; break;
         case Stage::kWaitingForTeam: stage = "Paired. Now receiving the team: keep holding…"; break;
         case Stage::kDone: stage = ""; break;
     }
     if (f.foreign_invite() && f.stage() != Stage::kDone) stage = "That's a team code from a different pairing. Hold up the leader's phone.";
+    if (f.legacy_peer() && f.stage() == Stage::kScanning) stage = "Update DataLux on both devices, then try the invitation again.";
     if (f.key()) {
         paint_.Text(f.key()->code, rx, y, 44, Weight::kSemiBold, th::kText);
         y += 64;
@@ -466,8 +470,15 @@ void App::PairScreen(float W, float H) {
         } else if (pairing && ui_.Button("pair-cancel", {rx, y + 54, 140, 46}, "Cancel", false)) {
             pair_.reset();
         }
-    } else if (ui_.Button("pair-cancel", {rx, y, 140, 46}, "Cancel", false)) {
-        pair_.reset();
+    } else {
+        const bool confirm = f.stage() == Stage::kConfirm;
+        if (confirm &&
+            ui_.Button("team-confirm", {rx, y, 220, 46}, "Numbers match", true)) {
+            f.ConfirmCodes();
+        }
+        if (ui_.Button("pair-cancel", {rx, y + (confirm ? 54.0F : 0.0F), 140, 46}, "Cancel", false)) {
+            pair_.reset();
+        }
     }
 }
 

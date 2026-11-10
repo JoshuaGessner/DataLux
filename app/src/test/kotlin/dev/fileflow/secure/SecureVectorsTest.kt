@@ -54,6 +54,13 @@ class SecureVectorsTest {
         assertEquals(VECTOR_ACK, TeamInvite.ack(joined, pairing, "Jo", Fixed(0x30)))
     }
 
+    @Test fun teamConfirmationProof() {
+        val pairing = Pairing.derive(shared, mine, peer, 0)
+        val flow = PairingFlow(PairingFlow.Mode.Join)
+        assertEquals("FFTCONF2:L:3046f9efcaf2a651cadd81a81d7358fc4c63af764a1abc8529880f3b42e8dd53", flow.proof("L", pairing))
+        assertEquals("FFTCONF2:J:40cb2e057579570927b8646783693398b3113d974039682a55b1d0a0e544f24c", flow.proof("J", pairing))
+    }
+
     companion object {
         const val VECTOR_KEY = "9e644ddfbe4679dc930bf73ea9c90216935b54ab9360d48b4908b27ba5a6fc24"
         const val VECTOR_ID = "99fd1bb27debc69f"

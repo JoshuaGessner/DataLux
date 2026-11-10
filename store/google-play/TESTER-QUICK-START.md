@@ -3,6 +3,15 @@
 > **Draft:** Share after a reviewed build is available in the intended Play testing track and
 > the coordinator fills in its invitation and feedback details. This is not a release announcement.
 
+The last confirmed internal release was **DataLux Test 0.4.9-staging (code 13)**. This is an
+early test build connected to a separate staging service: use a test account and a password you
+do not use elsewhere. Staging accounts and Pro grants are separate from the live service and may
+be reset. The coordinator must check the current Play version before sending these instructions.
+
+**Current limitations:** Please do not use Teams or team invitations until the coordinator confirms
+their security fix is available. Phone-to-computer transfers can be difficult to start; Webcam
+mode worked in one test but needs more testing. Use disposable files only.
+
 ## Join and install
 
 1. Give the coordinator the Google account email you use in Google Play. Wait until they confirm
@@ -48,8 +57,9 @@ depends on Google Play and device settings. Report the installed version with ea
 **Do not test purchasing unless the coordinator specifically asks you to.** Test-track access
 alone does not prevent real charges. For an authorized purchase test, the coordinator must also
 add the purchasing Google account as a license tester and explain the approved test environment.
-Confirm the correct account and Google's test-purchase notice in the purchase dialog; stop if
-either is missing. Do not share payment details, purchase tokens, passwords or verification codes.
+Confirm the correct Google account, Google's test-purchase notice and a test payment method in the
+purchase dialog; cancel without confirming if any is missing. A test-track install alone does not
+prevent charges. Do not share payment details, purchase tokens, passwords or verification codes.
 
 ## Send feedback
 
@@ -74,11 +84,18 @@ personal files. Ask the coordinator how to report an issue if an export cannot b
 
 **Coordinator: fill in before sharing**
 
-- Track and eligible countries: _pending_
-- Play opt-in link: _pending; copy from the intended track after it is available_
-- Expected app version and companion build: _pending_
+- Track: internal, previously confirmed active; reconfirm the current release and tester list.
+- Previously used [internal opt-in link](https://play.google.com/apps/internaltest/4701755160688941034):
+  verify the link and membership in Play Console before sharing. This is not a closed-test link.
+- Eligible purchase country: the `datalux_pro` buy option was US-only at the last recorded check;
+  verify current availability for each purchase tester. Track and purchase availability can differ.
+- Expected app: 0.4.9-staging / code 13 at the last confirmed rollout; recheck before inviting.
+  Confirm the companion build and version separately. The signed 0.4.10-staging / code 14 bundle
+  was built, but has not been confirmed as uploaded or published to Play.
 - Private feedback channel: _pending_
-- What to test and any known limitations: _pending_
+- What to test: installation, launch, account verification and one-file transfers in both
+  directions using synthetic files. Keep Teams out of scope until fixed; document known transfer
+  acquisition issues. Invite purchase testing separately as described above.
 
 Google's references: [testing tracks and opt-in](https://support.google.com/googleplay/android-developer/answer/9845334),
 [testing Play billing](https://developer.android.com/google/play/billing/test), and

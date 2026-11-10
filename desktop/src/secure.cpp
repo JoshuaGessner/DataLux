@@ -791,11 +791,54 @@ void WritePrivateFile(const std::string& path, std::string_view bytes) {
 PairingFlow::PairingFlow(Mode mode, std::string my_name, std::optional<Team> team)
     : mode_(mode), my_name_(std::move(my_name)), team_(std::move(team)), pairing_(Pairing::Start()) {
     qr_ = pairing_->QrText();
+    if (mode_ != Mode::kPair) qr_.replace(0, Pairing::kPrefix.size(), "FFTPAIR2:");
+}
+
+std::string TeamConfirmation(const PairingKey& key, char role) {
+    const std::string message = std::string("DataLux team confirm v2:") + role + ":" + Hex(key.id);
+    return std::string("FFTCONF2:") + role + ":" + Hex(HmacSha256(key.key, Ascii(message)));
 }
 
 bool PairingFlow::Read(std::string_view text) {
     if (stage_ == Stage::kDone) return false;
+    if (mode_ != Mode::kPair && key_) {
+        const auto age = NowMs() - key_->created_ms;
+        if (age < 0 || age >= 30 * 60 * 1000) return false;
+    }
+    if (mode_ != Mode::kPair && text.starts_with(Pairing::kPrefix)) {
+        if (legacy_peer_) return false;
+        legacy_peer_ = true;
+        return true;
+    }
+    if (mode_ != Mode::kPair && text.starts_with("FFTCONF2:")) {
+        if (!key_) return false;
+        const char peer_role = mode_ == Mode::kJoin ? 'L' : 'J';
+        const auto expected = TeamConfirmation(*key_, peer_role);
+        if (text.size() != expected.size() || !EqualCt(
+                reinterpret_cast<const std::uint8_t*>(text.data()),
+                reinterpret_cast<const std::uint8_t*>(expected.data()), expected.size())) return false;
+        if (mode_ == Mode::kJoin) {
+            leader_confirmed_ = true;
+            if (local_confirmed_) {
+                qr_ = TeamConfirmation(*key_, 'J');
+                stage_ = Stage::kWaitingForTeam;
+            } else {
+                stage_ = Stage::kConfirm;
+            }
+            return true;
+        }
+        if (!local_confirmed_ || stage_ == Stage::kHandingOver) return false;
+        qr_ = invite::Encode(*team_, *key_);
+        stage_ = Stage::kHandingOver;
+        return true;
+    }
     if (invite::IsTeamCode(text)) return ReadTeamCode(text);
+    std::string team_pair;
+    if (mode_ != Mode::kPair) {
+        if (!text.starts_with("FFTPAIR2:")) return false;
+        team_pair = std::string(Pairing::kPrefix) + std::string(text.substr(9));
+        text = team_pair;
+    }
     switch (pairing_->ReadCode(text)) {
         case Pairing::Read::kNotOurs:
         case Pairing::Read::kOwn: return false;
@@ -805,6 +848,23 @@ bool PairingFlow::Read(std::string_view text) {
     return false;
 }
 
+bool PairingFlow::ConfirmCodes() {
+    if (mode_ == Mode::kPair || stage_ != Stage::kConfirm || !key_) return false;
+    const auto age = NowMs() - key_->created_ms;
+    if (age < 0 || age >= 30 * 60 * 1000) return false;
+    local_confirmed_ = true;
+    if (mode_ == Mode::kInvite) {
+        qr_ = TeamConfirmation(*key_, 'L');
+        stage_ = Stage::kWaitingConfirmation;
+    } else if (leader_confirmed_) {
+        qr_ = TeamConfirmation(*key_, 'J');
+        stage_ = Stage::kWaitingForTeam;
+    } else {
+        stage_ = Stage::kWaitingConfirmation;
+    }
+    return true;
+}
+
 bool PairingFlow::GotKey(bool confirmed) {
     const bool first = !key_.has_value();
     if (first) key_ = pairing_->Key(NowMs());
@@ -812,30 +872,30 @@ bool PairingFlow::GotKey(bool confirmed) {
     const Stage before = stage_;
     // Our code now acknowledges theirs -- what completes THEIR side -- unless it has moved on to
     // the team key, which must stay up until the member reads it.
-    if (stage_ != Stage::kHandingOver) qr_ = pairing_->QrText();
+    if (mode_ != Mode::kPair && stage_ != Stage::kScanning && stage_ != Stage::kGotKey) return first;
+    qr_ = pairing_->QrText();
+    if (mode_ != Mode::kPair) qr_.replace(0, Pairing::kPrefix.size(), "FFTPAIR2:");
     if (!confirmed) {
         if (stage_ == Stage::kScanning) stage_ = Stage::kGotKey;
     } else if (mode_ == Mode::kPair) {
         stage_ = Stage::kDone;
-    } else if (mode_ == Mode::kInvite) {
-        if (stage_ != Stage::kHandingOver) qr_ = invite::Encode(*team_, *key_);
-        stage_ = Stage::kHandingOver;
-    } else if (stage_ == Stage::kScanning || stage_ == Stage::kGotKey) {
-        stage_ = Stage::kWaitingForTeam;
+    } else {
+        stage_ = Stage::kConfirm;
     }
     return first || stage_ != before;
 }
 
 bool PairingFlow::ReadTeamCode(std::string_view text) {
     if (!key_) return false;
-    if (mode_ == Mode::kInvite) {
+    if (mode_ == Mode::kInvite && stage_ == Stage::kHandingOver) {
         auto name = invite::ReadAck(text, *team_, *key_);
         if (!name) return false;
         member_name_ = std::move(name);
         stage_ = Stage::kDone;
         return true;
     }
-    if (mode_ != Mode::kJoin || text.substr(0, invite::kPrefix.size()) != invite::kPrefix) return false;
+    if (mode_ != Mode::kJoin || !local_confirmed_ || !leader_confirmed_ ||
+        stage_ != Stage::kWaitingForTeam || text.substr(0, invite::kPrefix.size()) != invite::kPrefix) return false;
     // The leader shows the team only once it has OUR acknowledgement of ITS key; opening the team
     // proves the leader holds the same pairing key.
     auto team = invite::Decode(text, *key_, my_name_, NowMs());

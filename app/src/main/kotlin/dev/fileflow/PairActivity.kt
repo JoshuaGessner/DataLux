@@ -125,7 +125,11 @@ class PairActivity : AppCompatActivity() {
             gravity = Gravity.CENTER
             visibility = View.GONE
         }
-        done = button("Both devices paired", R.drawable.ic_check_circle) { complete() }.apply {
+        done = button("Both devices paired", R.drawable.ic_check_circle) {
+            if (forTeam && flow.stage == PairingFlow.Stage.NeedsConfirmation) {
+                if (flow.confirm()) render()
+            } else complete()
+        }.apply {
             visibility = View.GONE
         }
 
@@ -257,14 +261,24 @@ class PairActivity : AppCompatActivity() {
             SessionLog.w(TAG, "an invite this pairing can't open")
             return
         }
+        if (flow.legacyPeer && flow.stage == PairingFlow.Stage.Scanning) {
+            status.text = "This invitation needs the latest DataLux on both devices. Update the other device and try again."
+        }
         if (flow.stage == shownStage) return
         shownStage = flow.stage
+        if (forTeam) {
+            done.visibility = if (flow.stage == PairingFlow.Stage.NeedsConfirmation) View.VISIBLE else View.GONE
+            done.text = "Codes match"
+        }
         val team = inviting
         status.text = when (flow.stage) {
             PairingFlow.Stage.Scanning -> status.text
             PairingFlow.Stage.GotKey -> "Let the other device scan this code. When it says Paired, scan its updated code again."
+            PairingFlow.Stage.NeedsConfirmation -> "Compare the six-digit codes on both devices. If they match, tap Codes match on each. If they differ, cancel."
             PairingFlow.Stage.HandingOver -> "Paired. Now handing over ${team?.name}: keep holding…"
-            PairingFlow.Stage.WaitingForTeam -> "Paired. Now receiving the team: keep holding…"
+            PairingFlow.Stage.WaitingForTeam -> if (inviting != null)
+                "Ask the other person to confirm the matching code, then scan their updated code."
+            else "Keep this code visible. Scan the leader's confirmation, then let them scan your updated code."
             PairingFlow.Stage.Done -> finished()
         }
     }
@@ -448,7 +462,10 @@ class PairActivity : AppCompatActivity() {
         private const val TEAM_HELP =
             "The leader taps Invite on the team; the new member taps Join a team. Hold the two " +
                 "phones face to face, as for pairing.\n\n" +
-                "They pair first, and check the six-digit codes match. Then the leader's screen " +
+                "Compare the six-digit codes and tap Codes match on both devices only if they " +
+                "match. Keep scanning the updated codes until both screens say the handover is complete. " +
+                "Both devices must use the updated DataLux team-invitation version.\n\n" +
+                "The leader's screen then " +
                 "shows the team's key, sealed so that only the phone it just paired with can open " +
                 "it — anyone else's camera learns nothing from it.\n\n" +
                 "When the member's phone has the key, both screens say so."
