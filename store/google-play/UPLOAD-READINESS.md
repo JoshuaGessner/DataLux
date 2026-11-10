@@ -14,8 +14,15 @@ installation and does not inherit private state from historical `dev.fileflow` b
 
 ## Current evidence
 
-The [0.4.9-staging/code 13 build](https://github.com/JoshuaGessner/DataLux/actions/runs/42314171042)
-is available on the internal track. It was built from `7160d051a02b71e7de023c7689eded7b2eac59cc`;
+The [0.4.11-staging/code 15 build](https://github.com/JoshuaGessner/DataLux/actions/runs/42838296720)
+is available on the internal track as of November 10. It was built from
+`9a78f7d1b697f4e2c248a7dc065f2132bc755d54`; its AAB SHA-256 is
+`35465d0ae30f42b0ab15cea0713774990c9a4e269e3bc65941aaff008b3d711d`.
+It adds bilateral team-invitation confirmation and the white Fast palette. Physical phone-to-desktop
+transfer and team-invitation acceptance with this Play build remain outstanding.
+
+The earlier [0.4.9-staging/code 13 build](https://github.com/JoshuaGessner/DataLux/actions/runs/42314171042)
+was available on the internal track. It was built from `7160d051a02b71e7de023c7689eded7b2eac59cc`;
 its AAB SHA-256 is `8bb94e201073f1b2bedde0ef9c5bbb679719c6572a75776b13fb569d1b7fa51c`.
 It includes brighter small-file padding and the experimental Webcam sending profile. The padding
 change passed a desktop-to-phone physical test on all three desktop speeds, but the Play-installed
@@ -25,8 +32,9 @@ The earlier [0.4.6-staging/code 10 build](https://github.com/JoshuaGessner/DataL
 was previously available on the internal track. It was built from `ee92163e07a2ca67a2ade8d936f08bff68815570`;
 its AAB SHA-256 is `99449718b6d5909fffe8ec268cbf4a3bf76ba3e98139f214bb30d20b11c3979b`.
 It added the Pro sign-in layout and ordinary pairing confirmation changes. The owner confirmed
-the new sign-in layout and Google Password Manager worked. Team invitations still exchange the team key before
-human code confirmation and need a coordinated security fix before broader testing or launch.
+the new sign-in layout and Google Password Manager worked. This older build's team invitations
+exchange the team key before human code confirmation; use the updated build and verify the fix
+on physical devices before broader testing.
 
 The earlier 0.4.5-staging/code 9 bundle added settings and native autofill improvements. The owner
 confirmed Google Password Manager works after choosing it as the phone's autofill provider.

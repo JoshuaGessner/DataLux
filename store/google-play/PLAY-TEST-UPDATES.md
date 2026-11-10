@@ -3,9 +3,8 @@
 > **Status:** Coordinator runbook. Check [upload readiness](UPLOAD-READINESS.md), the staging
 > evidence and live Console for current status; a successful signing run alone is not a release.
 
-At the last confirmed Console check, 0.4.9-staging / code 13 was available to the existing internal
-track. The reviewed 0.4.10-staging / code 14 bundle built successfully but was not confirmed as
-uploaded or published. Confirm the Console's current track, highest uploaded code, and bundle
+At the November 10 Console check, 0.4.11-staging / code 15 was available to the existing internal
+track. Confirm the Console's current track, highest uploaded code, and bundle
 before acting. Its staging identity is separate from production; never promote that bundle to a
 production track. The [tester quick start](TESTER-QUICK-START.md) still needs a feedback channel
 and a confirmed companion build before distribution.
@@ -60,8 +59,8 @@ and a confirmed companion build before distribution.
    approved billing test setup, and require Google's test-purchase notice and a test payment method
    before a test purchase. Stop if the expected notice, payment method or account is missing.
 
-Do not ask outside testers to use team invitations until bilateral confirmation is fixed and
-verified. Phone-to-desktop acquisition, including the 0.4.10 white Fast sender, still needs
+Do not ask outside testers to use team invitations until the new bilateral confirmation is
+verified on physical devices. Phone-to-desktop acquisition, including the white Fast sender, still needs
 repeatable real-device acceptance; one successful Webcam-mode transfer does not establish it.
 
 ## Fix and repeat

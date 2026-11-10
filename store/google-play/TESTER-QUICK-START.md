@@ -3,7 +3,7 @@
 > **Draft:** Share after a reviewed build is available in the intended Play testing track and
 > the coordinator fills in its invitation and feedback details. This is not a release announcement.
 
-The last confirmed internal release was **DataLux Test 0.4.9-staging (code 13)**. This is an
+The last confirmed internal release was **DataLux Test 0.4.11-staging (code 15)**. This is an
 early test build connected to a separate staging service: use a test account and a password you
 do not use elsewhere. Staging accounts and Pro grants are separate from the live service and may
 be reset. The coordinator must check the current Play version before sending these instructions.
@@ -89,9 +89,8 @@ personal files. Ask the coordinator how to report an issue if an export cannot b
   verify the link and membership in Play Console before sharing. This is not a closed-test link.
 - Eligible purchase country: the `datalux_pro` buy option was US-only at the last recorded check;
   verify current availability for each purchase tester. Track and purchase availability can differ.
-- Expected app: 0.4.9-staging / code 13 at the last confirmed rollout; recheck before inviting.
-  Confirm the companion build and version separately. The signed 0.4.10-staging / code 14 bundle
-  was built, but has not been confirmed as uploaded or published to Play.
+- Expected app: 0.4.11-staging / code 15 at the last confirmed rollout; recheck before inviting.
+  Confirm the companion build and version separately.
 - Private feedback channel: _pending_
 - What to test: installation, launch, account verification and one-file transfers in both
   directions using synthetic files. Keep Teams out of scope until fixed; document known transfer
